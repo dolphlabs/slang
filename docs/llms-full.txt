@@ -2888,7 +2888,10 @@ slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://
 / `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
 / `import "regex";` / `import "io";` / `import "encoding";` like any other package.
 
-`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/interp`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/geo`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/optimize`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/shard`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/sketch`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
 `import "http"` / `import "byteutil"` resolve to a local directory first,
 then a native package, then `stdlib/<path>` (`SLANG_STDLIB` or the
 compiler's `SLANG_STDLIB_DIR`).
@@ -5693,6 +5696,7 @@ p.quantile(0.99);
 stats.normal(100.0, 15.0).cdf(130.0);        // 0.9772498680518208
 stats.normal(0.0, 1.0).quantile(0.975);      // 1.9599639845400538
 stats.poisson(3.0).pmf(5);
+stats.poisson(3.0).sample(rand.new(42));     // an int, replayable
 ```
 
 - **Center and spread:** `sum` (compensated), `product`, `mean`,
@@ -5709,6 +5713,11 @@ stats.poisson(3.0).pmf(5);
   `digest` `merge`.
 - **Distributions:** `normal`, `log_normal`, `uniform`, `exponential`
   (`pdf`, `cdf`, `quantile`), `poisson` and `binomial` (`pmf`, `cdf`).
+  Each has `sample(r)` for a `rand.Rng`, so a simulation or load
+  generator replays from one seed: the ziggurat for the normal and the
+  exponential, Hörmann's PTRS and BTRS (what numpy and TensorFlow use)
+  for the Poisson and binomial once the mean reaches 10, multiplication
+  or inversion below. All exact, all O(1) on average.
 
 A result with no value for its input -- the mean of no numbers, the
 variance of one, a correlation with a constant list -- is NaN, which
@@ -5744,42 +5753,187 @@ be coprime), `binomial_mod` (Lucas, for a prime modulus) and
 function given one <= 0 returns `none`, 0 or `false` rather than
 panicking, and no result is negative.
 
-#### `math/interp`
+#### `math/geo`
 
-Values between known points: fee schedules, tiered rates, pricing and
-yield curves, calibration tables.
+Points on the Earth: distances, bearings, "everything within 5 km",
+geohash keys for spatial indexes, and geofences.
 
 ```slang
-import "math/interp";
+import "math/geo";
 
-let fees = interp.linear([0.0, 1000.0, 10000.0], [2.5, 1.8, 0.9]) ?? interp.empty();
-fees.at(4200.0);                     // 1.48
-let tier = interp.step([0.0, 100.0, 500.0], [10.0, 8.0, 5.0]) ?? interp.empty();
-tier.at(250.0);                      // 8: the tier 250 falls in
-let curve = interp.monotone(days, rates) ?? interp.empty();   // smooth, no overshoot
-curve.at(45.0);
-curve.slope(45.0);
-curve.set_extrapolate(interp.Extrapolate.Linear);
-
-let gr = interp.grid([1.0, 5.0], [0.0, 100.0, 500.0], prices);  // 2 x 3 values
-if let g = gr { g.at(2.5, 140.0); }                           // bilinear
+let berlin = geo.point(52.5200, 13.4050);          // lat, lon in degrees
+let paris = geo.point(48.8566, 2.3522);
+geo.distance(berlin, paris);                       // 877465 m (haversine)
+geo.distance_exact(berlin, paris) ?? 0.0;          // 879699 m (WGS-84)
+geo.bearing(berlin, paris);                        // 246.74 degrees
+geo.destination(berlin, 90.0, 1000.0);             // 1 km due east
+let box = geo.bounding_box(berlin, 5000.0);        // a WHERE clause's lat/lon ranges
+geo.geohash(berlin, 7);                            // "u33dc0c"
+geo.geohash_neighbors("u33dc0c");                  // the 8 cells around it
+geo.contains(fence, p);                            // point in polygon
 ```
 
-- `linear`, `step`, `monotone` (Fritsch-Carlson cubic with
-  Fritsch-Butland slopes: smooth, through every point, and never
-  overshooting, so monotone data stays monotone) and `spline` (the
-  natural cubic spline: the smoothest curve, which can overshoot).
-- `at`, `at_all`, `slope`; outside the knots `Extrapolate.Clamp` (the
-  default), `Linear` or `None` (NaN).
-- `grid(xs, ys, values)`: bilinear interpolation over a rectangular
-  table, clamped at its edges.
+- `distance` is the haversine great-circle distance on a sphere of the
+  mean Earth radius (within 0.5% of the ellipsoid); `distance_exact` is
+  Vincenty's inverse formula on WGS-84, to well under a millimetre
+  (`none` for nearly antipodal points, where it does not converge).
+- `bearing`, `destination`, `midpoint`, `distance_to_segment` (how far
+  a courier is from the route).
+- `bounding_box(center, meters)` and `in_box`: the smallest box holding
+  a radius, crossing the antimeridian (`min_lon > max_lon`) or spanning
+  every longitude near a pole. Filter an index with the box, then keep
+  the rows within `distance`.
+- `geohash(p, chars)`, `geohash_decode`, `geohash_box`,
+  `geohash_neighbors` (either case accepted).
+- `contains` (even-odd rule, for fences small next to a hemisphere) and
+  `area` in square metres.
+#### `math/optimize`
 
-Constructors check their input (equal lengths, at least one point,
-strictly increasing finite xs) and return a `result`. A lookup is a
-binary search, but a curve remembers its last segment, so ascending
-queries cost O(1) each; that memory makes a curve unsafe to share
-between tasks querying at once, so give each its own `copy()` (the knots
-are shared, not copied).
+Solving f(x) = 0, minimising f and integrating it, in one variable:
+implied rates, break-even points, the price that maximises revenue, the
+area under a curve. Written in slang; every routine stops at a tolerance
+or a fixed budget of evaluations and says which in its error, so none
+can loop forever whatever f returns (a NaN is an error, not an answer).
+
+```slang
+import "math/optimize";
+
+fn f(x: float) -> float { return x * x - 2.0; }
+let r = optimize.brent(f, 0.0, 2.0, 1e-12);          // result[Root, str]
+(r ?? optimize.no_root()).x;                         // 1.41421356...
+
+// slang has no closures: a function that needs data takes it second
+struct Loan { pv: float, pmt: float, n: int }
+fn gap(rate: float, l: Loan) -> float { ... }
+optimize.brent_with(gap, loan, 0.0001, 0.1, 1e-12);
+
+optimize.brent_min(f, 0.0, 10.0, 1e-9);              // result[Min, str]
+optimize.integrate(f, 0.0, math.inf, 1e-10, 1e-10);  // result[Integral, str]
+```
+
+- **Roots:** `brent` (Brent's zeroin: superlinear, never slower than
+  bisection; the default), `bisect`, `newton` (needs the derivative;
+  fast near a simple root, can diverge from a poor start),
+  `newton_safe` (Newton kept inside a bracket, bisecting when a step
+  would leave it), `bracket` (widens a guess until f changes sign).
+- **Minima** of a unimodal f on [a, b]: `brent_min` (parabolic steps with
+  golden-section fallbacks, as scipy's `fminbound`), `golden`. x is good
+  to about sqrt(machine epsilon) relative, the limit for any minimiser.
+- **Integrals:** `integrate` (adaptive 7/15-point Gauss-Kronrod as
+  QUADPACK's QAG, with infinite bounds mapped onto finite ones) and
+  `simpson` (adaptive, finite bounds). Each returns the value, an error
+  estimate and the number of evaluations.
+
+Each routine has a `_with` form whose f takes a context value of any type
+as its second argument, for the data a closure would carry.
+#### `math/shard`
+
+Map a key to one of n nodes so each node gets an even share and a change
+in the node set moves as few keys as possible: sharding databases and
+caches, partitioning queues, sticky load balancing.
+
+```slang
+import "math/shard";
+
+shard.jump_str(user_id, 16);                 // bucket in [0, 16)
+
+let r = shard.rendezvous(["db-a", "db-b", "db-c"]);
+r.node(r.pick_str(user_id) ?? 0);            // the node's name
+r.pick_n_str(user_id, 2);                    // primary and a replica
+
+let ring = shard.ring(160);                  // 160 points per unit of weight
+ring.add("cache-1", 1);
+ring.add("cache-2", 2);                      // twice the keys
+ring.get_str(key) ?? "";
+
+let m = shard.maglev(["lb-1", "lb-2", "lb-3"], 65537);
+m.pick_str(flow_id);                         // O(1): one table read
+```
+
+| Scheme | Lookup | Memory | Remove any node | Weights | Use for |
+|---|---|---|---|---|---|
+| `jump` (Lamping and Veach) | O(log n) | none | only the last | no | a growing count of shards |
+| `rendezvous` (HRW) | O(nodes) | names | yes, only its keys move | yes | up to a few hundred nodes, replicas |
+| `ring` (Karger) | O(log points) | 16 B per point | yes | yes | many nodes |
+| `maglev` (Google) | O(1) | 4 B per entry | rebuild; little extra movement | no | load balancers |
+
+Every scheme hashes with a fixed function (`shard.hash_str`,
+`hash_int`), so every process and host maps a key to the same node.
+Rendezvous weights follow Schindelhauer and Schomaker (`-w / ln(u)`), so
+a node gets keys in proportion to its weight; a ring's markers depend
+only on the node's name, so they are the same after every rebuild.
+#### `math/sketch`
+
+Fixed-memory, mergeable estimates for live servers: how many distinct
+users, how often each key, which keys are heaviest, have we seen this
+before, and latency percentiles, without keeping the items. Written in
+slang; every sketch of a kind merges with another built with the same
+parameters, so tasks and hosts each keep their own and combine.
+
+```slang
+import "math/sketch";
+
+let users = sketch.hyperloglog(14);          // 16 KB, 0.81% error
+users.add_str(user_id);
+users.count();
+
+let hits = sketch.count_min(0.001, 0.01);    // within 0.1% of the total, 99% of the time
+hits.add_str(ip, 1);
+hits.estimate_str(ip);
+
+let heavy = sketch.top_k(100);               // Space-Saving
+heavy.add(path);
+heavy.top();                                 // [Item { key, count, error }]
+
+let seen = sketch.bloom(1000000, 0.01);      // 1.2 MB
+seen.add_str(key);
+seen.contains_str(key);                      // false: certainly not added
+
+let live = sketch.cuckoo(100000);            // like a Bloom filter, with remove
+live.add_str(id); live.remove_str(id);
+
+let lat = sketch.histogram(60000000, 7);     // 1 us .. 60 s, 0.8% precision
+lat.record(elapsed_us);
+lat.quantile(0.99);
+lat.buckets(sketch.exponential_bounds(1000, 2.0, 12));   // Prometheus le= counts
+
+let keep: [Event] = [];                      // a uniform sample of 100
+let rs = sketch.reservoir(100, rand.new(7));
+if let slot = rs.offer() {
+    if slot == len(keep) { push(keep, e); } else { keep[slot] = e; }
+}
+```
+
+- **`HyperLogLog`** (Flajolet et al. with Ertl's 2017 estimator, no bias
+  tables): `add_str`/`add_int`/`add_bytes`/`add_hash`, `count`,
+  `estimate`, `merge`, `encode`/`decode_hyperloglog`. Precision 4 to 18;
+  the error is 1.04/sqrt(2^p).
+- **`CountMin`** (Cormode and Muthukrishnan): never under the true count,
+  at most epsilon * total over it with probability 1 - delta;
+  `set_conservative(true)` tightens skewed data. `count_min_sized(w, d)`,
+  `total`, `merge`, `clear`, `encode`/`decode_count_min`.
+- **`TopK`** (Space-Saving, Metwally et al.): every key above total/k is
+  kept; each count carries its maximum error. O(log k) per add; `merge`
+  follows Agarwal et al.
+- **`Bloom`**: the split-block layout Parquet and Impala use, one 32-byte
+  block per key, so an add or a lookup touches one cache line. `fill`,
+  `fpp` (the false-positive rate it has now), `merge`, `encode`.
+- **`Cuckoo`** (Fan et al.): 16-bit fingerprints in buckets of four,
+  0.012% false positives at 95% load, with `remove`. A fingerprint that
+  finds no room is kept aside, so a full filter refuses new keys rather
+  than losing an old one.
+- **`Histogram`**: HdrHistogram's log-linear buckets: exact below
+  2^precision, then 2^(precision-1) buckets per power of two. Exact
+  `count`, `sum`, `mean`, `min`, `max`; `quantile`, `rank_of`, `buckets`,
+  `merge`; `exponential_bounds` and `linear_bounds` for Prometheus.
+- **`Reservoir`** (Algorithm L, Li 1994): the sample is your own list of
+  any type; most items cost a counter increment and no random draw.
+
+Keys hash with `hash_str` (over `strings.hash`), `hash_int` or
+`hash_bytes`, or pass your own 64-bit hash to the `*_hash` methods. The
+hashes are fixed across releases on little-endian CPUs, so `encode`d
+sketches merge across hosts. None of the sketches locks: one per task,
+then `merge`.
 #### `math/vec`
 
 Bulk arithmetic on `[float]` and `[f32]` vectors, for embedding search,
@@ -5907,6 +6061,8 @@ rand.pick(r, xs) ?? fallback;          // none when xs is empty
 // retry number `attempt` (0 first): uniform in [0, min(cap, base * 2^attempt)]
 time.sleep(rand.backoff(r, attempt, 100000000, 30000000000));
 rand.jitter(r, 60000000000, 0.1);      // 60s, give or take 10%
+rand.normal(r);                        // mean 0, stddev 1
+rand.exponential(r) / rate;            // waiting times
 ```
 
 The generator is `xoshiro256**`, seeded through `splitmix64`. The tests pin
@@ -5918,9 +6074,16 @@ of range, since there is no value to return. `backoff` uses full jitter,
 which spreads clients that failed together across the whole interval, and
 saturates at `cap` rather than overflowing. An `Rng` is not locked: give
 each spawned task its own with `rand.fork(r)`, which stays reproducible
-from the parent's seed. `rand.from_os()` seeds from the OS when runs
-should differ. Neither is for secrets: tokens, keys and salts come from
+from the parent's seed. `rand.from_os()` seeds from the OS
+(`/dev/urandom`) when runs should differ; importing `rand` links no
+OpenSSL. Neither is for secrets: tokens, keys and salts come from
 `crypto.rand`, because this generator's outputs reveal its state.
+
+`normal` and `exponential` use the ziggurat method (Marsaglia and Tsang,
+256 layers, the tables `rand_distr` uses): about 99% of draws are one
+64-bit step, a table lookup and a multiply, with no logarithm or
+trigonometry. Tails beyond the base layer use Marsaglia's exact tail
+method. `math/stats` distributions sample through these.
 
 #### `sort`
 
@@ -6730,9 +6893,12 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [json](packages/json.md) -- compiler-provided, 0 public items
 - [log](packages/log.md) -- compiler-provided, 4 public items
 - [math](packages/math.md) -- compiler-provided, 131 public items
-- [math/interp](packages/math/interp.md) -- source package, 15 public items
+- [math/geo](packages/math/geo.md) -- source package, 18 public items
 - [math/numtheory](packages/math/numtheory.md) -- source package, 16 public items
-- [math/stats](packages/math/stats.md) -- source package, 91 public items
+- [math/optimize](packages/math/optimize.md) -- source package, 25 public items
+- [math/shard](packages/math/shard.md) -- source package, 33 public items
+- [math/sketch](packages/math/sketch.md) -- source package, 105 public items
+- [math/stats](packages/math/stats.md) -- source package, 97 public items
 - [math/vec](packages/math/vec.md) -- compiler-provided, 23 public items
 - [mysql](packages/mysql.md) -- source package, 49 public items
 - [nats](packages/nats.md) -- source package, 31 public items
@@ -6740,7 +6906,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [os](packages/os.md) -- compiler-provided, 18 public items
 - [pg](packages/pg.md) -- source package, 58 public items
 - [proc](packages/proc.md) -- compiler-provided, 9 public items
-- [rand](packages/rand.md) -- source package, 13 public items
+- [rand](packages/rand.md) -- source package, 15 public items
 - [redis](packages/redis.md) -- source package, 161 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
 - [s3](packages/s3.md) -- source package, 23 public items
@@ -10560,100 +10726,116 @@ slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://
 
 
 
-# math/interp
+# math/geo
 
-# math/interp
+# math/geo
 
-> Package math/interp.
+> Package math/geo.
 
-Values between known points: fee schedules, tiered rates, pricing and
-yield curves, calibration tables.
+Points on the Earth: distances, bearings, "everything within 5 km",
+geohash keys for spatial indexes, and geofences.
 
 ```slang
-import "math/interp";
+import "math/geo";
 
-let fees = interp.linear([0.0, 1000.0, 10000.0], [2.5, 1.8, 0.9]) ?? interp.empty();
-fees.at(4200.0);                     // 1.48
-let tier = interp.step([0.0, 100.0, 500.0], [10.0, 8.0, 5.0]) ?? interp.empty();
-tier.at(250.0);                      // 8: the tier 250 falls in
-let curve = interp.monotone(days, rates) ?? interp.empty();   // smooth, no overshoot
-curve.at(45.0);
-curve.slope(45.0);
-curve.set_extrapolate(interp.Extrapolate.Linear);
-
-let gr = interp.grid([1.0, 5.0], [0.0, 100.0, 500.0], prices);  // 2 x 3 values
-if let g = gr { g.at(2.5, 140.0); }                           // bilinear
+let berlin = geo.point(52.5200, 13.4050);          // lat, lon in degrees
+let paris = geo.point(48.8566, 2.3522);
+geo.distance(berlin, paris);                       // 877465 m (haversine)
+geo.distance_exact(berlin, paris) ?? 0.0;          // 879699 m (WGS-84)
+geo.bearing(berlin, paris);                        // 246.74 degrees
+geo.destination(berlin, 90.0, 1000.0);             // 1 km due east
+let box = geo.bounding_box(berlin, 5000.0);        // a WHERE clause's lat/lon ranges
+geo.geohash(berlin, 7);                            // "u33dc0c"
+geo.geohash_neighbors("u33dc0c");                  // the 8 cells around it
+geo.contains(fence, p);                            // point in polygon
 ```
 
-- `linear`, `step`, `monotone` (Fritsch-Carlson cubic with
-  Fritsch-Butland slopes: smooth, through every point, and never
-  overshooting, so monotone data stays monotone) and `spline` (the
-  natural cubic spline: the smoothest curve, which can overshoot).
-- `at`, `at_all`, `slope`; outside the knots `Extrapolate.Clamp` (the
-  default), `Linear` or `None` (NaN).
-- `grid(xs, ys, values)`: bilinear interpolation over a rectangular
-  table, clamped at its edges.
-
-Constructors check their input (equal lengths, at least one point,
-strictly increasing finite xs) and return a `result`. A lookup is a
-binary search, but a curve remembers its last segment, so ascending
-queries cost O(1) each; that memory makes a curve unsafe to share
-between tasks querying at once, so give each its own `copy()` (the knots
-are shared, not copied).
+- `distance` is the haversine great-circle distance on a sphere of the
+  mean Earth radius (within 0.5% of the ellipsoid); `distance_exact` is
+  Vincenty's inverse formula on WGS-84, to well under a millimetre
+  (`none` for nearly antipodal points, where it does not converge).
+- `bearing`, `destination`, `midpoint`, `distance_to_segment` (how far
+  a courier is from the route).
+- `bounding_box(center, meters)` and `in_box`: the smallest box holding
+  a radius, crossing the antimeridian (`min_lon > max_lon`) or spanning
+  every longitude near a pole. Filter an index with the box, then keep
+  the rows within `distance`.
+- `geohash(p, chars)`, `geohash_decode`, `geohash_box`,
+  `geohash_neighbors` (either case accepted).
+- `contains` (even-odd rule, for fences small next to a hemisphere) and
+  `area` in square metres.
 
 ## API
 
-### `gc struct Curve`
+### `let EARTH_RADIUS = 6371008.8;`
 
-### `fn empty() -> Curve`
+The mean Earth radius (IUGG), metres.
 
-A curve with no points, for `??` defaults: every value is NaN.
+### `struct Point`
 
-### `fn linear(xs: [float], ys: [float]) -> result[Curve, str]`
+### `fn point(lat: float, lon: float) -> Point`
 
-Straight lines between the points.
+A point; latitude in [-90, 90], longitude wrapped into [-180, 180).
 
-### `fn step(xs: [float], ys: [float]) -> result[Curve, str]`
+### `fn distance(a: Point, b: Point) -> float`
 
-A staircase: the value of the last point at or below x (the tier a quantity falls in). Before the first point: its value under Clamp, NaN under None.
+The great-circle distance in metres (haversine): accurate for any pair of points, antipodes included, on the spherical Earth.
 
-### `fn monotone(xs: [float], ys: [float]) -> result[Curve, str]`
+### `fn distance_exact(a: Point, b: Point) -> opt[float]`
 
-A monotone cubic (Fritsch and Carlson 1980, with Fritsch-Butland slopes): smooth, through every point, and never rising above or dipping below its neighbours, so a monotone table stays monotone. The safe choice for rates and prices.
+The distance in metres on the WGS-84 ellipsoid (Vincenty's inverse formula, 1975). none for nearly antipodal points, where the iteration does not converge; use distance() there.
 
-### `fn spline(xs: [float], ys: [float]) -> result[Curve, str]`
+### `fn bearing(a: Point, b: Point) -> float`
 
-The natural cubic spline: the smoothest curve through the points (a continuous second derivative, zero at the ends). It can overshoot between points; use monotone when that matters.
+The initial bearing from a toward b, degrees clockwise from north in [0, 360). Along a great circle the bearing changes as you go.
 
-### `fn at(self: Curve, x: float) -> float`
+### `fn destination(from: Point, bearing_deg: float, meters: float) -> Point`
 
-The value at x.
+The point `meters` from `from` along the initial bearing (spherical).
 
-### `fn at_all(self: Curve, xs: [float]) -> [float]`
+### `fn midpoint(a: Point, b: Point) -> Point`
 
-The values at each of xs, in one pass when xs ascend.
+The midpoint of the great-circle path between a and b.
 
-### `fn slope(self: Curve, x: float) -> float`
+### `struct Box`
 
-The derivative at x (0 on a step curve, and outside the knots under Clamp).
+A latitude/longitude rectangle. When it crosses the antimeridian, min_lon > max_lon: a longitude is inside when it is >= min_lon OR <= max_lon.
 
-### `fn set_extrapolate(self: Curve, mode: Extrapolate) -> Curve`
+### `fn bounding_box(center: Point, meters: float) -> Box`
 
-### `fn copy(self: Curve) -> Curve`
+The smallest box holding every point within `meters` of center (spherical; Chan's method). Query an index with the box, then keep the rows whose distance() is within the radius. A box around a pole spans every longitude.
 
-A curve over the same knots with its own lookup memory, for another task.
+### `fn in_box(b: Box, p: Point) -> bool`
 
-### `fn size(self: Curve) -> int`
+Whether p is inside the box (edges included), across the antimeridian too.
 
-### `gc struct Grid`
+### `fn geohash(p: Point, chars: int) -> str`
 
-A table of values over a rectangular grid, read by bilinear interpolation: prices by (weight, distance), rates by (term, amount).
+The geohash of p with `chars` characters (1 to 12; 7 is about 150 m, 9 about 5 m): nearby points share prefixes, so it indexes well as a string key.
 
-### `fn grid(xs: [float], ys: [float], values: [float]) -> result[Grid, str]`
+### `fn geohash_box(hash: str) -> result[Box, str]`
 
-A grid over ascending xs and ys with len(xs) * len(ys) values, row by row. Outside the grid the nearest edge value is used.
+The cell a geohash names. An error for an empty hash, one longer than 12 or a character outside the geohash alphabet (either case).
 
-### `fn at(self: Grid, x: float, y: float) -> float`
+### `fn geohash_decode(hash: str) -> result[Point, str]`
+
+The centre of a geohash's cell.
+
+### `fn geohash_neighbors(hash: str) -> result[[str], str]`
+
+The eight cells around a geohash, at its length: N, NE, E, SE, S, SW, W, NW. A radius search covers the cell and its neighbours. Cells beyond a pole are left out.
+
+### `fn contains(polygon: [Point], p: Point) -> bool`
+
+Whether p lies inside the polygon given by its vertices (in order, either direction, closed or not), by the even-odd rule in plain latitude/longitude: right for geofences that are small next to a hemisphere and do not cross the antimeridian or a pole.
+
+### `fn area(polygon: [Point]) -> float`
+
+The area of a polygon in square metres on the spherical Earth (the spherical-excess formula of Chamberlain and Duquette), for polygons not crossing the antimeridian.
+
+### `fn distance_to_segment(p: Point, a: Point, b: Point) -> float`
+
+The shortest distance in metres from p to the great-circle segment a-b (spherical): the cross-track distance when the foot of the perpendicular falls between a and b, else the nearer endpoint. For "is the courier within 50 m of the route".
 
 ---
 
@@ -10759,6 +10941,732 @@ slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://
 
 
 
+# math/optimize
+
+# math/optimize
+
+> Package math/optimize.
+
+Solving f(x) = 0, minimising f and integrating it, in one variable:
+implied rates, break-even points, the price that maximises revenue, the
+area under a curve. Written in slang; every routine stops at a tolerance
+or a fixed budget of evaluations and says which in its error, so none
+can loop forever whatever f returns (a NaN is an error, not an answer).
+
+```slang
+import "math/optimize";
+
+fn f(x: float) -> float { return x * x - 2.0; }
+let r = optimize.brent(f, 0.0, 2.0, 1e-12);          // result[Root, str]
+(r ?? optimize.no_root()).x;                         // 1.41421356...
+
+// slang has no closures: a function that needs data takes it second
+struct Loan { pv: float, pmt: float, n: int }
+fn gap(rate: float, l: Loan) -> float { ... }
+optimize.brent_with(gap, loan, 0.0001, 0.1, 1e-12);
+
+optimize.brent_min(f, 0.0, 10.0, 1e-9);              // result[Min, str]
+optimize.integrate(f, 0.0, math.inf, 1e-10, 1e-10);  // result[Integral, str]
+```
+
+- **Roots:** `brent` (Brent's zeroin: superlinear, never slower than
+  bisection; the default), `bisect`, `newton` (needs the derivative;
+  fast near a simple root, can diverge from a poor start),
+  `newton_safe` (Newton kept inside a bracket, bisecting when a step
+  would leave it), `bracket` (widens a guess until f changes sign).
+- **Minima** of a unimodal f on [a, b]: `brent_min` (parabolic steps with
+  golden-section fallbacks, as scipy's `fminbound`), `golden`. x is good
+  to about sqrt(machine epsilon) relative, the limit for any minimiser.
+- **Integrals:** `integrate` (adaptive 7/15-point Gauss-Kronrod as
+  QUADPACK's QAG, with infinite bounds mapped onto finite ones) and
+  `simpson` (adaptive, finite bounds). Each returns the value, an error
+  estimate and the number of evaluations.
+
+Each routine has a `_with` form whose f takes a context value of any type
+as its second argument, for the data a closure would carry.
+
+## API
+
+### `struct Root`
+
+A root: f(x) is (near) zero. fx is f at x; evals counts calls to f.
+
+### `struct Min`
+
+A minimum of f on an interval: f(x) = fx.
+
+### `struct Integral`
+
+An integral, with an estimate of its absolute error.
+
+### `struct Bracket`
+
+A bracket [lo, hi] with f(lo) and f(hi) of opposite signs (or one 0).
+
+### `fn no_root() -> Root`
+
+NaNs, for `??` defaults: (r ?? optimize.no_root()).x is NaN on error.
+
+### `fn no_min() -> Min`
+
+### `fn no_integral() -> Integral`
+
+### `fn bracket(f: fn(float) -> float, lo: float, hi: float) -> result[Bracket, str]`
+
+Widens [lo, hi] geometrically (by 1.6 each side, up to 50 times) until f changes sign across it.
+
+### `fn bracket_with[C](f: fn(float, C) -> float, ctx: C, lo: float, hi: float) -> result[Bracket, str]`
+
+### `fn bisect(f: fn(float) -> float, lo: float, hi: float, tol: float) -> result[Root, str]`
+
+Bisection: halves [lo, hi] until it is within tol. Slow (one bit per step) but certain; prefer brent.
+
+### `fn bisect_with[C](f: fn(float, C) -> float, ctx: C, lo: float, hi: float, tol: float) -> result[Root, str]`
+
+### `fn brent(f: fn(float) -> float, lo: float, hi: float, tol: float) -> result[Root, str]`
+
+Brent's method (Brent 1973, the zeroin of netlib): inverse quadratic interpolation and secant steps, falling back to bisection whenever they would not shrink the bracket fast enough. Superlinear on smooth f, never slower than bisection. The default root finder.
+
+### `fn brent_with[C](f: fn(float, C) -> float, ctx: C, lo: float, hi: float, tol: float) -> result[Root, str]`
+
+### `fn newton(f: fn(float) -> float, df: fn(float) -> float, x0: float, tol: float) -> result[Root, str]`
+
+Newton's method from x0 with derivative df: quadratic convergence near a simple root, but it can diverge from a poor start. Use newton_safe when a bracket is known.
+
+### `fn newton_with[C, D](f: fn(float, C) -> float, df: fn(float, D) -> float, ctx: C, x0: float, tol: float, dctx: D) -> result[Root, str]`
+
+newton with data: f and df each take ctx. (The derivative's own data is passed as dctx, so f and df can differ in what they need.)
+
+### `fn newton_safe(f: fn(float) -> float, df: fn(float) -> float, lo: float, hi: float, tol: float) -> result[Root, str]`
+
+Safeguarded Newton (rtsafe): Newton steps that stay inside a bracket [lo, hi] where f changes sign, with bisection whenever a step would leave it or shrink it too slowly. Fast and certain.
+
+### `fn newton_safe_with[C, D](f: fn(float, C) -> float, df: fn(float, D) -> float, ctx: C, lo: float, hi: float, tol: float, dctx: D) -> result[Root, str]`
+
+### `fn golden(f: fn(float) -> float, a: float, b: float, tol: float) -> result[Min, str]`
+
+Golden-section search for the minimum of a unimodal f on [a, b]: the interval shrinks by 0.618 per evaluation. Needs no derivative and no smoothness; prefer brent_min for smooth f.
+
+### `fn golden_with[C](f: fn(float, C) -> float, ctx: C, a: float, b: float, tol: float) -> result[Min, str]`
+
+### `fn brent_min(f: fn(float) -> float, a: float, b: float, tol: float) -> result[Min, str]`
+
+Brent's minimisation (Brent 1973, localmin; scipy's fminbound): parabolic interpolation through the best three points, golden-section steps when a parabola is not trustworthy. On [a, b], for unimodal f.
+
+### `fn brent_min_with[C](f: fn(float, C) -> float, ctx: C, a0: float, b0: float, tol: float) -> result[Min, str]`
+
+### `fn simpson(f: fn(float) -> float, a: float, b: float, tol: float) -> result[Integral, str]`
+
+Adaptive Simpson's rule: splits wherever the two halves disagree with the whole by more than tol (absolute), with Richardson's correction. For smooth f on a finite interval.
+
+### `fn simpson_with[C](f: fn(float, C) -> float, ctx: C, a: float, b: float, tol: float) -> result[Integral, str]`
+
+### `fn integrate(f: fn(float) -> float, a: float, b: float, abs_tol: float, rel_tol: float) -> result[Integral, str]`
+
+Adaptive Gauss-Kronrod (7-point Gauss, 15-point Kronrod, as QUADPACK's QAG): the interval with the largest error estimate is halved until the total error is within max(abs_tol, rel_tol * |integral|). Infinite bounds are mapped onto a finite interval (x = t / (1 - t^2) and its one-sided forms). The general-purpose integrator.
+
+### `fn integrate_with[C](f: fn(float, C) -> float, ctx: C, a: float, b: float, abs_tol: float, rel_tol: float) -> result[Integral, str]`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# math/shard
+
+# math/shard
+
+> Package math/shard.
+
+Map a key to one of n nodes so each node gets an even share and a change
+in the node set moves as few keys as possible: sharding databases and
+caches, partitioning queues, sticky load balancing.
+
+```slang
+import "math/shard";
+
+shard.jump_str(user_id, 16);                 // bucket in [0, 16)
+
+let r = shard.rendezvous(["db-a", "db-b", "db-c"]);
+r.node(r.pick_str(user_id) ?? 0);            // the node's name
+r.pick_n_str(user_id, 2);                    // primary and a replica
+
+let ring = shard.ring(160);                  // 160 points per unit of weight
+ring.add("cache-1", 1);
+ring.add("cache-2", 2);                      // twice the keys
+ring.get_str(key) ?? "";
+
+let m = shard.maglev(["lb-1", "lb-2", "lb-3"], 65537);
+m.pick_str(flow_id);                         // O(1): one table read
+```
+
+| Scheme | Lookup | Memory | Remove any node | Weights | Use for |
+|---|---|---|---|---|---|
+| `jump` (Lamping and Veach) | O(log n) | none | only the last | no | a growing count of shards |
+| `rendezvous` (HRW) | O(nodes) | names | yes, only its keys move | yes | up to a few hundred nodes, replicas |
+| `ring` (Karger) | O(log points) | 16 B per point | yes | yes | many nodes |
+| `maglev` (Google) | O(1) | 4 B per entry | rebuild; little extra movement | no | load balancers |
+
+Every scheme hashes with a fixed function (`shard.hash_str`,
+`hash_int`), so every process and host maps a key to the same node.
+Rendezvous weights follow Schindelhauer and Schomaker (`-w / ln(u)`), so
+a node gets keys in proportion to its weight; a ring's markers depend
+only on the node's name, so they are the same after every rebuild.
+
+## API
+
+### `fn hash_str(s: str) -> u64`
+
+A 64-bit hash of a str: strings.hash widened and remixed.
+
+### `fn hash_int(x: int) -> u64`
+
+A 64-bit hash of an int.
+
+### `fn jump(key: u64, buckets: int) -> int`
+
+The bucket in [0, buckets) for a 64-bit key (Lamping and Veach 2014): each bucket gets 1/buckets of the keys, and going from n to n+1 buckets moves only the 1/(n+1) that the new bucket takes. O(log n), no memory. buckets below 1 count as 1.
+
+### `fn jump_str(s: str, buckets: int) -> int`
+
+jump() of a str key.
+
+### `fn jump_int(x: int, buckets: int) -> int`
+
+jump() of an int key.
+
+### `gc struct Rendezvous`
+
+Rendezvous hashing (Thaler and Ravishankar 1996): each node scores the key, and the highest score wins. A node leaving moves only its own keys, spread evenly over the rest. Weighted scores follow Schindelhauer and Schomaker: -weight / ln(u) for u the node's hash of the key in (0, 1), which gives each node keys in proportion to its weight.
+
+### `fn rendezvous(nodes: [str]) -> Rendezvous`
+
+Nodes of equal weight. Their order does not matter to the mapping; pick() returns an index into this list.
+
+### `fn rendezvous_weighted(nodes: [str], weights: [float]) -> Rendezvous`
+
+Nodes with weights (a weight at or below 0, or NaN, means the node gets nothing). A missing weight counts as 1.
+
+### `fn pick(self: Rendezvous, key: u64) -> opt[int]`
+
+The index of the node for this key hash; none when there are no nodes (or every weight is 0).
+
+### `fn pick_n(self: Rendezvous, key: u64, n: int) -> [int]`
+
+The indexes of the n highest-scoring nodes, best first: the primary and then its replicas, each a different node. Fewer when there are fewer nodes.
+
+### `fn pick_str(self: Rendezvous, key: str) -> opt[int]`
+
+### `fn pick_int(self: Rendezvous, key: int) -> opt[int]`
+
+### `fn pick_n_str(self: Rendezvous, key: str, n: int) -> [int]`
+
+### `fn node(self: Rendezvous, i: int) -> str`
+
+The name of node i (as given).
+
+### `fn size(self: Rendezvous) -> int`
+
+### `gc struct Ring`
+
+A consistent-hash ring (Karger et al. 1997) with virtual nodes: each node puts `points * weight` markers on a 64-bit circle, and a key belongs to the first marker clockwise from its hash. Adding or removing a node moves only the keys next to its markers.
+
+### `fn ring(points_per_weight: int) -> Ring`
+
+An empty ring putting `points_per_weight` markers per unit of weight (100 to 200 keeps the share of each node within a few percent).
+
+### `fn add(self: Ring, name: str, weight: int) -> bool`
+
+Adds a node (or changes its weight, 1 to 1000). False for an empty name.
+
+### `fn remove(self: Ring, name: str) -> bool`
+
+Removes a node; its keys move to the next markers. False when it was not on the ring.
+
+### `fn get(self: Ring, key: u64) -> opt[str]`
+
+The node for this key hash; none on an empty ring.
+
+### `fn get_n(self: Ring, key: u64, n: int) -> [str]`
+
+Up to n distinct nodes for this key hash, clockwise from it: a primary and its replicas.
+
+### `fn get_str(self: Ring, key: str) -> opt[str]`
+
+### `fn get_int(self: Ring, key: int) -> opt[str]`
+
+### `fn get_n_str(self: Ring, key: str, n: int) -> [str]`
+
+### `fn nodes(self: Ring) -> [str]`
+
+Live nodes.
+
+### `fn points(self: Ring) -> int`
+
+Markers on the ring.
+
+### `gc struct Maglev`
+
+Maglev hashing (Eisenbud et al. 2016, Google's load balancer): a lookup table of `size` entries, a prime well above the node count (65537 is usual; 2039 for small sets), filled so each node owns an equal share. A lookup is one hash and one table read. Rebuild with a new node list; keys of nodes that stay mostly stay put.
+
+### `fn maglev(nodes: [str], size: int) -> Maglev`
+
+A table over `nodes` of `size` entries (raised to the next prime, at least 7 and at least the node count). Duplicate names share nothing: each entry is one slot. An empty list gives an empty table.
+
+### `fn pick(self: Maglev, key: u64) -> opt[int]`
+
+The index of the node for this key hash; none for an empty table.
+
+### `fn pick_str(self: Maglev, key: str) -> opt[int]`
+
+### `fn pick_int(self: Maglev, key: int) -> opt[int]`
+
+### `fn node(self: Maglev, i: int) -> str`
+
+### `fn size(self: Maglev) -> int`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# math/sketch
+
+# math/sketch
+
+> Package math/sketch.
+
+Fixed-memory, mergeable estimates for live servers: how many distinct
+users, how often each key, which keys are heaviest, have we seen this
+before, and latency percentiles, without keeping the items. Written in
+slang; every sketch of a kind merges with another built with the same
+parameters, so tasks and hosts each keep their own and combine.
+
+```slang
+import "math/sketch";
+
+let users = sketch.hyperloglog(14);          // 16 KB, 0.81% error
+users.add_str(user_id);
+users.count();
+
+let hits = sketch.count_min(0.001, 0.01);    // within 0.1% of the total, 99% of the time
+hits.add_str(ip, 1);
+hits.estimate_str(ip);
+
+let heavy = sketch.top_k(100);               // Space-Saving
+heavy.add(path);
+heavy.top();                                 // [Item { key, count, error }]
+
+let seen = sketch.bloom(1000000, 0.01);      // 1.2 MB
+seen.add_str(key);
+seen.contains_str(key);                      // false: certainly not added
+
+let live = sketch.cuckoo(100000);            // like a Bloom filter, with remove
+live.add_str(id); live.remove_str(id);
+
+let lat = sketch.histogram(60000000, 7);     // 1 us .. 60 s, 0.8% precision
+lat.record(elapsed_us);
+lat.quantile(0.99);
+lat.buckets(sketch.exponential_bounds(1000, 2.0, 12));   // Prometheus le= counts
+
+let keep: [Event] = [];                      // a uniform sample of 100
+let rs = sketch.reservoir(100, rand.new(7));
+if let slot = rs.offer() {
+    if slot == len(keep) { push(keep, e); } else { keep[slot] = e; }
+}
+```
+
+- **`HyperLogLog`** (Flajolet et al. with Ertl's 2017 estimator, no bias
+  tables): `add_str`/`add_int`/`add_bytes`/`add_hash`, `count`,
+  `estimate`, `merge`, `encode`/`decode_hyperloglog`. Precision 4 to 18;
+  the error is 1.04/sqrt(2^p).
+- **`CountMin`** (Cormode and Muthukrishnan): never under the true count,
+  at most epsilon * total over it with probability 1 - delta;
+  `set_conservative(true)` tightens skewed data. `count_min_sized(w, d)`,
+  `total`, `merge`, `clear`, `encode`/`decode_count_min`.
+- **`TopK`** (Space-Saving, Metwally et al.): every key above total/k is
+  kept; each count carries its maximum error. O(log k) per add; `merge`
+  follows Agarwal et al.
+- **`Bloom`**: the split-block layout Parquet and Impala use, one 32-byte
+  block per key, so an add or a lookup touches one cache line. `fill`,
+  `fpp` (the false-positive rate it has now), `merge`, `encode`.
+- **`Cuckoo`** (Fan et al.): 16-bit fingerprints in buckets of four,
+  0.012% false positives at 95% load, with `remove`. A fingerprint that
+  finds no room is kept aside, so a full filter refuses new keys rather
+  than losing an old one.
+- **`Histogram`**: HdrHistogram's log-linear buckets: exact below
+  2^precision, then 2^(precision-1) buckets per power of two. Exact
+  `count`, `sum`, `mean`, `min`, `max`; `quantile`, `rank_of`, `buckets`,
+  `merge`; `exponential_bounds` and `linear_bounds` for Prometheus.
+- **`Reservoir`** (Algorithm L, Li 1994): the sample is your own list of
+  any type; most items cost a counter increment and no random draw.
+
+Keys hash with `hash_str` (over `strings.hash`), `hash_int` or
+`hash_bytes`, or pass your own 64-bit hash to the `*_hash` methods. The
+hashes are fixed across releases on little-endian CPUs, so `encode`d
+sketches merge across hosts. None of the sketches locks: one per task,
+then `merge`.
+
+## API
+
+### `gc struct Bloom`
+
+"Have I seen this key?" in about 10 bits per key at 1% false positives, never a false negative. The split-block layout (Putze et al. 2007, as Parquet and Impala use it): each key sets one bit in each of the eight 32-bit words of a single 256-bit block, so an add or a lookup touches one cache line instead of seven scattered ones. Use it in front of a database or a cache to skip lookups that would miss, or to remember idempotency keys cheaply.
+
+### `fn bloom(n: int, fpp: float) -> Bloom`
+
+A filter sized for `n` keys at a false-positive rate of `fpp`: the bits Parquet's formula gives, -8n / ln(1 - fpp^(1/8)), in whole blocks. n is at least 1; fpp is clamped to [1e-6, 0.5]. bloom(1000000, 0.01) is 1.2 MB. Past `n` keys the rate climbs: size for the peak.
+
+### `fn bloom_blocks(blocks: int) -> Bloom`
+
+A filter of exactly `blocks` 32-byte blocks (clamped to [1, 2^27]).
+
+### `fn decode_bloom(b: bytes) -> result[Bloom, str]`
+
+A filter read back from encode().
+
+### `fn add_hash(self: Bloom, h: u64) -> Bloom`
+
+Adds the key with this hash. The high 32 bits pick the block, the low 32 the eight bits within it.
+
+### `fn contains_hash(self: Bloom, h: u64) -> bool`
+
+False means the key was certainly never added; true means it probably was.
+
+### `fn add_str(self: Bloom, s: str) -> Bloom`
+
+### `fn add_int(self: Bloom, x: int) -> Bloom`
+
+### `fn add_bytes(self: Bloom, b: bytes) -> Bloom`
+
+### `fn contains_str(self: Bloom, s: str) -> bool`
+
+### `fn contains_int(self: Bloom, x: int) -> bool`
+
+### `fn contains_bytes(self: Bloom, b: bytes) -> bool`
+
+### `fn merge(self: Bloom, other: Bloom) -> bool`
+
+Folds `other` in (bitwise OR): the filter of both key sets. False, and no change, when the sizes differ.
+
+### `fn clear(self: Bloom)`
+
+### `fn size_bytes(self: Bloom) -> int`
+
+The memory the bits take.
+
+### `fn fill(self: Bloom) -> float`
+
+The share of bits set, 0 to 1: about 1 - e^(-8n/m) after n keys.
+
+### `fn fpp(self: Bloom) -> float`
+
+The false-positive rate the filter has now, estimated from its fill: a lookup is a false positive when all eight of its bits are set, about fill^8. Compare it with the rate it was sized for to tell when it has taken more keys than planned.
+
+### `fn encode(self: Bloom) -> bytes`
+
+9 + 32 * blocks bytes, little-endian.
+
+### `gc struct CountMin`
+
+How often each key occurred, in fixed memory (Cormode and Muthukrishnan 2005): `depth` rows of `width` counters, each key adding to one counter per row and reading the smallest. An estimate is never below the true count, and with probability 1 - delta is at most epsilon * total above it. For rate limiting, abuse detection, and finding heavy keys among millions without a map entry each.
+
+### `fn count_min(epsilon: float, delta: float) -> CountMin`
+
+A sketch whose estimates are within epsilon * total of the truth with probability 1 - delta: width e / epsilon (rounded up to a power of two), depth ln(1 / delta). count_min(0.001, 0.01) is 4096 x 5 counters, 160 KB. epsilon is clamped to [1e-7, 0.5], delta to [1e-9, 0.5].
+
+### `fn count_min_sized(width: int, depth: int) -> CountMin`
+
+A sketch of exactly `depth` rows (clamped to [1, 16]) of `width` counters (rounded up to a power of two, clamped to [2, 2^26]).
+
+### `fn decode_count_min(b: bytes) -> result[CountMin, str]`
+
+A sketch read back from encode().
+
+### `fn set_conservative(self: CountMin, on: bool) -> CountMin`
+
+Conservative update (Estan and Varghese): raise each of a key's counters only as far as its new estimate. Estimates stay upper bounds and get much tighter on skewed data, at the price of merge being an upper bound too. Set it before the first add.
+
+### `fn add_hash(self: CountMin, h: u64, n: int) -> CountMin`
+
+Adds n (ignored unless positive) to the key with this hash.
+
+### `fn estimate_hash(self: CountMin, h: u64) -> int`
+
+An upper bound on the key's total, usually exact for heavy keys.
+
+### `fn add_str(self: CountMin, s: str, n: int) -> CountMin`
+
+### `fn add_int(self: CountMin, x: int, n: int) -> CountMin`
+
+### `fn add_bytes(self: CountMin, b: bytes, n: int) -> CountMin`
+
+### `fn estimate_str(self: CountMin, s: str) -> int`
+
+### `fn estimate_int(self: CountMin, x: int) -> int`
+
+### `fn estimate_bytes(self: CountMin, b: bytes) -> int`
+
+### `fn total(self: CountMin) -> int`
+
+The sum of every n added.
+
+### `fn width(self: CountMin) -> int`
+
+### `fn depth(self: CountMin) -> int`
+
+### `fn merge(self: CountMin, other: CountMin) -> bool`
+
+Adds `other`'s counts to this sketch's. False, and no change, when the two differ in width or depth.
+
+### `fn clear(self: CountMin)`
+
+Zeroes every counter, keeping the memory. A rate limiter clears (or swaps in a fresh sketch) at each window boundary.
+
+### `fn encode(self: CountMin) -> bytes`
+
+19 + 8 * width * depth bytes, little-endian.
+
+### `gc struct Cuckoo`
+
+A set membership filter that can also delete (Fan et al. 2014): each key keeps a 16-bit fingerprint in one of two buckets of four slots. About 17 bits per key at 95% load with a 0.012% false-positive rate, and a lookup reads two cache lines at most. Unlike a Bloom filter it can remove a key, so it fits sets that change: active sessions, in-flight job ids, revoked tokens.  Remove only keys that were added: removing a key that never was can evict a different key sharing its fingerprint.
+
+### `fn cuckoo(capacity: int) -> Cuckoo`
+
+A filter with room for about `capacity` keys (at 95% load). At least one bucket; capacity is clamped to 2^30.
+
+### `fn add_hash(self: Cuckoo, h: u64) -> bool`
+
+Adds the key with this hash. False when the filter is full (the key is then not added and nothing else is lost).
+
+### `fn contains_hash(self: Cuckoo, h: u64) -> bool`
+
+False means the key is certainly not in the filter.
+
+### `fn remove_hash(self: Cuckoo, h: u64) -> bool`
+
+Removes one copy of the key. False when it was not found.
+
+### `fn add_str(self: Cuckoo, s: str) -> bool`
+
+### `fn add_int(self: Cuckoo, x: int) -> bool`
+
+### `fn add_bytes(self: Cuckoo, b: bytes) -> bool`
+
+### `fn contains_str(self: Cuckoo, s: str) -> bool`
+
+### `fn contains_int(self: Cuckoo, x: int) -> bool`
+
+### `fn contains_bytes(self: Cuckoo, b: bytes) -> bool`
+
+### `fn remove_str(self: Cuckoo, s: str) -> bool`
+
+### `fn remove_int(self: Cuckoo, x: int) -> bool`
+
+### `fn remove_bytes(self: Cuckoo, b: bytes) -> bool`
+
+### `fn count(self: Cuckoo) -> int`
+
+Keys held.
+
+### `fn load(self: Cuckoo) -> float`
+
+Keys held over slots: past about 0.95 adds start to fail.
+
+### `fn size_bytes(self: Cuckoo) -> int`
+
+### `fn clear(self: Cuckoo)`
+
+### `fn hash_int(x: int) -> u64`
+
+A 64-bit hash of an int, every bit well mixed.
+
+### `fn hash_str(s: str) -> u64`
+
+A 64-bit hash of a str (strings.hash, widened and remixed to 64 bits).
+
+### `fn hash_bytes(b: bytes) -> u64`
+
+A 64-bit hash of bytes: FNV-1a over the bytes, then the finaliser.
+
+### `gc struct Histogram`
+
+Latency (or any non-negative int) percentiles in fixed memory, to a stated relative precision, merging exactly: the log-linear bucketing of HdrHistogram. Values below 2^precision are counted exactly; above that, each power of two is split into 2^(precision-1) equal buckets, so a reported quantile is within 2^-precision of the true one (precision 7: 0.8%). histogram(60000000, 7) covers 1 us to 60 s in 1,344 counters, 10.5 KB, however many values are recorded.  let h = sketch.histogram(60000000, 7); h.record(elapsed_us); h.quantile(0.99); h.mean(); h.max(); h.buckets([1000, 5000, 25000, 100000]);   // Prometheus le= counts
+
+### `fn histogram(max: int, precision: int) -> Histogram`
+
+A histogram for values in [0, max] at the given precision in bits (clamped to [1, 16]; max is at least 1 and at most 2^62). Larger values are counted in the top bucket, and min, max and mean stay exact.
+
+### `fn record(self: Histogram, v: int) -> Histogram`
+
+Records one value. A negative value counts as 0.
+
+### `fn record_n(self: Histogram, value: int, n: int) -> Histogram`
+
+Records `n` (ignored unless positive) occurrences of v.
+
+### `fn quantile(self: Histogram, q: float) -> int`
+
+The value at quantile q in [0, 1] (nearest rank: the smallest recorded value with at least q of the values at or below it), reported as its bucket's midpoint and clamped to [min, max]. 0 before the first value.
+
+### `fn rank_of(self: Histogram, v: int) -> float`
+
+The share of values at or below v, 0 to 1 (to bucket precision).
+
+### `fn buckets(self: Histogram, bounds: [int]) -> [int]`
+
+Cumulative counts at each upper bound (ascending), the shape of a Prometheus histogram's `le` buckets: element i counts the values at or below bounds[i], to bucket precision. The +Inf bucket is count().
+
+### `fn count(self: Histogram) -> int`
+
+### `fn sum(self: Histogram) -> float`
+
+The exact sum of recorded values (as a float, so it cannot wrap).
+
+### `fn mean(self: Histogram) -> float`
+
+The exact mean; NaN before the first value.
+
+### `fn min(self: Histogram) -> int`
+
+The exact smallest value; 0 before the first.
+
+### `fn max(self: Histogram) -> int`
+
+The exact largest value; 0 before the first.
+
+### `fn overflow(self: Histogram) -> int`
+
+Values recorded above the range given at creation.
+
+### `fn merge(self: Histogram, other: Histogram) -> bool`
+
+Adds `other`'s counts to this one's, exactly. False, and no change, when the range or precision differ.
+
+### `fn clear(self: Histogram)`
+
+Empties the histogram, keeping its memory.
+
+### `fn exponential_bounds(start: int, factor: float, count: int) -> [int]`
+
+Upper bounds start, start*factor, start*factor^2, ... (count of them), for buckets(): Prometheus's ExponentialBuckets. Each is at least one above the last, so a small start with a small factor still ascends.
+
+### `fn linear_bounds(start: int, width: int, count: int) -> [int]`
+
+Upper bounds start, start+width, ... (count of them): LinearBuckets.
+
+### `gc struct HyperLogLog`
+
+Counts distinct items in fixed memory (Flajolet et al., with Ertl's 2017 estimator, which is unbiased from 0 to billions with no lookup tables). Precision p uses 2^p bytes and has a relative standard error of 1.04 / sqrt(2^p):  p = 10:  1 KB, 3.3%     p = 14: 16 KB, 0.81% p = 12:  4 KB, 1.6%     p = 16: 64 KB, 0.41%  Adding the same item twice changes nothing, and two sketches merge into the sketch of the union of their items.
+
+### `fn hyperloglog(precision: int) -> HyperLogLog`
+
+A sketch with 2^precision registers; precision is clamped to [4, 18].
+
+### `fn decode_hyperloglog(b: bytes) -> result[HyperLogLog, str]`
+
+A sketch read back from encode(). Refuses a wrong length, an unknown version or a register no sketch could hold.
+
+### `fn add_hash(self: HyperLogLog, h: u64) -> HyperLogLog`
+
+Adds an item by its 64-bit hash (hash_str, hash_int, hash_bytes, or any well-mixed hash). The top p bits pick a register; the rest give the rank.
+
+### `fn add_str(self: HyperLogLog, s: str) -> HyperLogLog`
+
+### `fn add_int(self: HyperLogLog, x: int) -> HyperLogLog`
+
+### `fn add_bytes(self: HyperLogLog, b: bytes) -> HyperLogLog`
+
+### `fn estimate(self: HyperLogLog) -> float`
+
+The estimated number of distinct items, as a float.
+
+### `fn count(self: HyperLogLog) -> int`
+
+The estimate rounded to the nearest int.
+
+### `fn precision(self: HyperLogLog) -> int`
+
+### `fn merge(self: HyperLogLog, other: HyperLogLog) -> bool`
+
+Folds `other` in, so this sketch counts the union of both. False, and no change, when the precisions differ.
+
+### `fn clear(self: HyperLogLog)`
+
+Empties the sketch, keeping its memory.
+
+### `fn encode(self: HyperLogLog) -> bytes`
+
+2 + 2^p bytes: a version byte, the precision, then the registers.
+
+### `gc struct Reservoir`
+
+A uniform random sample of k items from a stream of unknown length, in O(k) memory: every item seen so far is in the sample with the same probability. Algorithm L (Li 1994) skips ahead between replacements, so most items cost a counter increment and no random draw.  The sample is your own list, of any type: offer() says where the current item goes.  let keep: [Event] = []; let rs = sketch.reservoir(100, rand.new(7)); for e in events { if let slot = rs.offer() { if slot == len(keep) { push(keep, e); } else { keep[slot] = e; } } }
+
+### `fn reservoir(k: int, r: rand.Rng) -> Reservoir`
+
+A reservoir of k items (at least 1), drawing from r.
+
+### `fn offer(self: Reservoir) -> opt[int]`
+
+Counts one more item and says what to do with it: some(slot) to store it at keep[slot] (slot == len(keep) while the sample fills: push it), none to drop it.
+
+### `fn seen(self: Reservoir) -> int`
+
+Items offered so far.
+
+### `fn size(self: Reservoir) -> int`
+
+### `fn reset(self: Reservoir)`
+
+Starts over for a new stream, keeping the generator.
+
+### `struct Item`
+
+One of the heaviest keys: `count` overestimates the key's true count by at most `error` (count - error is a guaranteed lower bound).
+
+### `gc struct TopK`
+
+The k heaviest keys of a stream in O(k) memory (Space-Saving, Metwally et al. 2005): every key whose true count is above total / k is in the list. A key not being tracked replaces the one with the smallest count and inherits that count as its possible error. O(log k) per add.  Each key lives in a fixed slot; the min-heap orders slot numbers, so a heap swap moves two ints and the key map is touched once or twice per add, never per swap.
+
+### `fn top_k(k: int) -> TopK`
+
+Tracks up to k keys (k at least 1).
+
+### `fn add(self: TopK, key: str) -> TopK`
+
+### `fn add_n(self: TopK, key: str, n: int) -> TopK`
+
+Adds n (ignored unless positive) occurrences of key.
+
+### `fn top(self: TopK) -> [Item]`
+
+The tracked keys, heaviest first (ties by key).
+
+### `fn count(self: TopK, key: str) -> opt[int]`
+
+The estimated count of key, or none if it is not tracked (then its true count is at most the smallest tracked count).
+
+### `fn total(self: TopK) -> int`
+
+The total of every n added.
+
+### `fn size(self: TopK) -> int`
+
+### `fn merge(self: TopK, other: TopK)`
+
+Combines `other` into this summary (Agarwal et al. 2012): a key's counts add, and a key one side does not track is credited with that side's smallest count when it is full, the most it could have had. The heaviest `k` of the combined keys are kept.
+
+### `fn clear(self: TopK)`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
 # math/stats
 
 # math/stats
@@ -10790,6 +11698,7 @@ p.quantile(0.99);
 stats.normal(100.0, 15.0).cdf(130.0);        // 0.9772498680518208
 stats.normal(0.0, 1.0).quantile(0.975);      // 1.9599639845400538
 stats.poisson(3.0).pmf(5);
+stats.poisson(3.0).sample(rand.new(42));     // an int, replayable
 ```
 
 - **Center and spread:** `sum` (compensated), `product`, `mean`,
@@ -10806,6 +11715,11 @@ stats.poisson(3.0).pmf(5);
   `digest` `merge`.
 - **Distributions:** `normal`, `log_normal`, `uniform`, `exponential`
   (`pdf`, `cdf`, `quantile`), `poisson` and `binomial` (`pmf`, `cdf`).
+  Each has `sample(r)` for a `rand.Rng`, so a simulation or load
+  generator replays from one seed: the ziggurat for the normal and the
+  exponential, Hörmann's PTRS and BTRS (what numpy and TensorFlow use)
+  for the Poisson and binomial once the mean reaches 10, multiplication
+  or inversion below. All exact, all O(1) on average.
 
 A result with no value for its input -- the mean of no numbers, the
 variance of one, a correlation with a constant list -- is NaN, which
@@ -10833,6 +11747,10 @@ Through erfc, which keeps precision far into the lower tail where 1 + erf would 
 
 The x with cdf(x) = p; -inf at 0, inf at 1, NaN outside [0, 1].
 
+### `fn sample(self: Normal, r: rand.Rng) -> float`
+
+A random draw (rand.normal, the ziggurat); NaN for a bad sigma.
+
 ### `struct LogNormal`
 
 ### `fn log_normal(mu: float, sigma: float) -> LogNormal`
@@ -10845,6 +11763,8 @@ The distribution of exp(X) for X normal(mu, sigma): response times and sizes, wh
 
 ### `fn quantile(self: LogNormal, p: float) -> float`
 
+### `fn sample(self: LogNormal, r: rand.Rng) -> float`
+
 ### `struct Uniform`
 
 ### `fn uniform(lo: float, hi: float) -> Uniform`
@@ -10856,6 +11776,10 @@ The continuous uniform distribution on [lo, hi].
 ### `fn cdf(self: Uniform, x: float) -> float`
 
 ### `fn quantile(self: Uniform, p: float) -> float`
+
+### `fn sample(self: Uniform, r: rand.Rng) -> float`
+
+A draw from [lo, hi); NaN unless hi > lo.
 
 ### `struct Exponential`
 
@@ -10871,6 +11795,10 @@ The waiting time between events arriving at `rate` per unit time.
 
 ### `fn quantile(self: Exponential, p: float) -> float`
 
+### `fn sample(self: Exponential, r: rand.Rng) -> float`
+
+A draw (rand.exponential, the ziggurat, over the rate).
+
 ### `struct Poisson`
 
 ### `fn poisson(lambda: float) -> Poisson`
@@ -10885,6 +11813,10 @@ P(X = k): directly while k! is exact (k <= 20) and lambda^k cannot overflow, oth
 
 P(X <= k).
 
+### `fn sample(self: Poisson, r: rand.Rng) -> int`
+
+A random count. Panics for a lambda that is negative, NaN, or so large (above 2^52) that its counts have no exact int, as rand.below does for a bad bound.
+
 ### `struct Binomial`
 
 ### `fn binomial(n: int, p: float) -> Binomial`
@@ -10898,6 +11830,10 @@ P(X = k): directly while the binomial coefficient is exact (n up to 1000, as mat
 ### `fn cdf(self: Binomial, k: int) -> float`
 
 P(X <= k).
+
+### `fn sample(self: Binomial, r: rand.Rng) -> int`
+
+A random count of successes. Panics for n < 0 or p outside [0, 1].
 
 ### `fn sum[T](xs: [T]) -> float`
 
@@ -12790,6 +13726,8 @@ rand.pick(r, xs) ?? fallback;          // none when xs is empty
 // retry number `attempt` (0 first): uniform in [0, min(cap, base * 2^attempt)]
 time.sleep(rand.backoff(r, attempt, 100000000, 30000000000));
 rand.jitter(r, 60000000000, 0.1);      // 60s, give or take 10%
+rand.normal(r);                        // mean 0, stddev 1
+rand.exponential(r) / rate;            // waiting times
 ```
 
 The generator is `xoshiro256**`, seeded through `splitmix64`. The tests pin
@@ -12801,9 +13739,16 @@ of range, since there is no value to return. `backoff` uses full jitter,
 which spreads clients that failed together across the whole interval, and
 saturates at `cap` rather than overflowing. An `Rng` is not locked: give
 each spawned task its own with `rand.fork(r)`, which stays reproducible
-from the parent's seed. `rand.from_os()` seeds from the OS when runs
-should differ. Neither is for secrets: tokens, keys and salts come from
+from the parent's seed. `rand.from_os()` seeds from the OS
+(`/dev/urandom`) when runs should differ; importing `rand` links no
+OpenSSL. Neither is for secrets: tokens, keys and salts come from
 `crypto.rand`, because this generator's outputs reveal its state.
+
+`normal` and `exponential` use the ziggurat method (Marsaglia and Tsang,
+256 layers, the tables `rand_distr` uses): about 99% of draws are one
+64-bit step, a table lookup and a multiply, with no logarithm or
+trigonometry. Tails beyond the base layer use Marsaglia's exact tail
+method. `math/stats` distributions sample through these.
 
 ## API
 
@@ -12817,7 +13762,7 @@ A generator whose sequence is fixed by `seed`. Every int is a good seed, 0 and -
 
 ### `fn from_os() -> result[Rng, str]`
 
-A generator seeded from the operating system's CSPRNG, for when runs should differ (load generators, sampling in production). Its outputs are still predictable from earlier ones: this is not a source of secrets.
+A generator seeded from the operating system's CSPRNG, for when runs should differ (load generators, sampling in production). Its outputs are still predictable from earlier ones: this is not a source of secrets.  Read from /dev/urandom (the kernel generator crypto.rand also uses), so importing rand does not link OpenSSL: about 1.3 MB of RSS and 3 ms of start-up that a program using only seeded draws would otherwise pay.
 
 ### `fn fork(r: Rng) -> Rng`
 
@@ -12858,6 +13803,14 @@ How long to wait before retry number `attempt` (0 for the first retry): a unifor
 ### `fn jitter(r: Rng, d: int, frac: float) -> int`
 
 `d` scaled by a uniform factor in [1 - frac, 1 + frac]: jitter(r, d, 0.1) lands within 10% of d. frac is clamped to [0, 1] (NaN counts as 0), so the result is never negative. A d at or below 0 gives 0.
+
+### `fn normal(r: Rng) -> float`
+
+A standard normal value: mean 0, stddev 1. Scale it for any other: `mu + sigma * rand.normal(r)`. The ziggurat method (Marsaglia and Tsang, 256 layers): about 99% of draws cost one 64-bit step, a table lookup and a multiply, with no log, sqrt or trigonometry.
+
+### `fn exponential(r: Rng) -> float`
+
+An exponential value with rate 1 (mean 1). Divide by a rate for any other: `rand.exponential(r) / rate`. Ziggurat, as normal() is.
 
 ---
 

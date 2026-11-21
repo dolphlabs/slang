@@ -5184,129 +5184,153 @@
         }
       ]
     },
-    "math/interp": {
-      "name": "math/interp",
+    "math/geo": {
+      "name": "math/geo",
       "kind": "source",
       "items": [
         {
-          "name": "Curve",
+          "name": "EARTH_RADIUS",
+          "decl": "let",
+          "sig": "let EARTH_RADIUS = 6371008.8;",
+          "doc": "The mean Earth radius (IUGG), metres.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 24
+        },
+        {
+          "name": "Point",
           "decl": "struct",
-          "sig": "gc struct Curve",
+          "sig": "struct Point",
           "doc": "",
-          "file": "stdlib/math/interp/interp.sl",
-          "line": 33
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 31
         },
         {
-          "name": "empty",
+          "name": "point",
           "decl": "fn",
-          "sig": "fn empty() -> Curve",
-          "doc": "A curve with no points, for `??` defaults: every value is NaN.",
-          "file": "stdlib/math/interp/interp.sl",
-          "line": 43
+          "sig": "fn point(lat: float, lon: float) -> Point",
+          "doc": "A point; latitude in [-90, 90], longitude wrapped into [-180, 180).",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 37
         },
         {
-          "name": "linear",
+          "name": "distance",
           "decl": "fn",
-          "sig": "fn linear(xs: [float], ys: [float]) -> result[Curve, str]",
-          "doc": "Straight lines between the points.",
-          "file": "stdlib/math/interp/interp.sl",
-          "line": 48
+          "sig": "fn distance(a: Point, b: Point) -> float",
+          "doc": "The great-circle distance in metres (haversine): accurate for any pair of points, antipodes included, on the spherical Earth.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 50
         },
         {
-          "name": "step",
+          "name": "distance_exact",
           "decl": "fn",
-          "sig": "fn step(xs: [float], ys: [float]) -> result[Curve, str]",
-          "doc": "A staircase: the value of the last point at or below x (the tier a quantity falls in). Before the first point: its value under Clamp, NaN under None.",
-          "file": "stdlib/math/interp/interp.sl",
-          "line": 55
+          "sig": "fn distance_exact(a: Point, b: Point) -> opt[float]",
+          "doc": "The distance in metres on the WGS-84 ellipsoid (Vincenty's inverse formula, 1975). none for nearly antipodal points, where the iteration does not converge; use distance() there.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 64
         },
         {
-          "name": "monotone",
+          "name": "bearing",
           "decl": "fn",
-          "sig": "fn monotone(xs: [float], ys: [float]) -> result[Curve, str]",
-          "doc": "A monotone cubic (Fritsch and Carlson 1980, with Fritsch-Butland slopes): smooth, through every point, and never rising above or dipping below its neighbours, so a monotone table stays monotone. The safe choice for rates and prices.",
-          "file": "stdlib/math/interp/interp.sl",
-          "line": 63
+          "sig": "fn bearing(a: Point, b: Point) -> float",
+          "doc": "The initial bearing from a toward b, degrees clockwise from north in [0, 360). Along a great circle the bearing changes as you go.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 106
         },
         {
-          "name": "spline",
+          "name": "destination",
           "decl": "fn",
-          "sig": "fn spline(xs: [float], ys: [float]) -> result[Curve, str]",
-          "doc": "The natural cubic spline: the smoothest curve through the points (a continuous second derivative, zero at the ends). It can overshoot between points; use monotone when that matters.",
-          "file": "stdlib/math/interp/interp.sl",
-          "line": 70
+          "sig": "fn destination(from: Point, bearing_deg: float, meters: float) -> Point",
+          "doc": "The point `meters` from `from` along the initial bearing (spherical).",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 116
         },
         {
-          "name": "Curve.at",
+          "name": "midpoint",
           "decl": "fn",
-          "sig": "fn at(self: Curve, x: float) -> float",
-          "doc": "The value at x.",
-          "file": "stdlib/math/interp/interp.sl",
-          "line": 187
+          "sig": "fn midpoint(a: Point, b: Point) -> Point",
+          "doc": "The midpoint of the great-circle path between a and b.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 128
         },
         {
-          "name": "Curve.at_all",
-          "decl": "fn",
-          "sig": "fn at_all(self: Curve, xs: [float]) -> [float]",
-          "doc": "The values at each of xs, in one pass when xs ascend.",
-          "file": "stdlib/math/interp/interp.sl",
-          "line": 203
-        },
-        {
-          "name": "Curve.slope",
-          "decl": "fn",
-          "sig": "fn slope(self: Curve, x: float) -> float",
-          "doc": "The derivative at x (0 on a step curve, and outside the knots under Clamp).",
-          "file": "stdlib/math/interp/interp.sl",
-          "line": 213
-        },
-        {
-          "name": "Curve.set_extrapolate",
-          "decl": "fn",
-          "sig": "fn set_extrapolate(self: Curve, mode: Extrapolate) -> Curve",
-          "doc": "",
-          "file": "stdlib/math/interp/interp.sl",
-          "line": 260
-        },
-        {
-          "name": "Curve.copy",
-          "decl": "fn",
-          "sig": "fn copy(self: Curve) -> Curve",
-          "doc": "A curve over the same knots with its own lookup memory, for another task.",
-          "file": "stdlib/math/interp/interp.sl",
-          "line": 267
-        },
-        {
-          "name": "Curve.size",
-          "decl": "fn",
-          "sig": "fn size(self: Curve) -> int",
-          "doc": "",
-          "file": "stdlib/math/interp/interp.sl",
-          "line": 273
-        },
-        {
-          "name": "Grid",
+          "name": "Box",
           "decl": "struct",
-          "sig": "gc struct Grid",
-          "doc": "A table of values over a rectangular grid, read by bilinear interpolation: prices by (weight, distance), rates by (term, amount).",
-          "file": "stdlib/math/interp/interp.sl",
-          "line": 384
+          "sig": "struct Box",
+          "doc": "A latitude/longitude rectangle. When it crosses the antimeridian, min_lon > max_lon: a longitude is inside when it is >= min_lon OR <= max_lon.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 143
         },
         {
-          "name": "grid",
+          "name": "bounding_box",
           "decl": "fn",
-          "sig": "fn grid(xs: [float], ys: [float], values: [float]) -> result[Grid, str]",
-          "doc": "A grid over ascending xs and ys with len(xs) * len(ys) values, row by row. Outside the grid the nearest edge value is used.",
-          "file": "stdlib/math/interp/interp.sl",
-          "line": 392
+          "sig": "fn bounding_box(center: Point, meters: float) -> Box",
+          "doc": "The smallest box holding every point within `meters` of center (spherical; Chan's method). Query an index with the box, then keep the rows whose distance() is within the radius. A box around a pole spans every longitude.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 154
         },
         {
-          "name": "Grid.at",
+          "name": "in_box",
           "decl": "fn",
-          "sig": "fn at(self: Grid, x: float, y: float) -> float",
-          "doc": "",
-          "file": "stdlib/math/interp/interp.sl",
-          "line": 425
+          "sig": "fn in_box(b: Box, p: Point) -> bool",
+          "doc": "Whether p is inside the box (edges included), across the antimeridian too.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 176
+        },
+        {
+          "name": "geohash",
+          "decl": "fn",
+          "sig": "fn geohash(p: Point, chars: int) -> str",
+          "doc": "The geohash of p with `chars` characters (1 to 12; 7 is about 150 m, 9 about 5 m): nearby points share prefixes, so it indexes well as a string key.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 191
+        },
+        {
+          "name": "geohash_box",
+          "decl": "fn",
+          "sig": "fn geohash_box(hash: str) -> result[Box, str]",
+          "doc": "The cell a geohash names. An error for an empty hash, one longer than 12 or a character outside the geohash alphabet (either case).",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 238
+        },
+        {
+          "name": "geohash_decode",
+          "decl": "fn",
+          "sig": "fn geohash_decode(hash: str) -> result[Point, str]",
+          "doc": "The centre of a geohash's cell.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 271
+        },
+        {
+          "name": "geohash_neighbors",
+          "decl": "fn",
+          "sig": "fn geohash_neighbors(hash: str) -> result[[str], str]",
+          "doc": "The eight cells around a geohash, at its length: N, NE, E, SE, S, SW, W, NW. A radius search covers the cell and its neighbours. Cells beyond a pole are left out.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 282
+        },
+        {
+          "name": "contains",
+          "decl": "fn",
+          "sig": "fn contains(polygon: [Point], p: Point) -> bool",
+          "doc": "Whether p lies inside the polygon given by its vertices (in order, either direction, closed or not), by the even-odd rule in plain latitude/longitude: right for geofences that are small next to a hemisphere and do not cross the antimeridian or a pole.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 346
+        },
+        {
+          "name": "area",
+          "decl": "fn",
+          "sig": "fn area(polygon: [Point]) -> float",
+          "doc": "The area of a polygon in square metres on the spherical Earth (the spherical-excess formula of Chamberlain and Duquette), for polygons not crossing the antimeridian.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 370
+        },
+        {
+          "name": "distance_to_segment",
+          "decl": "fn",
+          "sig": "fn distance_to_segment(p: Point, a: Point, b: Point) -> float",
+          "doc": "The shortest distance in metres from p to the great-circle segment a-b (spherical): the cross-track distance when the foot of the perpendicular falls between a and b, else the nearer endpoint. For \"is the courier within 50 m of the route\".",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 389
         }
       ]
     },
@@ -5444,6 +5468,1328 @@
         }
       ]
     },
+    "math/optimize": {
+      "name": "math/optimize",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Root",
+          "decl": "struct",
+          "sig": "struct Root",
+          "doc": "A root: f(x) is (near) zero. fx is f at x; evals counts calls to f.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 26
+        },
+        {
+          "name": "Min",
+          "decl": "struct",
+          "sig": "struct Min",
+          "doc": "A minimum of f on an interval: f(x) = fx.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 33
+        },
+        {
+          "name": "Integral",
+          "decl": "struct",
+          "sig": "struct Integral",
+          "doc": "An integral, with an estimate of its absolute error.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 40
+        },
+        {
+          "name": "Bracket",
+          "decl": "struct",
+          "sig": "struct Bracket",
+          "doc": "A bracket [lo, hi] with f(lo) and f(hi) of opposite signs (or one 0).",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 47
+        },
+        {
+          "name": "no_root",
+          "decl": "fn",
+          "sig": "fn no_root() -> Root",
+          "doc": "NaNs, for `??` defaults: (r ?? optimize.no_root()).x is NaN on error.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 53
+        },
+        {
+          "name": "no_min",
+          "decl": "fn",
+          "sig": "fn no_min() -> Min",
+          "doc": "",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 57
+        },
+        {
+          "name": "no_integral",
+          "decl": "fn",
+          "sig": "fn no_integral() -> Integral",
+          "doc": "",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 61
+        },
+        {
+          "name": "bracket",
+          "decl": "fn",
+          "sig": "fn bracket(f: fn(float) -> float, lo: float, hi: float) -> result[Bracket, str]",
+          "doc": "Widens [lo, hi] geometrically (by 1.6 each side, up to 50 times) until f changes sign across it.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 80
+        },
+        {
+          "name": "bracket_with",
+          "decl": "fn",
+          "sig": "fn bracket_with[C](f: fn(float, C) -> float, ctx: C, lo: float, hi: float) -> result[Bracket, str]",
+          "doc": "",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 84
+        },
+        {
+          "name": "bisect",
+          "decl": "fn",
+          "sig": "fn bisect(f: fn(float) -> float, lo: float, hi: float, tol: float) -> result[Root, str]",
+          "doc": "Bisection: halves [lo, hi] until it is within tol. Slow (one bit per step) but certain; prefer brent.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 115
+        },
+        {
+          "name": "bisect_with",
+          "decl": "fn",
+          "sig": "fn bisect_with[C](f: fn(float, C) -> float, ctx: C, lo: float, hi: float, tol: float) -> result[Root, str]",
+          "doc": "",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 119
+        },
+        {
+          "name": "brent",
+          "decl": "fn",
+          "sig": "fn brent(f: fn(float) -> float, lo: float, hi: float, tol: float) -> result[Root, str]",
+          "doc": "Brent's method (Brent 1973, the zeroin of netlib): inverse quadratic interpolation and secant steps, falling back to bisection whenever they would not shrink the bracket fast enough. Superlinear on smooth f, never slower than bisection. The default root finder.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 162
+        },
+        {
+          "name": "brent_with",
+          "decl": "fn",
+          "sig": "fn brent_with[C](f: fn(float, C) -> float, ctx: C, lo: float, hi: float, tol: float) -> result[Root, str]",
+          "doc": "",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 166
+        },
+        {
+          "name": "newton",
+          "decl": "fn",
+          "sig": "fn newton(f: fn(float) -> float, df: fn(float) -> float, x0: float, tol: float) -> result[Root, str]",
+          "doc": "Newton's method from x0 with derivative df: quadratic convergence near a simple root, but it can diverge from a poor start. Use newton_safe when a bracket is known.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 258
+        },
+        {
+          "name": "newton_with",
+          "decl": "fn",
+          "sig": "fn newton_with[C, D](f: fn(float, C) -> float, df: fn(float, D) -> float, ctx: C, x0: float, tol: float, dctx: D) -> result[Root, str]",
+          "doc": "newton with data: f and df each take ctx. (The derivative's own data is passed as dctx, so f and df can differ in what they need.)",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 264
+        },
+        {
+          "name": "newton_safe",
+          "decl": "fn",
+          "sig": "fn newton_safe(f: fn(float) -> float, df: fn(float) -> float, lo: float, hi: float, tol: float) -> result[Root, str]",
+          "doc": "Safeguarded Newton (rtsafe): Newton steps that stay inside a bracket [lo, hi] where f changes sign, with bisection whenever a step would leave it or shrink it too slowly. Fast and certain.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 296
+        },
+        {
+          "name": "newton_safe_with",
+          "decl": "fn",
+          "sig": "fn newton_safe_with[C, D](f: fn(float, C) -> float, df: fn(float, D) -> float, ctx: C, lo: float, hi: float, tol: float, dctx: D) -> result[Root, str]",
+          "doc": "",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 300
+        },
+        {
+          "name": "golden",
+          "decl": "fn",
+          "sig": "fn golden(f: fn(float) -> float, a: float, b: float, tol: float) -> result[Min, str]",
+          "doc": "Golden-section search for the minimum of a unimodal f on [a, b]: the interval shrinks by 0.618 per evaluation. Needs no derivative and no smoothness; prefer brent_min for smooth f.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 367
+        },
+        {
+          "name": "golden_with",
+          "decl": "fn",
+          "sig": "fn golden_with[C](f: fn(float, C) -> float, ctx: C, a: float, b: float, tol: float) -> result[Min, str]",
+          "doc": "",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 371
+        },
+        {
+          "name": "brent_min",
+          "decl": "fn",
+          "sig": "fn brent_min(f: fn(float) -> float, a: float, b: float, tol: float) -> result[Min, str]",
+          "doc": "Brent's minimisation (Brent 1973, localmin; scipy's fminbound): parabolic interpolation through the best three points, golden-section steps when a parabola is not trustworthy. On [a, b], for unimodal f.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 412
+        },
+        {
+          "name": "brent_min_with",
+          "decl": "fn",
+          "sig": "fn brent_min_with[C](f: fn(float, C) -> float, ctx: C, a0: float, b0: float, tol: float) -> result[Min, str]",
+          "doc": "",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 416
+        },
+        {
+          "name": "simpson",
+          "decl": "fn",
+          "sig": "fn simpson(f: fn(float) -> float, a: float, b: float, tol: float) -> result[Integral, str]",
+          "doc": "Adaptive Simpson's rule: splits wherever the two halves disagree with the whole by more than tol (absolute), with Richardson's correction. For smooth f on a finite interval.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 512
+        },
+        {
+          "name": "simpson_with",
+          "decl": "fn",
+          "sig": "fn simpson_with[C](f: fn(float, C) -> float, ctx: C, a: float, b: float, tol: float) -> result[Integral, str]",
+          "doc": "",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 516
+        },
+        {
+          "name": "integrate",
+          "decl": "fn",
+          "sig": "fn integrate(f: fn(float) -> float, a: float, b: float, abs_tol: float, rel_tol: float) -> result[Integral, str]",
+          "doc": "Adaptive Gauss-Kronrod (7-point Gauss, 15-point Kronrod, as QUADPACK's QAG): the interval with the largest error estimate is halved until the total error is within max(abs_tol, rel_tol * |integral|). Infinite bounds are mapped onto a finite interval (x = t / (1 - t^2) and its one-sided forms). The general-purpose integrator.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 593
+        },
+        {
+          "name": "integrate_with",
+          "decl": "fn",
+          "sig": "fn integrate_with[C](f: fn(float, C) -> float, ctx: C, a: float, b: float, abs_tol: float, rel_tol: float) -> result[Integral, str]",
+          "doc": "",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 597
+        }
+      ]
+    },
+    "math/shard": {
+      "name": "math/shard",
+      "kind": "source",
+      "items": [
+        {
+          "name": "hash_str",
+          "decl": "fn",
+          "sig": "fn hash_str(s: str) -> u64",
+          "doc": "A 64-bit hash of a str: strings.hash widened and remixed.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 50
+        },
+        {
+          "name": "hash_int",
+          "decl": "fn",
+          "sig": "fn hash_int(x: int) -> u64",
+          "doc": "A 64-bit hash of an int.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 55
+        },
+        {
+          "name": "jump",
+          "decl": "fn",
+          "sig": "fn jump(key: u64, buckets: int) -> int",
+          "doc": "The bucket in [0, buckets) for a 64-bit key (Lamping and Veach 2014): each bucket gets 1/buckets of the keys, and going from n to n+1 buckets moves only the 1/(n+1) that the new bucket takes. O(log n), no memory. buckets below 1 count as 1.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 65
+        },
+        {
+          "name": "jump_str",
+          "decl": "fn",
+          "sig": "fn jump_str(s: str, buckets: int) -> int",
+          "doc": "jump() of a str key.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 79
+        },
+        {
+          "name": "jump_int",
+          "decl": "fn",
+          "sig": "fn jump_int(x: int, buckets: int) -> int",
+          "doc": "jump() of an int key.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 84
+        },
+        {
+          "name": "Rendezvous",
+          "decl": "struct",
+          "sig": "gc struct Rendezvous",
+          "doc": "Rendezvous hashing (Thaler and Ravishankar 1996): each node scores the key, and the highest score wins. A node leaving moves only its own keys, spread evenly over the rest. Weighted scores follow Schindelhauer and Schomaker: -weight / ln(u) for u the node's hash of the key in (0, 1), which gives each node keys in proportion to its weight.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 95
+        },
+        {
+          "name": "rendezvous",
+          "decl": "fn",
+          "sig": "fn rendezvous(nodes: [str]) -> Rendezvous",
+          "doc": "Nodes of equal weight. Their order does not matter to the mapping; pick() returns an index into this list.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 104
+        },
+        {
+          "name": "rendezvous_weighted",
+          "decl": "fn",
+          "sig": "fn rendezvous_weighted(nodes: [str], weights: [float]) -> Rendezvous",
+          "doc": "Nodes with weights (a weight at or below 0, or NaN, means the node gets nothing). A missing weight counts as 1.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 114
+        },
+        {
+          "name": "Rendezvous.pick",
+          "decl": "fn",
+          "sig": "fn pick(self: Rendezvous, key: u64) -> opt[int]",
+          "doc": "The index of the node for this key hash; none when there are no nodes (or every weight is 0).",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 140
+        },
+        {
+          "name": "Rendezvous.pick_n",
+          "decl": "fn",
+          "sig": "fn pick_n(self: Rendezvous, key: u64, n: int) -> [int]",
+          "doc": "The indexes of the n highest-scoring nodes, best first: the primary and then its replicas, each a different node. Fewer when there are fewer nodes.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 168
+        },
+        {
+          "name": "Rendezvous.pick_str",
+          "decl": "fn",
+          "sig": "fn pick_str(self: Rendezvous, key: str) -> opt[int]",
+          "doc": "",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 203
+        },
+        {
+          "name": "Rendezvous.pick_int",
+          "decl": "fn",
+          "sig": "fn pick_int(self: Rendezvous, key: int) -> opt[int]",
+          "doc": "",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 207
+        },
+        {
+          "name": "Rendezvous.pick_n_str",
+          "decl": "fn",
+          "sig": "fn pick_n_str(self: Rendezvous, key: str, n: int) -> [int]",
+          "doc": "",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 211
+        },
+        {
+          "name": "Rendezvous.node",
+          "decl": "fn",
+          "sig": "fn node(self: Rendezvous, i: int) -> str",
+          "doc": "The name of node i (as given).",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 216
+        },
+        {
+          "name": "Rendezvous.size",
+          "decl": "fn",
+          "sig": "fn size(self: Rendezvous) -> int",
+          "doc": "",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 220
+        },
+        {
+          "name": "Ring",
+          "decl": "struct",
+          "sig": "gc struct Ring",
+          "doc": "A consistent-hash ring (Karger et al. 1997) with virtual nodes: each node puts `points * weight` markers on a 64-bit circle, and a key belongs to the first marker clockwise from its hash. Adding or removing a node moves only the keys next to its markers.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 237
+        },
+        {
+          "name": "ring",
+          "decl": "fn",
+          "sig": "fn ring(points_per_weight: int) -> Ring",
+          "doc": "An empty ring putting `points_per_weight` markers per unit of weight (100 to 200 keeps the share of each node within a few percent).",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 248
+        },
+        {
+          "name": "Ring.add",
+          "decl": "fn",
+          "sig": "fn add(self: Ring, name: str, weight: int) -> bool",
+          "doc": "Adds a node (or changes its weight, 1 to 1000). False for an empty name.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 258
+        },
+        {
+          "name": "Ring.remove",
+          "decl": "fn",
+          "sig": "fn remove(self: Ring, name: str) -> bool",
+          "doc": "Removes a node; its keys move to the next markers. False when it was not on the ring.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 286
+        },
+        {
+          "name": "Ring.get",
+          "decl": "fn",
+          "sig": "fn get(self: Ring, key: u64) -> opt[str]",
+          "doc": "The node for this key hash; none on an empty ring.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 297
+        },
+        {
+          "name": "Ring.get_n",
+          "decl": "fn",
+          "sig": "fn get_n(self: Ring, key: u64, n: int) -> [str]",
+          "doc": "Up to n distinct nodes for this key hash, clockwise from it: a primary and its replicas.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 307
+        },
+        {
+          "name": "Ring.get_str",
+          "decl": "fn",
+          "sig": "fn get_str(self: Ring, key: str) -> opt[str]",
+          "doc": "",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 334
+        },
+        {
+          "name": "Ring.get_int",
+          "decl": "fn",
+          "sig": "fn get_int(self: Ring, key: int) -> opt[str]",
+          "doc": "",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 338
+        },
+        {
+          "name": "Ring.get_n_str",
+          "decl": "fn",
+          "sig": "fn get_n_str(self: Ring, key: str, n: int) -> [str]",
+          "doc": "",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 342
+        },
+        {
+          "name": "Ring.nodes",
+          "decl": "fn",
+          "sig": "fn nodes(self: Ring) -> [str]",
+          "doc": "Live nodes.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 347
+        },
+        {
+          "name": "Ring.points",
+          "decl": "fn",
+          "sig": "fn points(self: Ring) -> int",
+          "doc": "Markers on the ring.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 358
+        },
+        {
+          "name": "Maglev",
+          "decl": "struct",
+          "sig": "gc struct Maglev",
+          "doc": "Maglev hashing (Eisenbud et al. 2016, Google's load balancer): a lookup table of `size` entries, a prime well above the node count (65537 is usual; 2039 for small sets), filled so each node owns an equal share. A lookup is one hash and one table read. Rebuild with a new node list; keys of nodes that stay mostly stay put.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 467
+        },
+        {
+          "name": "maglev",
+          "decl": "fn",
+          "sig": "fn maglev(nodes: [str], size: int) -> Maglev",
+          "doc": "A table over `nodes` of `size` entries (raised to the next prime, at least 7 and at least the node count). Duplicate names share nothing: each entry is one slot. An empty list gives an empty table.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 475
+        },
+        {
+          "name": "Maglev.pick",
+          "decl": "fn",
+          "sig": "fn pick(self: Maglev, key: u64) -> opt[int]",
+          "doc": "The index of the node for this key hash; none for an empty table.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 520
+        },
+        {
+          "name": "Maglev.pick_str",
+          "decl": "fn",
+          "sig": "fn pick_str(self: Maglev, key: str) -> opt[int]",
+          "doc": "",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 528
+        },
+        {
+          "name": "Maglev.pick_int",
+          "decl": "fn",
+          "sig": "fn pick_int(self: Maglev, key: int) -> opt[int]",
+          "doc": "",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 532
+        },
+        {
+          "name": "Maglev.node",
+          "decl": "fn",
+          "sig": "fn node(self: Maglev, i: int) -> str",
+          "doc": "",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 536
+        },
+        {
+          "name": "Maglev.size",
+          "decl": "fn",
+          "sig": "fn size(self: Maglev) -> int",
+          "doc": "",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 540
+        }
+      ]
+    },
+    "math/sketch": {
+      "name": "math/sketch",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Bloom",
+          "decl": "struct",
+          "sig": "gc struct Bloom",
+          "doc": "\"Have I seen this key?\" in about 10 bits per key at 1% false positives, never a false negative. The split-block layout (Putze et al. 2007, as Parquet and Impala use it): each key sets one bit in each of the eight 32-bit words of a single 256-bit block, so an add or a lookup touches one cache line instead of seven scattered ones. Use it in front of a database or a cache to skip lookups that would miss, or to remember idempotency keys cheaply.",
+          "file": "stdlib/math/sketch/bloom.sl",
+          "line": 11
+        },
+        {
+          "name": "bloom",
+          "decl": "fn",
+          "sig": "fn bloom(n: int, fpp: float) -> Bloom",
+          "doc": "A filter sized for `n` keys at a false-positive rate of `fpp`: the bits Parquet's formula gives, -8n / ln(1 - fpp^(1/8)), in whole blocks. n is at least 1; fpp is clamped to [1e-6, 0.5]. bloom(1000000, 0.01) is 1.2 MB. Past `n` keys the rate climbs: size for the peak.",
+          "file": "stdlib/math/sketch/bloom.sl",
+          "line": 20
+        },
+        {
+          "name": "bloom_blocks",
+          "decl": "fn",
+          "sig": "fn bloom_blocks(blocks: int) -> Bloom",
+          "doc": "A filter of exactly `blocks` 32-byte blocks (clamped to [1, 2^27]).",
+          "file": "stdlib/math/sketch/bloom.sl",
+          "line": 29
+        },
+        {
+          "name": "decode_bloom",
+          "decl": "fn",
+          "sig": "fn decode_bloom(b: bytes) -> result[Bloom, str]",
+          "doc": "A filter read back from encode().",
+          "file": "stdlib/math/sketch/bloom.sl",
+          "line": 39
+        },
+        {
+          "name": "Bloom.add_hash",
+          "decl": "fn",
+          "sig": "fn add_hash(self: Bloom, h: u64) -> Bloom",
+          "doc": "Adds the key with this hash. The high 32 bits pick the block, the low 32 the eight bits within it.",
+          "file": "stdlib/math/sketch/bloom.sl",
+          "line": 59
+        },
+        {
+          "name": "Bloom.contains_hash",
+          "decl": "fn",
+          "sig": "fn contains_hash(self: Bloom, h: u64) -> bool",
+          "doc": "False means the key was certainly never added; true means it probably was.",
+          "file": "stdlib/math/sketch/bloom.sl",
+          "line": 75
+        },
+        {
+          "name": "Bloom.add_str",
+          "decl": "fn",
+          "sig": "fn add_str(self: Bloom, s: str) -> Bloom",
+          "doc": "",
+          "file": "stdlib/math/sketch/bloom.sl",
+          "line": 88
+        },
+        {
+          "name": "Bloom.add_int",
+          "decl": "fn",
+          "sig": "fn add_int(self: Bloom, x: int) -> Bloom",
+          "doc": "",
+          "file": "stdlib/math/sketch/bloom.sl",
+          "line": 92
+        },
+        {
+          "name": "Bloom.add_bytes",
+          "decl": "fn",
+          "sig": "fn add_bytes(self: Bloom, b: bytes) -> Bloom",
+          "doc": "",
+          "file": "stdlib/math/sketch/bloom.sl",
+          "line": 96
+        },
+        {
+          "name": "Bloom.contains_str",
+          "decl": "fn",
+          "sig": "fn contains_str(self: Bloom, s: str) -> bool",
+          "doc": "",
+          "file": "stdlib/math/sketch/bloom.sl",
+          "line": 100
+        },
+        {
+          "name": "Bloom.contains_int",
+          "decl": "fn",
+          "sig": "fn contains_int(self: Bloom, x: int) -> bool",
+          "doc": "",
+          "file": "stdlib/math/sketch/bloom.sl",
+          "line": 104
+        },
+        {
+          "name": "Bloom.contains_bytes",
+          "decl": "fn",
+          "sig": "fn contains_bytes(self: Bloom, b: bytes) -> bool",
+          "doc": "",
+          "file": "stdlib/math/sketch/bloom.sl",
+          "line": 108
+        },
+        {
+          "name": "Bloom.merge",
+          "decl": "fn",
+          "sig": "fn merge(self: Bloom, other: Bloom) -> bool",
+          "doc": "Folds `other` in (bitwise OR): the filter of both key sets. False, and no change, when the sizes differ.",
+          "file": "stdlib/math/sketch/bloom.sl",
+          "line": 114
+        },
+        {
+          "name": "Bloom.clear",
+          "decl": "fn",
+          "sig": "fn clear(self: Bloom)",
+          "doc": "",
+          "file": "stdlib/math/sketch/bloom.sl",
+          "line": 124
+        },
+        {
+          "name": "Bloom.size_bytes",
+          "decl": "fn",
+          "sig": "fn size_bytes(self: Bloom) -> int",
+          "doc": "The memory the bits take.",
+          "file": "stdlib/math/sketch/bloom.sl",
+          "line": 131
+        },
+        {
+          "name": "Bloom.fill",
+          "decl": "fn",
+          "sig": "fn fill(self: Bloom) -> float",
+          "doc": "The share of bits set, 0 to 1: about 1 - e^(-8n/m) after n keys.",
+          "file": "stdlib/math/sketch/bloom.sl",
+          "line": 136
+        },
+        {
+          "name": "Bloom.fpp",
+          "decl": "fn",
+          "sig": "fn fpp(self: Bloom) -> float",
+          "doc": "The false-positive rate the filter has now, estimated from its fill: a lookup is a false positive when all eight of its bits are set, about fill^8. Compare it with the rate it was sized for to tell when it has taken more keys than planned.",
+          "file": "stdlib/math/sketch/bloom.sl",
+          "line": 148
+        },
+        {
+          "name": "Bloom.encode",
+          "decl": "fn",
+          "sig": "fn encode(self: Bloom) -> bytes",
+          "doc": "9 + 32 * blocks bytes, little-endian.",
+          "file": "stdlib/math/sketch/bloom.sl",
+          "line": 153
+        },
+        {
+          "name": "CountMin",
+          "decl": "struct",
+          "sig": "gc struct CountMin",
+          "doc": "How often each key occurred, in fixed memory (Cormode and Muthukrishnan 2005): `depth` rows of `width` counters, each key adding to one counter per row and reading the smallest. An estimate is never below the true count, and with probability 1 - delta is at most epsilon * total above it. For rate limiting, abuse detection, and finding heavy keys among millions without a map entry each.",
+          "file": "stdlib/math/sketch/countmin.sl",
+          "line": 10
+        },
+        {
+          "name": "count_min",
+          "decl": "fn",
+          "sig": "fn count_min(epsilon: float, delta: float) -> CountMin",
+          "doc": "A sketch whose estimates are within epsilon * total of the truth with probability 1 - delta: width e / epsilon (rounded up to a power of two), depth ln(1 / delta). count_min(0.001, 0.01) is 4096 x 5 counters, 160 KB. epsilon is clamped to [1e-7, 0.5], delta to [1e-9, 0.5].",
+          "file": "stdlib/math/sketch/countmin.sl",
+          "line": 23
+        },
+        {
+          "name": "count_min_sized",
+          "decl": "fn",
+          "sig": "fn count_min_sized(width: int, depth: int) -> CountMin",
+          "doc": "A sketch of exactly `depth` rows (clamped to [1, 16]) of `width` counters (rounded up to a power of two, clamped to [2, 2^26]).",
+          "file": "stdlib/math/sketch/countmin.sl",
+          "line": 33
+        },
+        {
+          "name": "decode_count_min",
+          "decl": "fn",
+          "sig": "fn decode_count_min(b: bytes) -> result[CountMin, str]",
+          "doc": "A sketch read back from encode().",
+          "file": "stdlib/math/sketch/countmin.sl",
+          "line": 46
+        },
+        {
+          "name": "CountMin.set_conservative",
+          "decl": "fn",
+          "sig": "fn set_conservative(self: CountMin, on: bool) -> CountMin",
+          "doc": "Conservative update (Estan and Varghese): raise each of a key's counters only as far as its new estimate. Estimates stay upper bounds and get much tighter on skewed data, at the price of merge being an upper bound too. Set it before the first add.",
+          "file": "stdlib/math/sketch/countmin.sl",
+          "line": 71
+        },
+        {
+          "name": "CountMin.add_hash",
+          "decl": "fn",
+          "sig": "fn add_hash(self: CountMin, h: u64, n: int) -> CountMin",
+          "doc": "Adds n (ignored unless positive) to the key with this hash.",
+          "file": "stdlib/math/sketch/countmin.sl",
+          "line": 77
+        },
+        {
+          "name": "CountMin.estimate_hash",
+          "decl": "fn",
+          "sig": "fn estimate_hash(self: CountMin, h: u64) -> int",
+          "doc": "An upper bound on the key's total, usually exact for heavy keys.",
+          "file": "stdlib/math/sketch/countmin.sl",
+          "line": 106
+        },
+        {
+          "name": "CountMin.add_str",
+          "decl": "fn",
+          "sig": "fn add_str(self: CountMin, s: str, n: int) -> CountMin",
+          "doc": "",
+          "file": "stdlib/math/sketch/countmin.sl",
+          "line": 120
+        },
+        {
+          "name": "CountMin.add_int",
+          "decl": "fn",
+          "sig": "fn add_int(self: CountMin, x: int, n: int) -> CountMin",
+          "doc": "",
+          "file": "stdlib/math/sketch/countmin.sl",
+          "line": 124
+        },
+        {
+          "name": "CountMin.add_bytes",
+          "decl": "fn",
+          "sig": "fn add_bytes(self: CountMin, b: bytes, n: int) -> CountMin",
+          "doc": "",
+          "file": "stdlib/math/sketch/countmin.sl",
+          "line": 128
+        },
+        {
+          "name": "CountMin.estimate_str",
+          "decl": "fn",
+          "sig": "fn estimate_str(self: CountMin, s: str) -> int",
+          "doc": "",
+          "file": "stdlib/math/sketch/countmin.sl",
+          "line": 132
+        },
+        {
+          "name": "CountMin.estimate_int",
+          "decl": "fn",
+          "sig": "fn estimate_int(self: CountMin, x: int) -> int",
+          "doc": "",
+          "file": "stdlib/math/sketch/countmin.sl",
+          "line": 136
+        },
+        {
+          "name": "CountMin.estimate_bytes",
+          "decl": "fn",
+          "sig": "fn estimate_bytes(self: CountMin, b: bytes) -> int",
+          "doc": "",
+          "file": "stdlib/math/sketch/countmin.sl",
+          "line": 140
+        },
+        {
+          "name": "CountMin.total",
+          "decl": "fn",
+          "sig": "fn total(self: CountMin) -> int",
+          "doc": "The sum of every n added.",
+          "file": "stdlib/math/sketch/countmin.sl",
+          "line": 145
+        },
+        {
+          "name": "CountMin.width",
+          "decl": "fn",
+          "sig": "fn width(self: CountMin) -> int",
+          "doc": "",
+          "file": "stdlib/math/sketch/countmin.sl",
+          "line": 149
+        },
+        {
+          "name": "CountMin.depth",
+          "decl": "fn",
+          "sig": "fn depth(self: CountMin) -> int",
+          "doc": "",
+          "file": "stdlib/math/sketch/countmin.sl",
+          "line": 153
+        },
+        {
+          "name": "CountMin.merge",
+          "decl": "fn",
+          "sig": "fn merge(self: CountMin, other: CountMin) -> bool",
+          "doc": "Adds `other`'s counts to this sketch's. False, and no change, when the two differ in width or depth.",
+          "file": "stdlib/math/sketch/countmin.sl",
+          "line": 159
+        },
+        {
+          "name": "CountMin.clear",
+          "decl": "fn",
+          "sig": "fn clear(self: CountMin)",
+          "doc": "Zeroes every counter, keeping the memory. A rate limiter clears (or swaps in a fresh sketch) at each window boundary.",
+          "file": "stdlib/math/sketch/countmin.sl",
+          "line": 172
+        },
+        {
+          "name": "CountMin.encode",
+          "decl": "fn",
+          "sig": "fn encode(self: CountMin) -> bytes",
+          "doc": "19 + 8 * width * depth bytes, little-endian.",
+          "file": "stdlib/math/sketch/countmin.sl",
+          "line": 180
+        },
+        {
+          "name": "Cuckoo",
+          "decl": "struct",
+          "sig": "gc struct Cuckoo",
+          "doc": "A set membership filter that can also delete (Fan et al. 2014): each key keeps a 16-bit fingerprint in one of two buckets of four slots. About 17 bits per key at 95% load with a 0.012% false-positive rate, and a lookup reads two cache lines at most. Unlike a Bloom filter it can remove a key, so it fits sets that change: active sessions, in-flight job ids, revoked tokens.  Remove only keys that were added: removing a key that never was can evict a different key sharing its fingerprint.",
+          "file": "stdlib/math/sketch/cuckoo.sl",
+          "line": 12
+        },
+        {
+          "name": "cuckoo",
+          "decl": "fn",
+          "sig": "fn cuckoo(capacity: int) -> Cuckoo",
+          "doc": "A filter with room for about `capacity` keys (at 95% load). At least one bucket; capacity is clamped to 2^30.",
+          "file": "stdlib/math/sketch/cuckoo.sl",
+          "line": 26
+        },
+        {
+          "name": "Cuckoo.add_hash",
+          "decl": "fn",
+          "sig": "fn add_hash(self: Cuckoo, h: u64) -> bool",
+          "doc": "Adds the key with this hash. False when the filter is full (the key is then not added and nothing else is lost).",
+          "file": "stdlib/math/sketch/cuckoo.sl",
+          "line": 42
+        },
+        {
+          "name": "Cuckoo.contains_hash",
+          "decl": "fn",
+          "sig": "fn contains_hash(self: Cuckoo, h: u64) -> bool",
+          "doc": "False means the key is certainly not in the filter.",
+          "file": "stdlib/math/sketch/cuckoo.sl",
+          "line": 80
+        },
+        {
+          "name": "Cuckoo.remove_hash",
+          "decl": "fn",
+          "sig": "fn remove_hash(self: Cuckoo, h: u64) -> bool",
+          "doc": "Removes one copy of the key. False when it was not found.",
+          "file": "stdlib/math/sketch/cuckoo.sl",
+          "line": 92
+        },
+        {
+          "name": "Cuckoo.add_str",
+          "decl": "fn",
+          "sig": "fn add_str(self: Cuckoo, s: str) -> bool",
+          "doc": "",
+          "file": "stdlib/math/sketch/cuckoo.sl",
+          "line": 117
+        },
+        {
+          "name": "Cuckoo.add_int",
+          "decl": "fn",
+          "sig": "fn add_int(self: Cuckoo, x: int) -> bool",
+          "doc": "",
+          "file": "stdlib/math/sketch/cuckoo.sl",
+          "line": 121
+        },
+        {
+          "name": "Cuckoo.add_bytes",
+          "decl": "fn",
+          "sig": "fn add_bytes(self: Cuckoo, b: bytes) -> bool",
+          "doc": "",
+          "file": "stdlib/math/sketch/cuckoo.sl",
+          "line": 125
+        },
+        {
+          "name": "Cuckoo.contains_str",
+          "decl": "fn",
+          "sig": "fn contains_str(self: Cuckoo, s: str) -> bool",
+          "doc": "",
+          "file": "stdlib/math/sketch/cuckoo.sl",
+          "line": 129
+        },
+        {
+          "name": "Cuckoo.contains_int",
+          "decl": "fn",
+          "sig": "fn contains_int(self: Cuckoo, x: int) -> bool",
+          "doc": "",
+          "file": "stdlib/math/sketch/cuckoo.sl",
+          "line": 133
+        },
+        {
+          "name": "Cuckoo.contains_bytes",
+          "decl": "fn",
+          "sig": "fn contains_bytes(self: Cuckoo, b: bytes) -> bool",
+          "doc": "",
+          "file": "stdlib/math/sketch/cuckoo.sl",
+          "line": 137
+        },
+        {
+          "name": "Cuckoo.remove_str",
+          "decl": "fn",
+          "sig": "fn remove_str(self: Cuckoo, s: str) -> bool",
+          "doc": "",
+          "file": "stdlib/math/sketch/cuckoo.sl",
+          "line": 141
+        },
+        {
+          "name": "Cuckoo.remove_int",
+          "decl": "fn",
+          "sig": "fn remove_int(self: Cuckoo, x: int) -> bool",
+          "doc": "",
+          "file": "stdlib/math/sketch/cuckoo.sl",
+          "line": 145
+        },
+        {
+          "name": "Cuckoo.remove_bytes",
+          "decl": "fn",
+          "sig": "fn remove_bytes(self: Cuckoo, b: bytes) -> bool",
+          "doc": "",
+          "file": "stdlib/math/sketch/cuckoo.sl",
+          "line": 149
+        },
+        {
+          "name": "Cuckoo.count",
+          "decl": "fn",
+          "sig": "fn count(self: Cuckoo) -> int",
+          "doc": "Keys held.",
+          "file": "stdlib/math/sketch/cuckoo.sl",
+          "line": 154
+        },
+        {
+          "name": "Cuckoo.load",
+          "decl": "fn",
+          "sig": "fn load(self: Cuckoo) -> float",
+          "doc": "Keys held over slots: past about 0.95 adds start to fail.",
+          "file": "stdlib/math/sketch/cuckoo.sl",
+          "line": 159
+        },
+        {
+          "name": "Cuckoo.size_bytes",
+          "decl": "fn",
+          "sig": "fn size_bytes(self: Cuckoo) -> int",
+          "doc": "",
+          "file": "stdlib/math/sketch/cuckoo.sl",
+          "line": 163
+        },
+        {
+          "name": "Cuckoo.clear",
+          "decl": "fn",
+          "sig": "fn clear(self: Cuckoo)",
+          "doc": "",
+          "file": "stdlib/math/sketch/cuckoo.sl",
+          "line": 167
+        },
+        {
+          "name": "hash_int",
+          "decl": "fn",
+          "sig": "fn hash_int(x: int) -> u64",
+          "doc": "A 64-bit hash of an int, every bit well mixed.",
+          "file": "stdlib/math/sketch/hash.sl",
+          "line": 46
+        },
+        {
+          "name": "hash_str",
+          "decl": "fn",
+          "sig": "fn hash_str(s: str) -> u64",
+          "doc": "A 64-bit hash of a str (strings.hash, widened and remixed to 64 bits).",
+          "file": "stdlib/math/sketch/hash.sl",
+          "line": 51
+        },
+        {
+          "name": "hash_bytes",
+          "decl": "fn",
+          "sig": "fn hash_bytes(b: bytes) -> u64",
+          "doc": "A 64-bit hash of bytes: FNV-1a over the bytes, then the finaliser.",
+          "file": "stdlib/math/sketch/hash.sl",
+          "line": 56
+        },
+        {
+          "name": "Histogram",
+          "decl": "struct",
+          "sig": "gc struct Histogram",
+          "doc": "Latency (or any non-negative int) percentiles in fixed memory, to a stated relative precision, merging exactly: the log-linear bucketing of HdrHistogram. Values below 2^precision are counted exactly; above that, each power of two is split into 2^(precision-1) equal buckets, so a reported quantile is within 2^-precision of the true one (precision 7: 0.8%). histogram(60000000, 7) covers 1 us to 60 s in 1,344 counters, 10.5 KB, however many values are recorded.  let h = sketch.histogram(60000000, 7); h.record(elapsed_us); h.quantile(0.99); h.mean(); h.max(); h.buckets([1000, 5000, 25000, 100000]);   // Prometheus le= counts",
+          "file": "stdlib/math/sketch/histogram.sl",
+          "line": 15
+        },
+        {
+          "name": "histogram",
+          "decl": "fn",
+          "sig": "fn histogram(max: int, precision: int) -> Histogram",
+          "doc": "A histogram for values in [0, max] at the given precision in bits (clamped to [1, 16]; max is at least 1 and at most 2^62). Larger values are counted in the top bucket, and min, max and mean stay exact.",
+          "file": "stdlib/math/sketch/histogram.sl",
+          "line": 29
+        },
+        {
+          "name": "Histogram.record",
+          "decl": "fn",
+          "sig": "fn record(self: Histogram, v: int) -> Histogram",
+          "doc": "Records one value. A negative value counts as 0.",
+          "file": "stdlib/math/sketch/histogram.sl",
+          "line": 44
+        },
+        {
+          "name": "Histogram.record_n",
+          "decl": "fn",
+          "sig": "fn record_n(self: Histogram, value: int, n: int) -> Histogram",
+          "doc": "Records `n` (ignored unless positive) occurrences of v.",
+          "file": "stdlib/math/sketch/histogram.sl",
+          "line": 49
+        },
+        {
+          "name": "Histogram.quantile",
+          "decl": "fn",
+          "sig": "fn quantile(self: Histogram, q: float) -> int",
+          "doc": "The value at quantile q in [0, 1] (nearest rank: the smallest recorded value with at least q of the values at or below it), reported as its bucket's midpoint and clamped to [min, max]. 0 before the first value.",
+          "file": "stdlib/math/sketch/histogram.sl",
+          "line": 78
+        },
+        {
+          "name": "Histogram.rank_of",
+          "decl": "fn",
+          "sig": "fn rank_of(self: Histogram, v: int) -> float",
+          "doc": "The share of values at or below v, 0 to 1 (to bucket precision).",
+          "file": "stdlib/math/sketch/histogram.sl",
+          "line": 104
+        },
+        {
+          "name": "Histogram.buckets",
+          "decl": "fn",
+          "sig": "fn buckets(self: Histogram, bounds: [int]) -> [int]",
+          "doc": "Cumulative counts at each upper bound (ascending), the shape of a Prometheus histogram's `le` buckets: element i counts the values at or below bounds[i], to bucket precision. The +Inf bucket is count().",
+          "file": "stdlib/math/sketch/histogram.sl",
+          "line": 125
+        },
+        {
+          "name": "Histogram.count",
+          "decl": "fn",
+          "sig": "fn count(self: Histogram) -> int",
+          "doc": "",
+          "file": "stdlib/math/sketch/histogram.sl",
+          "line": 143
+        },
+        {
+          "name": "Histogram.sum",
+          "decl": "fn",
+          "sig": "fn sum(self: Histogram) -> float",
+          "doc": "The exact sum of recorded values (as a float, so it cannot wrap).",
+          "file": "stdlib/math/sketch/histogram.sl",
+          "line": 148
+        },
+        {
+          "name": "Histogram.mean",
+          "decl": "fn",
+          "sig": "fn mean(self: Histogram) -> float",
+          "doc": "The exact mean; NaN before the first value.",
+          "file": "stdlib/math/sketch/histogram.sl",
+          "line": 153
+        },
+        {
+          "name": "Histogram.min",
+          "decl": "fn",
+          "sig": "fn min(self: Histogram) -> int",
+          "doc": "The exact smallest value; 0 before the first.",
+          "file": "stdlib/math/sketch/histogram.sl",
+          "line": 161
+        },
+        {
+          "name": "Histogram.max",
+          "decl": "fn",
+          "sig": "fn max(self: Histogram) -> int",
+          "doc": "The exact largest value; 0 before the first.",
+          "file": "stdlib/math/sketch/histogram.sl",
+          "line": 166
+        },
+        {
+          "name": "Histogram.overflow",
+          "decl": "fn",
+          "sig": "fn overflow(self: Histogram) -> int",
+          "doc": "Values recorded above the range given at creation.",
+          "file": "stdlib/math/sketch/histogram.sl",
+          "line": 171
+        },
+        {
+          "name": "Histogram.merge",
+          "decl": "fn",
+          "sig": "fn merge(self: Histogram, other: Histogram) -> bool",
+          "doc": "Adds `other`'s counts to this one's, exactly. False, and no change, when the range or precision differ.",
+          "file": "stdlib/math/sketch/histogram.sl",
+          "line": 177
+        },
+        {
+          "name": "Histogram.clear",
+          "decl": "fn",
+          "sig": "fn clear(self: Histogram)",
+          "doc": "Empties the histogram, keeping its memory.",
+          "file": "stdlib/math/sketch/histogram.sl",
+          "line": 200
+        },
+        {
+          "name": "exponential_bounds",
+          "decl": "fn",
+          "sig": "fn exponential_bounds(start: int, factor: float, count: int) -> [int]",
+          "doc": "Upper bounds start, start*factor, start*factor^2, ... (count of them), for buckets(): Prometheus's ExponentialBuckets. Each is at least one above the last, so a small start with a small factor still ascends.",
+          "file": "stdlib/math/sketch/histogram.sl",
+          "line": 249
+        },
+        {
+          "name": "linear_bounds",
+          "decl": "fn",
+          "sig": "fn linear_bounds(start: int, width: int, count: int) -> [int]",
+          "doc": "Upper bounds start, start+width, ... (count of them): LinearBuckets.",
+          "file": "stdlib/math/sketch/histogram.sl",
+          "line": 267
+        },
+        {
+          "name": "HyperLogLog",
+          "decl": "struct",
+          "sig": "gc struct HyperLogLog",
+          "doc": "Counts distinct items in fixed memory (Flajolet et al., with Ertl's 2017 estimator, which is unbiased from 0 to billions with no lookup tables). Precision p uses 2^p bytes and has a relative standard error of 1.04 / sqrt(2^p):  p = 10:  1 KB, 3.3%     p = 14: 16 KB, 0.81% p = 12:  4 KB, 1.6%     p = 16: 64 KB, 0.41%  Adding the same item twice changes nothing, and two sketches merge into the sketch of the union of their items.",
+          "file": "stdlib/math/sketch/hll.sl",
+          "line": 14
+        },
+        {
+          "name": "hyperloglog",
+          "decl": "fn",
+          "sig": "fn hyperloglog(precision: int) -> HyperLogLog",
+          "doc": "A sketch with 2^precision registers; precision is clamped to [4, 18].",
+          "file": "stdlib/math/sketch/hll.sl",
+          "line": 20
+        },
+        {
+          "name": "decode_hyperloglog",
+          "decl": "fn",
+          "sig": "fn decode_hyperloglog(b: bytes) -> result[HyperLogLog, str]",
+          "doc": "A sketch read back from encode(). Refuses a wrong length, an unknown version or a register no sketch could hold.",
+          "file": "stdlib/math/sketch/hll.sl",
+          "line": 31
+        },
+        {
+          "name": "HyperLogLog.add_hash",
+          "decl": "fn",
+          "sig": "fn add_hash(self: HyperLogLog, h: u64) -> HyperLogLog",
+          "doc": "Adds an item by its 64-bit hash (hash_str, hash_int, hash_bytes, or any well-mixed hash). The top p bits pick a register; the rest give the rank.",
+          "file": "stdlib/math/sketch/hll.sl",
+          "line": 55
+        },
+        {
+          "name": "HyperLogLog.add_str",
+          "decl": "fn",
+          "sig": "fn add_str(self: HyperLogLog, s: str) -> HyperLogLog",
+          "doc": "",
+          "file": "stdlib/math/sketch/hll.sl",
+          "line": 67
+        },
+        {
+          "name": "HyperLogLog.add_int",
+          "decl": "fn",
+          "sig": "fn add_int(self: HyperLogLog, x: int) -> HyperLogLog",
+          "doc": "",
+          "file": "stdlib/math/sketch/hll.sl",
+          "line": 71
+        },
+        {
+          "name": "HyperLogLog.add_bytes",
+          "decl": "fn",
+          "sig": "fn add_bytes(self: HyperLogLog, b: bytes) -> HyperLogLog",
+          "doc": "",
+          "file": "stdlib/math/sketch/hll.sl",
+          "line": 75
+        },
+        {
+          "name": "HyperLogLog.estimate",
+          "decl": "fn",
+          "sig": "fn estimate(self: HyperLogLog) -> float",
+          "doc": "The estimated number of distinct items, as a float.",
+          "file": "stdlib/math/sketch/hll.sl",
+          "line": 80
+        },
+        {
+          "name": "HyperLogLog.count",
+          "decl": "fn",
+          "sig": "fn count(self: HyperLogLog) -> int",
+          "doc": "The estimate rounded to the nearest int.",
+          "file": "stdlib/math/sketch/hll.sl",
+          "line": 101
+        },
+        {
+          "name": "HyperLogLog.precision",
+          "decl": "fn",
+          "sig": "fn precision(self: HyperLogLog) -> int",
+          "doc": "",
+          "file": "stdlib/math/sketch/hll.sl",
+          "line": 105
+        },
+        {
+          "name": "HyperLogLog.merge",
+          "decl": "fn",
+          "sig": "fn merge(self: HyperLogLog, other: HyperLogLog) -> bool",
+          "doc": "Folds `other` in, so this sketch counts the union of both. False, and no change, when the precisions differ.",
+          "file": "stdlib/math/sketch/hll.sl",
+          "line": 111
+        },
+        {
+          "name": "HyperLogLog.clear",
+          "decl": "fn",
+          "sig": "fn clear(self: HyperLogLog)",
+          "doc": "Empties the sketch, keeping its memory.",
+          "file": "stdlib/math/sketch/hll.sl",
+          "line": 124
+        },
+        {
+          "name": "HyperLogLog.encode",
+          "decl": "fn",
+          "sig": "fn encode(self: HyperLogLog) -> bytes",
+          "doc": "2 + 2^p bytes: a version byte, the precision, then the registers.",
+          "file": "stdlib/math/sketch/hll.sl",
+          "line": 131
+        },
+        {
+          "name": "Reservoir",
+          "decl": "struct",
+          "sig": "gc struct Reservoir",
+          "doc": "A uniform random sample of k items from a stream of unknown length, in O(k) memory: every item seen so far is in the sample with the same probability. Algorithm L (Li 1994) skips ahead between replacements, so most items cost a counter increment and no random draw.  The sample is your own list, of any type: offer() says where the current item goes.  let keep: [Event] = []; let rs = sketch.reservoir(100, rand.new(7)); for e in events { if let slot = rs.offer() { if slot == len(keep) { push(keep, e); } else { keep[slot] = e; } } }",
+          "file": "stdlib/math/sketch/reservoir.sl",
+          "line": 19
+        },
+        {
+          "name": "reservoir",
+          "decl": "fn",
+          "sig": "fn reservoir(k: int, r: rand.Rng) -> Reservoir",
+          "doc": "A reservoir of k items (at least 1), drawing from r.",
+          "file": "stdlib/math/sketch/reservoir.sl",
+          "line": 28
+        },
+        {
+          "name": "Reservoir.offer",
+          "decl": "fn",
+          "sig": "fn offer(self: Reservoir) -> opt[int]",
+          "doc": "Counts one more item and says what to do with it: some(slot) to store it at keep[slot] (slot == len(keep) while the sample fills: push it), none to drop it.",
+          "file": "stdlib/math/sketch/reservoir.sl",
+          "line": 36
+        },
+        {
+          "name": "Reservoir.seen",
+          "decl": "fn",
+          "sig": "fn seen(self: Reservoir) -> int",
+          "doc": "Items offered so far.",
+          "file": "stdlib/math/sketch/reservoir.sl",
+          "line": 55
+        },
+        {
+          "name": "Reservoir.size",
+          "decl": "fn",
+          "sig": "fn size(self: Reservoir) -> int",
+          "doc": "",
+          "file": "stdlib/math/sketch/reservoir.sl",
+          "line": 59
+        },
+        {
+          "name": "Reservoir.reset",
+          "decl": "fn",
+          "sig": "fn reset(self: Reservoir)",
+          "doc": "Starts over for a new stream, keeping the generator.",
+          "file": "stdlib/math/sketch/reservoir.sl",
+          "line": 64
+        },
+        {
+          "name": "Item",
+          "decl": "struct",
+          "sig": "struct Item",
+          "doc": "One of the heaviest keys: `count` overestimates the key's true count by at most `error` (count - error is a guaranteed lower bound).",
+          "file": "stdlib/math/sketch/topk.sl",
+          "line": 5
+        },
+        {
+          "name": "TopK",
+          "decl": "struct",
+          "sig": "gc struct TopK",
+          "doc": "The k heaviest keys of a stream in O(k) memory (Space-Saving, Metwally et al. 2005): every key whose true count is above total / k is in the list. A key not being tracked replaces the one with the smallest count and inherits that count as its possible error. O(log k) per add.  Each key lives in a fixed slot; the min-heap orders slot numbers, so a heap swap moves two ints and the key map is touched once or twice per add, never per swap.",
+          "file": "stdlib/math/sketch/topk.sl",
+          "line": 19
+        },
+        {
+          "name": "top_k",
+          "decl": "fn",
+          "sig": "fn top_k(k: int) -> TopK",
+          "doc": "Tracks up to k keys (k at least 1).",
+          "file": "stdlib/math/sketch/topk.sl",
+          "line": 31
+        },
+        {
+          "name": "TopK.add",
+          "decl": "fn",
+          "sig": "fn add(self: TopK, key: str) -> TopK",
+          "doc": "",
+          "file": "stdlib/math/sketch/topk.sl",
+          "line": 43
+        },
+        {
+          "name": "TopK.add_n",
+          "decl": "fn",
+          "sig": "fn add_n(self: TopK, key: str, n: int) -> TopK",
+          "doc": "Adds n (ignored unless positive) occurrences of key.",
+          "file": "stdlib/math/sketch/topk.sl",
+          "line": 48
+        },
+        {
+          "name": "TopK.top",
+          "decl": "fn",
+          "sig": "fn top(self: TopK) -> [Item]",
+          "doc": "The tracked keys, heaviest first (ties by key).",
+          "file": "stdlib/math/sketch/topk.sl",
+          "line": 82
+        },
+        {
+          "name": "TopK.count",
+          "decl": "fn",
+          "sig": "fn count(self: TopK, key: str) -> opt[int]",
+          "doc": "The estimated count of key, or none if it is not tracked (then its true count is at most the smallest tracked count).",
+          "file": "stdlib/math/sketch/topk.sl",
+          "line": 94
+        },
+        {
+          "name": "TopK.total",
+          "decl": "fn",
+          "sig": "fn total(self: TopK) -> int",
+          "doc": "The total of every n added.",
+          "file": "stdlib/math/sketch/topk.sl",
+          "line": 102
+        },
+        {
+          "name": "TopK.size",
+          "decl": "fn",
+          "sig": "fn size(self: TopK) -> int",
+          "doc": "",
+          "file": "stdlib/math/sketch/topk.sl",
+          "line": 106
+        },
+        {
+          "name": "TopK.merge",
+          "decl": "fn",
+          "sig": "fn merge(self: TopK, other: TopK)",
+          "doc": "Combines `other` into this summary (Agarwal et al. 2012): a key's counts add, and a key one side does not track is credited with that side's smallest count when it is full, the most it could have had. The heaviest `k` of the combined keys are kept.",
+          "file": "stdlib/math/sketch/topk.sl",
+          "line": 114
+        },
+        {
+          "name": "TopK.clear",
+          "decl": "fn",
+          "sig": "fn clear(self: TopK)",
+          "doc": "",
+          "file": "stdlib/math/sketch/topk.sl",
+          "line": 160
+        }
+      ]
+    },
     "math/stats": {
       "name": "math/stats",
       "kind": "source",
@@ -5454,7 +6800,7 @@
           "sig": "struct Normal",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 15
+          "line": 17
         },
         {
           "name": "normal",
@@ -5462,7 +6808,7 @@
           "sig": "fn normal(mu: float, sigma: float) -> Normal",
           "doc": "The normal (Gaussian) distribution with mean mu and stddev sigma.",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 21
+          "line": 23
         },
         {
           "name": "Normal.pdf",
@@ -5470,7 +6816,7 @@
           "sig": "fn pdf(self: Normal, x: float) -> float",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 26
+          "line": 28
         },
         {
           "name": "Normal.cdf",
@@ -5478,7 +6824,7 @@
           "sig": "fn cdf(self: Normal, x: float) -> float",
           "doc": "Through erfc, which keeps precision far into the lower tail where 1 + erf would round to 0.",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 36
+          "line": 38
         },
         {
           "name": "Normal.quantile",
@@ -5486,7 +6832,15 @@
           "sig": "fn quantile(self: Normal, p: float) -> float",
           "doc": "The x with cdf(x) = p; -inf at 0, inf at 1, NaN outside [0, 1].",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 44
+          "line": 46
+        },
+        {
+          "name": "Normal.sample",
+          "decl": "fn",
+          "sig": "fn sample(self: Normal, r: rand.Rng) -> float",
+          "doc": "A random draw (rand.normal, the ziggurat); NaN for a bad sigma.",
+          "file": "stdlib/math/stats/dist.sl",
+          "line": 54
         },
         {
           "name": "LogNormal",
@@ -5494,7 +6848,7 @@
           "sig": "struct LogNormal",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 52
+          "line": 62
         },
         {
           "name": "log_normal",
@@ -5502,7 +6856,7 @@
           "sig": "fn log_normal(mu: float, sigma: float) -> LogNormal",
           "doc": "The distribution of exp(X) for X normal(mu, sigma): response times and sizes, which are positive and skewed right.",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 59
+          "line": 69
         },
         {
           "name": "LogNormal.pdf",
@@ -5510,7 +6864,7 @@
           "sig": "fn pdf(self: LogNormal, x: float) -> float",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 64
+          "line": 74
         },
         {
           "name": "LogNormal.cdf",
@@ -5518,7 +6872,7 @@
           "sig": "fn cdf(self: LogNormal, x: float) -> float",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 74
+          "line": 84
         },
         {
           "name": "LogNormal.quantile",
@@ -5526,7 +6880,15 @@
           "sig": "fn quantile(self: LogNormal, p: float) -> float",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 84
+          "line": 94
+        },
+        {
+          "name": "LogNormal.sample",
+          "decl": "fn",
+          "sig": "fn sample(self: LogNormal, r: rand.Rng) -> float",
+          "doc": "",
+          "file": "stdlib/math/stats/dist.sl",
+          "line": 98
         },
         {
           "name": "Uniform",
@@ -5534,7 +6896,7 @@
           "sig": "struct Uniform",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 89
+          "line": 106
         },
         {
           "name": "uniform",
@@ -5542,7 +6904,7 @@
           "sig": "fn uniform(lo: float, hi: float) -> Uniform",
           "doc": "The continuous uniform distribution on [lo, hi].",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 95
+          "line": 112
         },
         {
           "name": "Uniform.pdf",
@@ -5550,7 +6912,7 @@
           "sig": "fn pdf(self: Uniform, x: float) -> float",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 100
+          "line": 117
         },
         {
           "name": "Uniform.cdf",
@@ -5558,7 +6920,7 @@
           "sig": "fn cdf(self: Uniform, x: float) -> float",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 110
+          "line": 127
         },
         {
           "name": "Uniform.quantile",
@@ -5566,7 +6928,15 @@
           "sig": "fn quantile(self: Uniform, p: float) -> float",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 117
+          "line": 134
+        },
+        {
+          "name": "Uniform.sample",
+          "decl": "fn",
+          "sig": "fn sample(self: Uniform, r: rand.Rng) -> float",
+          "doc": "A draw from [lo, hi); NaN unless hi > lo.",
+          "file": "stdlib/math/stats/dist.sl",
+          "line": 142
         },
         {
           "name": "Exponential",
@@ -5574,7 +6944,7 @@
           "sig": "struct Exponential",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 125
+          "line": 150
         },
         {
           "name": "exponential",
@@ -5582,7 +6952,7 @@
           "sig": "fn exponential(rate: float) -> Exponential",
           "doc": "The waiting time between events arriving at `rate` per unit time.",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 130
+          "line": 155
         },
         {
           "name": "Exponential.pdf",
@@ -5590,7 +6960,7 @@
           "sig": "fn pdf(self: Exponential, x: float) -> float",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 135
+          "line": 160
         },
         {
           "name": "Exponential.cdf",
@@ -5598,7 +6968,7 @@
           "sig": "fn cdf(self: Exponential, x: float) -> float",
           "doc": "1 - exp(-rate x), through expm1 so a tiny x keeps its precision.",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 146
+          "line": 171
         },
         {
           "name": "Exponential.quantile",
@@ -5606,7 +6976,15 @@
           "sig": "fn quantile(self: Exponential, p: float) -> float",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 156
+          "line": 181
+        },
+        {
+          "name": "Exponential.sample",
+          "decl": "fn",
+          "sig": "fn sample(self: Exponential, r: rand.Rng) -> float",
+          "doc": "A draw (rand.exponential, the ziggurat, over the rate).",
+          "file": "stdlib/math/stats/dist.sl",
+          "line": 189
         },
         {
           "name": "Poisson",
@@ -5614,7 +6992,7 @@
           "sig": "struct Poisson",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 164
+          "line": 197
         },
         {
           "name": "poisson",
@@ -5622,7 +7000,7 @@
           "sig": "fn poisson(lambda: float) -> Poisson",
           "doc": "The number of events in an interval where `lambda` are expected.",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 169
+          "line": 202
         },
         {
           "name": "Poisson.pmf",
@@ -5630,7 +7008,7 @@
           "sig": "fn pmf(self: Poisson, k: int) -> float",
           "doc": "P(X = k): directly while k! is exact (k <= 20) and lambda^k cannot overflow, otherwise in log space, where lgamma costs a few ulps.",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 176
+          "line": 209
         },
         {
           "name": "Poisson.cdf",
@@ -5638,7 +7016,15 @@
           "sig": "fn cdf(self: Poisson, k: int) -> float",
           "doc": "P(X <= k).",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 197
+          "line": 230
+        },
+        {
+          "name": "Poisson.sample",
+          "decl": "fn",
+          "sig": "fn sample(self: Poisson, r: rand.Rng) -> int",
+          "doc": "A random count. Panics for a lambda that is negative, NaN, or so large (above 2^52) that its counts have no exact int, as rand.below does for a bad bound.",
+          "file": "stdlib/math/stats/dist.sl",
+          "line": 247
         },
         {
           "name": "Binomial",
@@ -5646,7 +7032,7 @@
           "sig": "struct Binomial",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 212
+          "line": 262
         },
         {
           "name": "binomial",
@@ -5654,7 +7040,7 @@
           "sig": "fn binomial(n: int, p: float) -> Binomial",
           "doc": "The number of successes in n independent trials, each succeeding with probability p.",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 219
+          "line": 269
         },
         {
           "name": "Binomial.pmf",
@@ -5662,7 +7048,7 @@
           "sig": "fn pmf(self: Binomial, k: int) -> float",
           "doc": "P(X = k): directly while the binomial coefficient is exact (n up to 1000, as math.binomial computes it), otherwise in log space.",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 226
+          "line": 276
         },
         {
           "name": "Binomial.cdf",
@@ -5670,7 +7056,15 @@
           "sig": "fn cdf(self: Binomial, k: int) -> float",
           "doc": "P(X <= k).",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 258
+          "line": 308
+        },
+        {
+          "name": "Binomial.sample",
+          "decl": "fn",
+          "sig": "fn sample(self: Binomial, r: rand.Rng) -> int",
+          "doc": "A random count of successes. Panics for n < 0 or p outside [0, 1].",
+          "file": "stdlib/math/stats/dist.sl",
+          "line": 326
         },
         {
           "name": "sum",
@@ -8147,7 +9541,7 @@
           "sig": "gc struct Rng",
           "doc": "A random number generator. Make one with `new` or `from_os`.",
           "file": "stdlib/rand/rand.sl",
-          "line": 33
+          "line": 36
         },
         {
           "name": "new",
@@ -8155,15 +9549,15 @@
           "sig": "fn new(seed: int) -> Rng",
           "doc": "A generator whose sequence is fixed by `seed`. Every int is a good seed, 0 and -1 included: splitmix64 spreads it over all 256 bits of state.",
           "file": "stdlib/rand/rand.sl",
-          "line": 42
+          "line": 45
         },
         {
           "name": "from_os",
           "decl": "fn",
           "sig": "fn from_os() -> result[Rng, str]",
-          "doc": "A generator seeded from the operating system's CSPRNG, for when runs should differ (load generators, sampling in production). Its outputs are still predictable from earlier ones: this is not a source of secrets.",
+          "doc": "A generator seeded from the operating system's CSPRNG, for when runs should differ (load generators, sampling in production). Its outputs are still predictable from earlier ones: this is not a source of secrets.  Read from /dev/urandom (the kernel generator crypto.rand also uses), so importing rand does not link OpenSSL: about 1.3 MB of RSS and 3 ms of start-up that a program using only seeded draws would otherwise pay.",
           "file": "stdlib/rand/rand.sl",
-          "line": 57
+          "line": 64
         },
         {
           "name": "fork",
@@ -8171,7 +9565,7 @@
           "sig": "fn fork(r: Rng) -> Rng",
           "doc": "A new generator seeded from `r`, for handing to a spawned task. Seeded parents give seeded children, so a whole run still replays from one seed. `r` advances by one step.",
           "file": "stdlib/rand/rand.sl",
-          "line": 76
+          "line": 108
         },
         {
           "name": "next_u64",
@@ -8179,7 +9573,7 @@
           "sig": "fn next_u64(r: Rng) -> u64",
           "doc": "The next 64 random bits.",
           "file": "stdlib/rand/rand.sl",
-          "line": 81
+          "line": 113
         },
         {
           "name": "below",
@@ -8187,7 +9581,7 @@
           "sig": "fn below(r: Rng, n: int) -> int",
           "doc": "An int in [0, n), each value equally likely. Panics if n is not positive: there is no int to return, as with an index out of range.",
           "file": "stdlib/rand/rand.sl",
-          "line": 95
+          "line": 127
         },
         {
           "name": "between",
@@ -8195,7 +9589,7 @@
           "sig": "fn between(r: Rng, lo: int, hi: int) -> int",
           "doc": "An int in [lo, hi], both ends included, each value equally likely. Panics if lo > hi. The full range, between(r, MIN, MAX), works.",
           "file": "stdlib/rand/rand.sl",
-          "line": 104
+          "line": 136
         },
         {
           "name": "unit",
@@ -8203,7 +9597,7 @@
           "sig": "fn unit(r: Rng) -> float",
           "doc": "A float in the unit interval [0, 1): one of 2^53 evenly spaced values, so every float it returns is exact and 1.0 never appears.",
           "file": "stdlib/rand/rand.sl",
-          "line": 119
+          "line": 151
         },
         {
           "name": "chance",
@@ -8211,7 +9605,7 @@
           "sig": "fn chance(r: Rng, p: float) -> bool",
           "doc": "True with probability `p`. p at or below 0 (or NaN) is never, p at or above 1 is always.",
           "file": "stdlib/rand/rand.sl",
-          "line": 125
+          "line": 157
         },
         {
           "name": "shuffle",
@@ -8219,7 +9613,7 @@
           "sig": "fn shuffle[T](r: Rng, xs: [T])",
           "doc": "Reorders `xs` in place, every order equally likely (Fisher-Yates).",
           "file": "stdlib/rand/rand.sl",
-          "line": 136
+          "line": 168
         },
         {
           "name": "pick",
@@ -8227,7 +9621,7 @@
           "sig": "fn pick[T](r: Rng, xs: [T]) -> opt[T]",
           "doc": "One element of `xs`, each equally likely; none if `xs` is empty.",
           "file": "stdlib/rand/rand.sl",
-          "line": 148
+          "line": 180
         },
         {
           "name": "backoff",
@@ -8235,7 +9629,7 @@
           "sig": "fn backoff(r: Rng, attempt: int, base: int, cap: int) -> int",
           "doc": "How long to wait before retry number `attempt` (0 for the first retry): a uniform draw from [0, min(cap, base * 2^attempt)], the \"full jitter\" strategy. Spreading over the whole interval, not just its top, is what stops a crowd of clients that failed together from retrying together. Units are whatever `base` and `cap` use, nanoseconds for a duration. A negative attempt counts as 0; a base or cap at or below 0 gives 0.",
           "file": "stdlib/rand/rand.sl",
-          "line": 161
+          "line": 193
         },
         {
           "name": "jitter",
@@ -8243,7 +9637,23 @@
           "sig": "fn jitter(r: Rng, d: int, frac: float) -> int",
           "doc": "`d` scaled by a uniform factor in [1 - frac, 1 + frac]: jitter(r, d, 0.1) lands within 10% of d. frac is clamped to [0, 1] (NaN counts as 0), so the result is never negative. A d at or below 0 gives 0.",
           "file": "stdlib/rand/rand.sl",
-          "line": 185
+          "line": 217
+        },
+        {
+          "name": "normal",
+          "decl": "fn",
+          "sig": "fn normal(r: Rng) -> float",
+          "doc": "A standard normal value: mean 0, stddev 1. Scale it for any other: `mu + sigma * rand.normal(r)`. The ziggurat method (Marsaglia and Tsang, 256 layers): about 99% of draws cost one 64-bit step, a table lookup and a multiply, with no log, sqrt or trigonometry.",
+          "file": "stdlib/rand/rand.sl",
+          "line": 241
+        },
+        {
+          "name": "exponential",
+          "decl": "fn",
+          "sig": "fn exponential(r: Rng) -> float",
+          "doc": "An exponential value with rate 1 (mean 1). Divide by a rate for any other: `rand.exponential(r) / rate`. Ziggurat, as normal() is.",
+          "file": "stdlib/rand/rand.sl",
+          "line": 252
         }
       ]
     },

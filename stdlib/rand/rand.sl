@@ -12,6 +12,8 @@
 //     rand.pick(r, xs) ?? fallback          // one element, none if xs is empty
 //     rand.backoff(r, attempt, base, cap)   // retry delay with full jitter
 //     rand.jitter(r, d, 0.1)                // d spread by up to 10% either way
+//     rand.normal(r)                        // mean 0, stddev 1
+//     rand.exponential(r)                   // rate 1: divide by a rate
 //
 // Not for secrets. Anything an attacker must not predict (tokens, keys,
 // session ids, password salts) comes from crypto.rand. This generator is
@@ -27,7 +29,8 @@
 // An Rng is not locked. Give each task its own, from `fork`, rather than
 // sharing one between tasks.
 
-import "crypto";
+import "fs";
+import "math";
 
 // A random number generator. Make one with `new` or `from_os`.
 pub gc struct Rng {
@@ -54,9 +57,18 @@ pub fn new(seed: int) -> Rng {
 // A generator seeded from the operating system's CSPRNG, for when runs
 // should differ (load generators, sampling in production). Its outputs are
 // still predictable from earlier ones: this is not a source of secrets.
+//
+// Read from /dev/urandom (the kernel generator crypto.rand also uses), so
+// importing rand does not link OpenSSL: about 1.3 MB of RSS and 3 ms of
+// start-up that a program using only seeded draws would otherwise pay.
 pub fn from_os() -> result[Rng, str] {
-    let res = crypto.rand(32);
-    guard let b = res else let e = err_of(res) {
+    let fr = fs.open("/dev/urandom");
+    guard let fd = fr else let e = err_of(fr) {
+        return err("rand: no randomness from the OS: " + e);
+    }
+    let got = builder_bytes(fd);
+    let _ = fs.close(fd as int);
+    guard let b = got else let e = err_of(got) {
         return err("rand: no randomness from the OS: " + e);
     }
     let r = Rng {
@@ -68,6 +80,26 @@ pub fn from_os() -> result[Rng, str] {
         return err("rand: the OS returned 32 zero bytes");
     }
     return ok(r);
+}
+
+// 32 bytes from fd, over as many reads as it takes.
+fn builder_bytes(fd: i32) -> result[bytes, str] {
+    let out = b"";
+    let tries = 0;
+    while len(out) < 32 {
+        let rr = fs.read(fd as int, 32 - len(out));
+        guard let chunk = rr else let e = err_of(rr) {
+            return err(e);
+        }
+        if len(chunk) == 0 {
+            tries += 1;
+            if tries > 3 {
+                return err("short read");
+            }
+        }
+        out = out + chunk;
+    }
+    return ok(out);
 }
 
 // A new generator seeded from `r`, for handing to a spawned task. Seeded
@@ -202,7 +234,136 @@ pub fn jitter(r: Rng, d: int, frac: float) -> int {
     return scaled as int;
 }
 
+// A standard normal value: mean 0, stddev 1. Scale it for any other:
+// `mu + sigma * rand.normal(r)`. The ziggurat method (Marsaglia and Tsang,
+// 256 layers): about 99% of draws cost one 64-bit step, a table lookup
+// and a multiply, with no log, sqrt or trigonometry.
+pub fn normal(r: Rng) -> float {
+    let x = normal_try(r);
+    // finite: accepted on the first draw, the common case
+    if x - x == 0.0 {
+        return x;
+    }
+    return normal_slow(r, x);
+}
+
+// An exponential value with rate 1 (mean 1). Divide by a rate for any
+// other: `rand.exponential(r) / rate`. Ziggurat, as normal() is.
+pub fn exponential(r: Rng) -> float {
+    let x = exp_try(r);
+    if x - x == 0.0 {
+        return x;
+    }
+    return exp_slow(r, x);
+}
+
 // ---- internals -----------------------------------------------------------
+
+// One ziggurat draw for normal(): the value when it is accepted, NaN when
+// it is rejected (draw again), or an infinity when it fell in the base
+// layer beyond R, whose sign is the side the tail is on. Kept free of
+// loops so it is a leaf: the common path costs no safepoint.
+fn normal_try(r: Rng) -> float {
+    let bits = next_u64(r);
+    // The low 8 bits pick the layer, the top 53 the position in it:
+    // disjoint bits, so the two are independent.
+    let i = (bits & 255) as int;
+    let u = 2.0 * ((bits >> 11) as float * TWO_POW_MINUS_53) - 1.0;
+    let x = u * zig_norm_x(i);
+    let ax = x;
+    if ax < 0.0 {
+        ax = -ax;
+    }
+    if ax < zig_norm_x(i + 1) {
+        return x;
+    }
+    if i == 0 {
+        if u < 0.0 {
+            return math.neg_inf;
+        }
+        return math.inf;
+    }
+    let f0 = zig_norm_f(i);
+    let f1 = zig_norm_f(i + 1);
+    if f1 + (f0 - f1) * unit(r) < math.exp(-0.5 * x * x) {
+        return x;
+    }
+    return math.nan;
+}
+
+// normal() after a first draw `x` that was not accepted outright.
+fn normal_slow(r: Rng, first: float) -> float {
+    let x = first;
+    while true {
+        if x - x == 0.0 {
+            return x;
+        }
+        if x == x {
+            return normal_tail(r, x < 0.0);
+        }
+        x = normal_try(r);
+    }
+    return 0.0;
+}
+
+// The normal tail beyond the base layer's edge R (Marsaglia 1964): x is
+// drawn from an exponential with rate R and kept with probability
+// exp(-x*x/2), which leaves the density of the tail exactly.
+fn normal_tail(r: Rng, negative: bool) -> float {
+    while true {
+        let x = math.log(open_unit(r)) / ZIG_NORM_R;
+        let y = math.log(open_unit(r));
+        if -2.0 * y >= x * x {
+            if negative {
+                return x - ZIG_NORM_R;
+            }
+            return ZIG_NORM_R - x;
+        }
+    }
+    return 0.0;
+}
+
+// One ziggurat draw for exponential(), with normal_try's three outcomes
+// (the infinity is always positive: the tail is on one side).
+fn exp_try(r: Rng) -> float {
+    let bits = next_u64(r);
+    let i = (bits & 255) as int;
+    let x = (bits >> 11) as float * TWO_POW_MINUS_53 * zig_exp_x(i);
+    if x < zig_exp_x(i + 1) {
+        return x;
+    }
+    if i == 0 {
+        return math.inf;
+    }
+    let f0 = zig_exp_f(i);
+    let f1 = zig_exp_f(i + 1);
+    if f1 + (f0 - f1) * unit(r) < math.exp(-x) {
+        return x;
+    }
+    return math.nan;
+}
+
+fn exp_slow(r: Rng, first: float) -> float {
+    let x = first;
+    while true {
+        if x - x == 0.0 {
+            return x;
+        }
+        if x == x {
+            // memoryless: the tail beyond R is R plus a fresh exponential
+            return ZIG_EXP_R - math.log(open_unit(r));
+        }
+        x = exp_try(r);
+    }
+    return 0.0;
+}
+
+// A float in the open interval (0, 1), for taking a logarithm: the
+// midpoints of unit()'s 2^53 steps, so 0 never appears.
+fn open_unit(r: Rng) -> float {
+    return ((next_u64(r) >> 11) as float + 0.5) * TWO_POW_MINUS_53;
+}
+
 
 // splitmix64's increment, the 64-bit golden ratio.
 let GOLDEN: u64 = 0x9e3779b97f4a7c15;
