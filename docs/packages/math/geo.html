@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>math/geo — slang</title>
+<meta name="description" content="Package math/geo.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<meta name="theme-color" content="#07080a" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f7f5ef" media="(prefers-color-scheme: light)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="math/geo">
+<meta property="og:description" content="Package math/geo.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://slang.dolphlabs.com/packages/math/geo">
+<meta property="og:image" content="https://slang.dolphlabs.com/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The slang rabbit mark beside the slang wordmark">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://slang.dolphlabs.com/packages/math/geo">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../../packages/math/geo.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preload" href="../../fonts/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../../style.css">
+<link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+<link rel="icon" href="../../favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../../apple-touch-icon.png">
+<script>
+/* Before first paint, so a saved light theme never flashes dark. */
+try { var t = localStorage.getItem("slang-theme");
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="nav" data-nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="../../" aria-label="slang home">
+      <img class="logo-on-dark" src="../../brand/slang-logo-light.svg" alt="" width="77" height="32">
+      <img class="logo-on-light" src="../../brand/slang-logo-dark.svg" alt="" width="77" height="32">
+    </a>
+    <nav class="nav-links" aria-label="Primary"><a href="../../guide/">Guide</a><a href="../../concurrency/">Concurrency</a><a class="active" href="../../packages/">Packages</a><a href="../../bench/">Benchmarks</a><a href="../../interop/">C interop</a><a href="../../internals/">Internals</a></nav>
+    <div class="nav-actions">
+      <button class="search-btn" type="button" data-search aria-label="Search the docs" aria-keyshortcuts="Control+K Meta+K /">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <span class="search-label">Search</span>
+        <kbd class="search-kbd">/</kbd>
+      </button>
+      <button class="icon-btn" type="button" data-theme-toggle aria-label="Switch to light theme" title="Switch theme">
+        <svg class="i-sun" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <svg class="i-moon" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.6A8 8 0 1 1 9.4 4a6.4 6.4 0 0 0 10.6 10.6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      </button>
+      <a class="btn btn-ghost btn-sm nav-gh" href="https://github.com/dolphlabs/slang">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span>GitHub</span>
+      </a>
+      <a class="btn btn-light btn-sm nav-start" href="../../#install">Get started</a>
+      <button class="nav-menu" type="button" aria-expanded="false" aria-controls="nav-sheet" aria-label="Menu" data-menu>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6h14M3 10h14M3 14h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </div>
+  <nav class="nav-sheet" id="nav-sheet" aria-label="Menu" hidden><a href="../../guide/">Guide</a><a href="../../concurrency/">Concurrency</a><a class="active" href="../../packages/">Packages</a><a href="../../bench/">Benchmarks</a><a href="../../interop/">C interop</a><a href="../../internals/">Internals</a><a href="https://github.com/dolphlabs/slang">GitHub</a></nav>
+</header>
+
+<div class="docbar">
+  <button class="docbar-btn" type="button" aria-expanded="false" aria-controls="sidebar" data-drawer>
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    <span>Docs</span>
+  </button>
+  <span class="docbar-here">math/geo</span>
+</div>
+
+<div class="docs">
+  <aside class="sidebar" id="sidebar" aria-label="Documentation">
+    <div class="sidebar-inner"><div class="side-group"><p class="side-title">Start</p><ul class="side-list"><li><a href="../../">Overview</a></li><li><a href="../../guide/">Guide</a></li><li><a href="../../guide/data">Data types</a></li><li><a href="../../guide/errors">Errors</a></li><li><a href="../../guide/functions">Functions</a></li></ul></div><div class="side-group"><p class="side-title">Build</p><ul class="side-list"><li><a href="../../concurrency/">Concurrency</a></li><li><a href="../../testing/">Testing</a></li><li><a href="../../packages/">Packages</a></li><li><a href="../../interop/">C interop</a></li></ul></div><div class="side-group"><p class="side-title">Under the hood</p><ul class="side-list"><li><a href="../../internals/">Internals</a></li><li><a href="../../bench/">Benchmarks</a></li><li><a href="../../limitations/">Limitations</a></li></ul></div><details class="side-group side-pkgs" open><summary>Packages<span class="side-count">52</span></summary><ul class="side-list"><li><a href="../../packages/builder">builder</a></li><li><a href="../../packages/byteutil">byteutil</a></li><li><a href="../../packages/cache">cache</a></li><li><a href="../../packages/compress">compress</a></li><li><a href="../../packages/crypto">crypto</a></li><li><a href="../../packages/csv">csv</a></li><li><a href="../../packages/decimal">decimal</a></li><li><a href="../../packages/encoding">encoding</a></li><li><a href="../../packages/flags">flags</a></li><li><a href="../../packages/fs">fs</a></li><li><a href="../../packages/http">http</a></li><li><a href="../../packages/http2">http2</a></li><li><a href="../../packages/httpc">httpc</a></li><li><a href="../../packages/io">io</a></li><li><a href="../../packages/json">json</a></li><li><a href="../../packages/log">log</a></li><li><a href="../../packages/math">math</a></li><li><a href="../../packages/math/finance">math/finance</a></li><li><a href="../../packages/math/geo" aria-current="page">math/geo</a></li><li><a href="../../packages/math/interp">math/interp</a></li><li><a href="../../packages/math/numtheory">math/numtheory</a></li><li><a href="../../packages/math/optimize">math/optimize</a></li><li><a href="../../packages/math/shard">math/shard</a></li><li><a href="../../packages/math/sketch">math/sketch</a></li><li><a href="../../packages/math/stats">math/stats</a></li><li><a href="../../packages/math/vec">math/vec</a></li><li><a href="../../packages/mysql">mysql</a></li><li><a href="../../packages/nats">nats</a></li><li><a href="../../packages/net">net</a></li><li><a href="../../packages/os">os</a></li><li><a href="../../packages/pg">pg</a></li><li><a href="../../packages/proc">proc</a></li><li><a href="../../packages/rand">rand</a></li><li><a href="../../packages/redis">redis</a></li><li><a href="../../packages/regex">regex</a></li><li><a href="../../packages/s3">s3</a></li><li><a href="../../packages/sigv4">sigv4</a></li><li><a href="../../packages/sort">sort</a></li><li><a href="../../packages/sql">sql</a></li><li><a href="../../packages/strings">strings</a></li><li><a href="../../packages/tar">tar</a></li><li><a href="../../packages/template">template</a></li><li><a href="../../packages/time">time</a></li><li><a href="../../packages/timez">timez</a></li><li><a href="../../packages/toml">toml</a></li><li><a href="../../packages/unicode">unicode</a></li><li><a href="../../packages/uuid">uuid</a></li><li><a href="../../packages/websocket">websocket</a></li><li><a href="../../packages/x509">x509</a></li><li><a href="../../packages/xml">xml</a></li><li><a href="../../packages/yaml">yaml</a></li><li><a href="../../packages/zip">zip</a></li></ul></details></div>
+  </aside>
+  <div class="drawer-scrim" data-scrim hidden></div>
+
+  <main id="main" class="doc-main">
+
+    <article class="content">
+      <nav class="crumbs" aria-label="Breadcrumb"><a href="../../">Docs</a><span class="sep" aria-hidden="true">/</span><a href="../../packages/">Packages</a><span class="sep" aria-hidden="true">/</span><span aria-current="page">math/geo</span></nav>
+      <header class="page-head">
+        <h1>math/geo</h1>
+        <p class="tagline">Package math/geo.</p>
+        <p class="agentline">
+          <a href="../../packages/math/geo.md">Markdown</a><span aria-hidden="true">·</span><a href="../../llms.txt">llms.txt</a><span aria-hidden="true">·</span><a href="../../api.json">api.json</a>
+        </p>
+      </header>
+<p>Points on the Earth: distances, bearings, &quot;everything within 5 km&quot;, geohash keys for spatial indexes, and geofences.</p>
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;math/geo&quot;</span>;
+
+<span class="k">let</span> berlin = geo.<span class="f">point</span>(<span class="n">52.5200</span>, <span class="n">13.4050</span>);          <span class="c">// lat, lon in degrees</span>
+<span class="k">let</span> paris = geo.<span class="f">point</span>(<span class="n">48.8566</span>, <span class="n">2.3522</span>);
+geo.<span class="f">distance</span>(berlin, paris);                       <span class="c">// 877465 m (haversine)</span>
+geo.<span class="f">distance_exact</span>(berlin, paris) ?? <span class="n">0.0</span>;          <span class="c">// 879699 m (WGS-84)</span>
+geo.<span class="f">bearing</span>(berlin, paris);                        <span class="c">// 246.74 degrees</span>
+geo.<span class="f">destination</span>(berlin, <span class="n">90.0</span>, <span class="n">1000.0</span>);             <span class="c">// 1 km due east</span>
+<span class="k">let</span> box = geo.<span class="f">bounding_box</span>(berlin, <span class="n">5000.0</span>);        <span class="c">// a WHERE clause&#x27;s lat/lon ranges</span>
+geo.<span class="f">geohash</span>(berlin, <span class="n">7</span>);                            <span class="c">// &quot;u33dc0c&quot;</span>
+geo.<span class="f">geohash_neighbors</span>(<span class="s">&quot;u33dc0c&quot;</span>);                  <span class="c">// the 8 cells around it</span>
+geo.<span class="f">contains</span>(fence, p);                            <span class="c">// point in polygon</span></code></pre></div>
+<ul><li><code>distance</code> is the haversine great-circle distance on a sphere of the mean Earth radius (within 0.5% of the ellipsoid); <code>distance_exact</code> is Vincenty&#x27;s inverse formula on WGS-84, to well under a millimetre (<code>none</code> for nearly antipodal points, where it does not converge).</li><li><code>bearing</code>, <code>destination</code>, <code>midpoint</code>, <code>distance_to_segment</code> (how far a courier is from the route).</li><li><code>bounding_box(center, meters)</code> and <code>in_box</code>: the smallest box holding a radius, crossing the antimeridian (<code>min_lon &gt; max_lon</code>) or spanning every longitude near a pole. Filter an index with the box, then keep the rows within <code>distance</code>.</li><li><code>geohash(p, chars)</code>, <code>geohash_decode</code>, <code>geohash_box</code>, <code>geohash_neighbors</code> (either case accepted).</li><li><code>contains</code> (even-odd rule, for fences small next to a hemisphere) and <code>area</code> in square metres.</li></ul>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="earth-radius"><div class="api-sig"><code><span class="k">let</span> EARTH_RADIUS = <span class="n">6371008.8</span>;</code> <span class="src">stdlib/math/geo/geo.sl:24</span><a class="anchor" href="#earth-radius">#</a></div><p class="api-doc">The mean Earth radius (IUGG), metres.</p></div><div class="api-item" id="point"><div class="api-sig"><code><span class="k">struct</span> Point</code> <span class="src">stdlib/math/geo/geo.sl:31</span><a class="anchor" href="#point">#</a></div></div><div class="api-item" id="point"><div class="api-sig"><code><span class="k">fn</span> <span class="f">point</span>(lat: <span class="t">float</span>, lon: <span class="t">float</span>) -&gt; Point</code> <span class="src">stdlib/math/geo/geo.sl:37</span><a class="anchor" href="#point">#</a></div><p class="api-doc">A point; latitude in [-90, 90], longitude wrapped into [-180, 180).</p></div><div class="api-item" id="distance"><div class="api-sig"><code><span class="k">fn</span> <span class="f">distance</span>(a: Point, b: Point) -&gt; <span class="t">float</span></code> <span class="src">stdlib/math/geo/geo.sl:50</span><a class="anchor" href="#distance">#</a></div><p class="api-doc">The great-circle distance in metres (haversine): accurate for any pair of points, antipodes included, on the spherical Earth.</p></div><div class="api-item" id="distance-exact"><div class="api-sig"><code><span class="k">fn</span> <span class="f">distance_exact</span>(a: Point, b: Point) -&gt; <span class="t">opt</span>[<span class="t">float</span>]</code> <span class="src">stdlib/math/geo/geo.sl:64</span><a class="anchor" href="#distance-exact">#</a></div><p class="api-doc">The distance in metres on the WGS-84 ellipsoid (Vincenty&#x27;s inverse formula, 1975). none for nearly antipodal points, where the iteration does not converge; use distance() there.</p></div><div class="api-item" id="bearing"><div class="api-sig"><code><span class="k">fn</span> <span class="f">bearing</span>(a: Point, b: Point) -&gt; <span class="t">float</span></code> <span class="src">stdlib/math/geo/geo.sl:106</span><a class="anchor" href="#bearing">#</a></div><p class="api-doc">The initial bearing from a toward b, degrees clockwise from north in [0, 360). Along a great circle the bearing changes as you go.</p></div><div class="api-item" id="destination"><div class="api-sig"><code><span class="k">fn</span> <span class="f">destination</span>(from: Point, bearing_deg: <span class="t">float</span>, meters: <span class="t">float</span>) -&gt; Point</code> <span class="src">stdlib/math/geo/geo.sl:116</span><a class="anchor" href="#destination">#</a></div><p class="api-doc">The point <code>meters</code> from <code>from</code> along the initial bearing (spherical).</p></div><div class="api-item" id="midpoint"><div class="api-sig"><code><span class="k">fn</span> <span class="f">midpoint</span>(a: Point, b: Point) -&gt; Point</code> <span class="src">stdlib/math/geo/geo.sl:128</span><a class="anchor" href="#midpoint">#</a></div><p class="api-doc">The midpoint of the great-circle path between a and b.</p></div><div class="api-item" id="box"><div class="api-sig"><code><span class="k">struct</span> Box</code> <span class="src">stdlib/math/geo/geo.sl:143</span><a class="anchor" href="#box">#</a></div><p class="api-doc">A latitude/longitude rectangle. When it crosses the antimeridian, min_lon &gt; max_lon: a longitude is inside when it is &gt;= min_lon OR &lt;= max_lon.</p></div><div class="api-item" id="bounding-box"><div class="api-sig"><code><span class="k">fn</span> <span class="f">bounding_box</span>(center: Point, meters: <span class="t">float</span>) -&gt; Box</code> <span class="src">stdlib/math/geo/geo.sl:154</span><a class="anchor" href="#bounding-box">#</a></div><p class="api-doc">The smallest box holding every point within <code>meters</code> of center (spherical; Chan&#x27;s method). Query an index with the box, then keep the rows whose distance() is within the radius. A box around a pole spans every longitude.</p></div><div class="api-item" id="in-box"><div class="api-sig"><code><span class="k">fn</span> <span class="f">in_box</span>(b: Box, p: Point) -&gt; <span class="t">bool</span></code> <span class="src">stdlib/math/geo/geo.sl:176</span><a class="anchor" href="#in-box">#</a></div><p class="api-doc">Whether p is inside the box (edges included), across the antimeridian too.</p></div><div class="api-item" id="geohash"><div class="api-sig"><code><span class="k">fn</span> <span class="f">geohash</span>(p: Point, chars: <span class="t">int</span>) -&gt; <span class="t">str</span></code> <span class="src">stdlib/math/geo/geo.sl:191</span><a class="anchor" href="#geohash">#</a></div><p class="api-doc">The geohash of p with <code>chars</code> characters (1 to 12; 7 is about 150 m, 9 about 5 m): nearby points share prefixes, so it indexes well as a string key.</p></div><div class="api-item" id="geohash-box"><div class="api-sig"><code><span class="k">fn</span> <span class="f">geohash_box</span>(hash: <span class="t">str</span>) -&gt; <span class="t">result</span>[Box, <span class="t">str</span>]</code> <span class="src">stdlib/math/geo/geo.sl:238</span><a class="anchor" href="#geohash-box">#</a></div><p class="api-doc">The cell a geohash names. An error for an empty hash, one longer than 12 or a character outside the geohash alphabet (either case).</p></div><div class="api-item" id="geohash-decode"><div class="api-sig"><code><span class="k">fn</span> <span class="f">geohash_decode</span>(hash: <span class="t">str</span>) -&gt; <span class="t">result</span>[Point, <span class="t">str</span>]</code> <span class="src">stdlib/math/geo/geo.sl:271</span><a class="anchor" href="#geohash-decode">#</a></div><p class="api-doc">The centre of a geohash&#x27;s cell.</p></div><div class="api-item" id="geohash-neighbors"><div class="api-sig"><code><span class="k">fn</span> <span class="f">geohash_neighbors</span>(hash: <span class="t">str</span>) -&gt; <span class="t">result</span>[[<span class="t">str</span>], <span class="t">str</span>]</code> <span class="src">stdlib/math/geo/geo.sl:282</span><a class="anchor" href="#geohash-neighbors">#</a></div><p class="api-doc">The eight cells around a geohash, at its length: N, NE, E, SE, S, SW, W, NW. A radius search covers the cell and its neighbours. Cells beyond a pole are left out.</p></div><div class="api-item" id="contains"><div class="api-sig"><code><span class="k">fn</span> <span class="f">contains</span>(polygon: [Point], p: Point) -&gt; <span class="t">bool</span></code> <span class="src">stdlib/math/geo/geo.sl:346</span><a class="anchor" href="#contains">#</a></div><p class="api-doc">Whether p lies inside the polygon given by its vertices (in order, either direction, closed or not), by the even-odd rule in plain latitude/longitude: right for geofences that are small next to a hemisphere and do not cross the antimeridian or a pole.</p></div><div class="api-item" id="area"><div class="api-sig"><code><span class="k">fn</span> <span class="f">area</span>(polygon: [Point]) -&gt; <span class="t">float</span></code> <span class="src">stdlib/math/geo/geo.sl:370</span><a class="anchor" href="#area">#</a></div><p class="api-doc">The area of a polygon in square metres on the spherical Earth (the spherical-excess formula of Chamberlain and Duquette), for polygons not crossing the antimeridian.</p></div><div class="api-item" id="distance-to-segment"><div class="api-sig"><code><span class="k">fn</span> <span class="f">distance_to_segment</span>(p: Point, a: Point, b: Point) -&gt; <span class="t">float</span></code> <span class="src">stdlib/math/geo/geo.sl:389</span><a class="anchor" href="#distance-to-segment">#</a></div><p class="api-doc">The shortest distance in metres from p to the great-circle segment a-b (spherical): the cross-track distance when the foot of the perpendicular falls between a and b, else the nearer endpoint. For &quot;is the courier within 50 m of the route&quot;.</p></div></div>
+<nav class="pager" aria-label="Previous and next"><a class="prev" href="../../packages/math/finance"><span class="dir">Previous</span><span class="name">math/finance</span></a><a class="next" href="../../packages/math/interp"><span class="dir">Next</span><span class="name">math/interp</span></a></nav>
+    </article>
+  </main>
+
+  <aside class="toc" aria-label="On this page">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+
+<footer class="foot">
+  <div class="foot-inner">
+    <a class="foot-logo" href="../../" aria-label="slang home">
+      <img class="logo-on-dark" src="../../brand/slang-icon-light.svg" alt="" width="28" height="28">
+      <img class="logo-on-light" src="../../brand/slang-icon-dark.svg" alt="" width="28" height="28">
+    </a>
+    <p class="foot-by">Built and maintained by
+      <a href="https://dolphlabs.com" rel="noopener">Dolphlabs</a> · Dolph Tech Limited</p>
+    <p class="foot-note">Generated from the repository by <code>www/build.py</code>:
+      the guide from <code>README.md</code>, the API from the compiler's own
+      signature tables and the <code>pub</code> declarations in
+      <code>stdlib/</code>. Nothing here is written twice.</p>
+  </div>
+</footer>
+
+<div class="palette" id="palette" role="dialog" aria-modal="true" aria-label="Search the docs" hidden>
+  <div class="palette-box">
+    <div class="palette-field">
+      <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <input id="palette-input" type="search" placeholder="Search pages, packages and functions" autocomplete="off" spellcheck="false"
+             role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list">
+      <kbd>esc</kbd>
+    </div>
+    <div class="palette-list" id="palette-list" role="listbox" aria-label="Results"></div>
+    <div class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+
+<script src="../../app.js" defer></script>
+</body>
+</html>

@@ -10,7 +10,12 @@
 / `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
 / `import "regex";` / `import "io";` / `import "encoding";` like any other package.
 
-`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/big`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/finance`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/interp`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/geo`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/optimize`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/shard`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/sketch`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
 `import "http"` / `import "byteutil"` resolve to a local directory first,
 then a native package, then `stdlib/<path>` (`SLANG_STDLIB` or the
 compiler's `SLANG_STDLIB_DIR`).
@@ -2815,6 +2820,7 @@ p.quantile(0.99);
 stats.normal(100.0, 15.0).cdf(130.0);        // 0.9772498680518208
 stats.normal(0.0, 1.0).quantile(0.975);      // 1.9599639845400538
 stats.poisson(3.0).pmf(5);
+stats.poisson(3.0).sample(rand.new(42));     // an int, replayable
 ```
 
 - **Center and spread:** `sum` (compensated), `product`, `mean`,
@@ -2831,6 +2837,37 @@ stats.poisson(3.0).pmf(5);
   `digest` `merge`.
 - **Distributions:** `normal`, `log_normal`, `uniform`, `exponential`
   (`pdf`, `cdf`, `quantile`), `poisson` and `binomial` (`pmf`, `cdf`).
+  Each has `sample(r)` for a `rand.Rng`, so a simulation or load
+  generator replays from one seed: the ziggurat for the normal and the
+  exponential, Hörmann's PTRS and BTRS (what numpy and TensorFlow use)
+  for the Poisson and binomial once the mean reaches 10, multiplication
+  or inversion below. All exact, all O(1) on average.
+
+For experiments, `math/stats` has the tests and planning numbers an A/B
+test needs, and the distributions they rest on:
+
+```slang
+let t = stats.two_proportion_z(120, 2400, 156, 2380);   // TestResult
+t.p_value < 0.05;                                       // B beats A at 5%
+stats.wilson(156, 2380, 0.95);                          // Interval { lo, hi }
+stats.sample_size_proportions(0.05, 0.06, 0.05, 0.8);   // 8158 per arm
+let s = stats.sprt(0.05, 0.06, 0.05, 0.2);
+s.add(converted);                    // Decision.Continue until it can stop
+```
+
+- **Tests** (two-sided p-values): `two_proportion_z`, `welch_t` (unequal
+  variances), `t_test` (one sample), `chi_square_test` (an r x c table of
+  counts), `chi_square_fit`.
+- **Intervals and planning:** `wilson` (stays in [0, 1], sane at 0 or n
+  successes), `mean_interval`, `sample_size_proportions`,
+  `power_proportions`, `sample_size_means`.
+- **Sequential:** `sprt(p0, p1, alpha, beta)`, Wald's test: `add` or
+  `add_n` outcomes and stop at `Decision.AcceptNull` or
+  `AcceptAlternative`. Peeking is part of its design, so stopping early
+  does not inflate the error rates.
+- **Distributions:** `student_t(df)` and `chi_squared(k)` (`pdf`, `cdf`,
+  `quantile` to full precision), and the regularized incomplete beta and
+  gamma functions under them, `inc_beta` and `inc_gamma`.
 
 A result with no value for its input -- the mean of no numbers, the
 variance of one, a correlation with a constant list -- is NaN, which
@@ -2866,51 +2903,264 @@ be coprime), `binomial_mod` (Lucas, for a prime modulus) and
 function given one <= 0 returns `none`, 0 or `false` rather than
 panicking, and no result is negative.
 
-#### `math/big`
+#### `math/finance`
 
-Arbitrary-precision integers and exact fractions: cryptography, ids and
-amounts past 64 bits, exact combinatorics, checking int arithmetic
-against the truth. Written in slang.
+Time value of money, loans, fees and market data. Analysis takes
+floats; anything booked (a schedule, a fee, a split) takes and returns
+`decimal.Decimal` and adds up to the cent.
 
 ```slang
-import "math/big";
+import "math/finance";
+import "decimal";
 
-let a = big.parse("123456789012345678901234567890", 10) ?? big.zero();
-a.mul(big.from_int(987654321)).format(10);   // 121932631124828532112482853211126352690
-big.from_int(2).pow(127).sub(big.one());     // a Mersenne prime
-a.mod_pow(e, m) ?? big.zero();               // none for m <= 0
-a.mod_inv(m);                                // opt
-big.from_bytes_be(key_bytes);
+finance.npv(0.08, [-1000.0, 300.0, 400.0, 500.0]);    // 17.629...
+finance.irr([-1000.0, 300.0, 400.0, 500.0]);          // ok(0.08896...)
+finance.xirr(flows, days);                            // dated flows, actual/365
+finance.pmt(0.05 / 12.0, 360, 250000.0, 0.0, false);  // -1342.05
 
-let r = big.rat_parse("0.125") ?? big.rat_zero();   // 1/8: exact, not a float
-r.add(big.rat_parse("1/3") ?? big.rat_zero()).format();   // 11/24
+let p = decimal.parse("250000.00") ?? decimal.zero();
+let rate = decimal.parse("0.05") ?? decimal.zero();
+let rows = finance.amortize(p, rate, 360, 12);        // [Payment], to the cent
+finance.progressive(amount, bounds, rates, 2, decimal.Rounding.HalfEven);
+finance.prorate(total, [share_a, share_b]);           // largest remainder
 ```
 
-- **`Int`:** `add`, `sub`, `mul`, `div`/`rem` (truncating, as `/` and
-  `%`), `div_floor`/`modulo` (flooring; `modulo` is never negative),
-  `pow`, `mod_pow`, `mod_inv`, `gcd`, `sqrt` (integer), `cmp`, `eq`,
-  `sign`; `shl`, `shr` (arithmetic), `and`, `or`, `xor`, `not` and
-  `bit` on the two's-complement form, as Go and Python define them;
-  `parse(s, base)` (2 to 36, `_` separators, `0x`/`0o`/`0b`),
-  `format(base)`, `int_of` (opt), `float_of`, `bytes_be`,
-  `from_bytes_be`.
-- **`Rat`:** always reduced with a positive denominator. `rat`,
-  `rat_parse` ("3/4", "-12.75", "2.5e-3", exact), `add`, `sub`, `mul`,
-  `div`, `cmp`, `floor`, `ceil`, `round` (half to even), `float_of`,
-  `format`, `format_decimal(places)`.
+- **Value:** `npv`, `irr` (safeguarded Newton on the exact derivative
+  inside a scanned bracket), `xnpv`, `xirr`, and the spreadsheet set
+  `pmt`, `fv`, `pv`, `nper`, `ipmt`, `ppmt` with their sign convention
+  (money paid out is negative) and `at_start` for annuities due;
+  `effective_rate`, `nominal_rate`, `compound` (n <= 0: continuous),
+  `cagr`.
+- **Booked money:** `amortize` (interest rounded half-even each period,
+  the level payment rounded to the cent, the last payment absorbing the
+  difference so the balance ends at exactly zero; every line adds up),
+  `prorate` (by decimal weights, through `decimal.allocate`),
+  `apply_bps`, `progressive` (marginal brackets, as income tax),
+  `tiered` (the whole amount at its tier's rate).
+- **Market data:** `vwap`, `vwap_decimal`, `twap`, `candles` and
+  `candle_builder` (OHLCV bars from a trade feed, aligned to the
+  interval), `max_drawdown`, `bps_change`.
 
-An `Int` is immutable and can be shared between tasks. Limbs are 32
-bits, so every partial product fits a `u64`; multiplication is
-schoolbook below 256 limbs (8192 bits, where it measured as fast) and
-Karatsuba above, division is Knuth's algorithm D, and `mod_pow` with an
-odd modulus uses Montgomery multiplication with a 4-bit window, so no
-step divides. A 2048-bit product takes about 9 us and a 2048-bit
-modular power with a 1024-bit exponent about 26 ms; this is a portable
-library, not a constant-time one, so keep secret-key cryptography in
-`crypto`. `parse` refuses text over 100,000 characters and `pow` a
-result over 16 million bits, to bound the work an input can ask for.
-The tests check every operation against Python's integers on 300
-random pairs up to 5000 bits, and modular powers on 100 moduli.
+`irr` and `xirr` are an error, not a guess, when the flows never change
+sign or no rate in (-99%, 100000%) balances them; with several sign
+changes they return the lowest rate.
+#### `math/interp`
+
+Values between known points: fee schedules, tiered rates, pricing and
+yield curves, calibration tables.
+
+```slang
+import "math/interp";
+
+let fees = interp.linear([0.0, 1000.0, 10000.0], [2.5, 1.8, 0.9]) ?? interp.empty();
+fees.at(4200.0);                     // 1.48
+let tier = interp.step([0.0, 100.0, 500.0], [10.0, 8.0, 5.0]) ?? interp.empty();
+tier.at(250.0);                      // 8: the tier 250 falls in
+let curve = interp.monotone(days, rates) ?? interp.empty();   // smooth, no overshoot
+curve.at(45.0);
+curve.slope(45.0);
+curve.set_extrapolate(interp.Extrapolate.Linear);
+
+let gr = interp.grid([1.0, 5.0], [0.0, 100.0, 500.0], prices);  // 2 x 3 values
+if let g = gr { g.at(2.5, 140.0); }                           // bilinear
+```
+
+- `linear`, `step`, `monotone` (Fritsch-Carlson cubic with
+  Fritsch-Butland slopes: smooth, through every point, and never
+  overshooting, so monotone data stays monotone) and `spline` (the
+  natural cubic spline: the smoothest curve, which can overshoot).
+- `at`, `at_all`, `slope`; outside the knots `Extrapolate.Clamp` (the
+  default), `Linear` or `None` (NaN).
+- `grid(xs, ys, values)`: bilinear interpolation over a rectangular
+  table, clamped at its edges.
+
+Constructors check their input (equal lengths, at least one point,
+strictly increasing finite xs) and return a `result`. A lookup is a
+binary search, but a curve remembers its last segment, so ascending
+queries cost O(1) each; that memory makes a curve unsafe to share
+between tasks querying at once, so give each its own `copy()` (the knots
+are shared, not copied).
+#### `math/geo`
+
+Points on the Earth: distances, bearings, "everything within 5 km",
+geohash keys for spatial indexes, and geofences.
+
+```slang
+import "math/geo";
+
+let berlin = geo.point(52.5200, 13.4050);          // lat, lon in degrees
+let paris = geo.point(48.8566, 2.3522);
+geo.distance(berlin, paris);                       // 877465 m (haversine)
+geo.distance_exact(berlin, paris) ?? 0.0;          // 879699 m (WGS-84)
+geo.bearing(berlin, paris);                        // 246.74 degrees
+geo.destination(berlin, 90.0, 1000.0);             // 1 km due east
+let box = geo.bounding_box(berlin, 5000.0);        // a WHERE clause's lat/lon ranges
+geo.geohash(berlin, 7);                            // "u33dc0c"
+geo.geohash_neighbors("u33dc0c");                  // the 8 cells around it
+geo.contains(fence, p);                            // point in polygon
+```
+
+- `distance` is the haversine great-circle distance on a sphere of the
+  mean Earth radius (within 0.5% of the ellipsoid); `distance_exact` is
+  Vincenty's inverse formula on WGS-84, to well under a millimetre
+  (`none` for nearly antipodal points, where it does not converge).
+- `bearing`, `destination`, `midpoint`, `distance_to_segment` (how far
+  a courier is from the route).
+- `bounding_box(center, meters)` and `in_box`: the smallest box holding
+  a radius, crossing the antimeridian (`min_lon > max_lon`) or spanning
+  every longitude near a pole. Filter an index with the box, then keep
+  the rows within `distance`.
+- `geohash(p, chars)`, `geohash_decode`, `geohash_box`,
+  `geohash_neighbors` (either case accepted).
+- `contains` (even-odd rule, for fences small next to a hemisphere) and
+  `area` in square metres.
+#### `math/optimize`
+
+Solving f(x) = 0, minimising f and integrating it, in one variable:
+implied rates, break-even points, the price that maximises revenue, the
+area under a curve. Written in slang; every routine stops at a tolerance
+or a fixed budget of evaluations and says which in its error, so none
+can loop forever whatever f returns (a NaN is an error, not an answer).
+
+```slang
+import "math/optimize";
+
+fn f(x: float) -> float { return x * x - 2.0; }
+let r = optimize.brent(f, 0.0, 2.0, 1e-12);          // result[Root, str]
+(r ?? optimize.no_root()).x;                         // 1.41421356...
+
+// slang has no closures: a function that needs data takes it second
+struct Loan { pv: float, pmt: float, n: int }
+fn gap(rate: float, l: Loan) -> float { ... }
+optimize.brent_with(gap, loan, 0.0001, 0.1, 1e-12);
+
+optimize.brent_min(f, 0.0, 10.0, 1e-9);              // result[Min, str]
+optimize.integrate(f, 0.0, math.inf, 1e-10, 1e-10);  // result[Integral, str]
+```
+
+- **Roots:** `brent` (Brent's zeroin: superlinear, never slower than
+  bisection; the default), `bisect`, `newton` (needs the derivative;
+  fast near a simple root, can diverge from a poor start),
+  `newton_safe` (Newton kept inside a bracket, bisecting when a step
+  would leave it), `bracket` (widens a guess until f changes sign).
+- **Minima** of a unimodal f on [a, b]: `brent_min` (parabolic steps with
+  golden-section fallbacks, as scipy's `fminbound`), `golden`. x is good
+  to about sqrt(machine epsilon) relative, the limit for any minimiser.
+- **Integrals:** `integrate` (adaptive 7/15-point Gauss-Kronrod as
+  QUADPACK's QAG, with infinite bounds mapped onto finite ones) and
+  `simpson` (adaptive, finite bounds). Each returns the value, an error
+  estimate and the number of evaluations.
+
+Each routine has a `_with` form whose f takes a context value of any type
+as its second argument, for the data a closure would carry.
+#### `math/shard`
+
+Map a key to one of n nodes so each node gets an even share and a change
+in the node set moves as few keys as possible: sharding databases and
+caches, partitioning queues, sticky load balancing.
+
+```slang
+import "math/shard";
+
+shard.jump_str(user_id, 16);                 // bucket in [0, 16)
+
+let r = shard.rendezvous(["db-a", "db-b", "db-c"]);
+r.node(r.pick_str(user_id) ?? 0);            // the node's name
+r.pick_n_str(user_id, 2);                    // primary and a replica
+
+let ring = shard.ring(160);                  // 160 points per unit of weight
+ring.add("cache-1", 1);
+ring.add("cache-2", 2);                      // twice the keys
+ring.get_str(key) ?? "";
+
+let m = shard.maglev(["lb-1", "lb-2", "lb-3"], 65537);
+m.pick_str(flow_id);                         // O(1): one table read
+```
+
+| Scheme | Lookup | Memory | Remove any node | Weights | Use for |
+|---|---|---|---|---|---|
+| `jump` (Lamping and Veach) | O(log n) | none | only the last | no | a growing count of shards |
+| `rendezvous` (HRW) | O(nodes) | names | yes, only its keys move | yes | up to a few hundred nodes, replicas |
+| `ring` (Karger) | O(log points) | 16 B per point | yes | yes | many nodes |
+| `maglev` (Google) | O(1) | 4 B per entry | rebuild; little extra movement | no | load balancers |
+
+Every scheme hashes with a fixed function (`shard.hash_str`,
+`hash_int`), so every process and host maps a key to the same node.
+Rendezvous weights follow Schindelhauer and Schomaker (`-w / ln(u)`), so
+a node gets keys in proportion to its weight; a ring's markers depend
+only on the node's name, so they are the same after every rebuild.
+#### `math/sketch`
+
+Fixed-memory, mergeable estimates for live servers: how many distinct
+users, how often each key, which keys are heaviest, have we seen this
+before, and latency percentiles, without keeping the items. Written in
+slang; every sketch of a kind merges with another built with the same
+parameters, so tasks and hosts each keep their own and combine.
+
+```slang
+import "math/sketch";
+
+let users = sketch.hyperloglog(14);          // 16 KB, 0.81% error
+users.add_str(user_id);
+users.count();
+
+let hits = sketch.count_min(0.001, 0.01);    // within 0.1% of the total, 99% of the time
+hits.add_str(ip, 1);
+hits.estimate_str(ip);
+
+let heavy = sketch.top_k(100);               // Space-Saving
+heavy.add(path);
+heavy.top();                                 // [Item { key, count, error }]
+
+let seen = sketch.bloom(1000000, 0.01);      // 1.2 MB
+seen.add_str(key);
+seen.contains_str(key);                      // false: certainly not added
+
+let live = sketch.cuckoo(100000);            // like a Bloom filter, with remove
+live.add_str(id); live.remove_str(id);
+
+let lat = sketch.histogram(60000000, 7);     // 1 us .. 60 s, 0.8% precision
+lat.record(elapsed_us);
+lat.quantile(0.99);
+lat.buckets(sketch.exponential_bounds(1000, 2.0, 12));   // Prometheus le= counts
+
+let keep: [Event] = [];                      // a uniform sample of 100
+let rs = sketch.reservoir(100, rand.new(7));
+if let slot = rs.offer() {
+    if slot == len(keep) { push(keep, e); } else { keep[slot] = e; }
+}
+```
+
+- **`HyperLogLog`** (Flajolet et al. with Ertl's 2017 estimator, no bias
+  tables): `add_str`/`add_int`/`add_bytes`/`add_hash`, `count`,
+  `estimate`, `merge`, `encode`/`decode_hyperloglog`. Precision 4 to 18;
+  the error is 1.04/sqrt(2^p).
+- **`CountMin`** (Cormode and Muthukrishnan): never under the true count,
+  at most epsilon * total over it with probability 1 - delta;
+  `set_conservative(true)` tightens skewed data. `count_min_sized(w, d)`,
+  `total`, `merge`, `clear`, `encode`/`decode_count_min`.
+- **`TopK`** (Space-Saving, Metwally et al.): every key above total/k is
+  kept; each count carries its maximum error. O(log k) per add; `merge`
+  follows Agarwal et al.
+- **`Bloom`**: the split-block layout Parquet and Impala use, one 32-byte
+  block per key, so an add or a lookup touches one cache line. `fill`,
+  `fpp` (the false-positive rate it has now), `merge`, `encode`.
+- **`Cuckoo`** (Fan et al.): 16-bit fingerprints in buckets of four,
+  0.012% false positives at 95% load, with `remove`. A fingerprint that
+  finds no room is kept aside, so a full filter refuses new keys rather
+  than losing an old one.
+- **`Histogram`**: HdrHistogram's log-linear buckets: exact below
+  2^precision, then 2^(precision-1) buckets per power of two. Exact
+  `count`, `sum`, `mean`, `min`, `max`; `quantile`, `rank_of`, `buckets`,
+  `merge`; `exponential_bounds` and `linear_bounds` for Prometheus.
+- **`Reservoir`** (Algorithm L, Li 1994): the sample is your own list of
+  any type; most items cost a counter increment and no random draw.
+
+Keys hash with `hash_str` (over `strings.hash`), `hash_int` or
+`hash_bytes`, or pass your own 64-bit hash to the `*_hash` methods. The
+hashes are fixed across releases on little-endian CPUs, so `encode`d
+sketches merge across hosts. None of the sketches locks: one per task,
+then `merge`.
 #### `math/vec`
 
 Bulk arithmetic on `[float]` and `[f32]` vectors, for embedding search,
@@ -3038,6 +3288,8 @@ rand.pick(r, xs) ?? fallback;          // none when xs is empty
 // retry number `attempt` (0 first): uniform in [0, min(cap, base * 2^attempt)]
 time.sleep(rand.backoff(r, attempt, 100000000, 30000000000));
 rand.jitter(r, 60000000000, 0.1);      // 60s, give or take 10%
+rand.normal(r);                        // mean 0, stddev 1
+rand.exponential(r) / rate;            // waiting times
 ```
 
 The generator is `xoshiro256**`, seeded through `splitmix64`. The tests pin
@@ -3049,9 +3301,16 @@ of range, since there is no value to return. `backoff` uses full jitter,
 which spreads clients that failed together across the whole interval, and
 saturates at `cap` rather than overflowing. An `Rng` is not locked: give
 each spawned task its own with `rand.fork(r)`, which stays reproducible
-from the parent's seed. `rand.from_os()` seeds from the OS when runs
-should differ. Neither is for secrets: tokens, keys and salts come from
+from the parent's seed. `rand.from_os()` seeds from the OS
+(`/dev/urandom`) when runs should differ; importing `rand` links no
+OpenSSL. Neither is for secrets: tokens, keys and salts come from
 `crypto.rand`, because this generator's outputs reveal its state.
+
+`normal` and `exponential` use the ziggurat method (Marsaglia and Tsang,
+256 layers, the tables `rand_distr` uses): about 99% of draws are one
+64-bit step, a table lookup and a multiply, with no logarithm or
+trigonometry. Tails beyond the base layer use Marsaglia's exact tail
+method. `math/stats` distributions sample through these.
 
 #### `sort`
 
@@ -3861,9 +4120,14 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [json](packages/json.md) -- compiler-provided, 0 public items
 - [log](packages/log.md) -- compiler-provided, 4 public items
 - [math](packages/math.md) -- compiler-provided, 131 public items
-- [math/big](packages/math/big.md) -- source package, 59 public items
+- [math/finance](packages/math/finance.md) -- source package, 31 public items
+- [math/geo](packages/math/geo.md) -- source package, 18 public items
+- [math/interp](packages/math/interp.md) -- source package, 15 public items
 - [math/numtheory](packages/math/numtheory.md) -- source package, 16 public items
-- [math/stats](packages/math/stats.md) -- source package, 91 public items
+- [math/optimize](packages/math/optimize.md) -- source package, 25 public items
+- [math/shard](packages/math/shard.md) -- source package, 33 public items
+- [math/sketch](packages/math/sketch.md) -- source package, 105 public items
+- [math/stats](packages/math/stats.md) -- source package, 128 public items
 - [math/vec](packages/math/vec.md) -- compiler-provided, 23 public items
 - [mysql](packages/mysql.md) -- source package, 49 public items
 - [nats](packages/nats.md) -- source package, 31 public items
@@ -3871,7 +4135,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [os](packages/os.md) -- compiler-provided, 18 public items
 - [pg](packages/pg.md) -- source package, 58 public items
 - [proc](packages/proc.md) -- compiler-provided, 9 public items
-- [rand](packages/rand.md) -- source package, 13 public items
+- [rand](packages/rand.md) -- source package, 15 public items
 - [redis](packages/redis.md) -- source package, 161 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
 - [s3](packages/s3.md) -- source package, 23 public items

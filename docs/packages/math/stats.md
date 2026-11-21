@@ -27,6 +27,7 @@ p.quantile(0.99);
 stats.normal(100.0, 15.0).cdf(130.0);        // 0.9772498680518208
 stats.normal(0.0, 1.0).quantile(0.975);      // 1.9599639845400538
 stats.poisson(3.0).pmf(5);
+stats.poisson(3.0).sample(rand.new(42));     // an int, replayable
 ```
 
 - **Center and spread:** `sum` (compensated), `product`, `mean`,
@@ -43,6 +44,37 @@ stats.poisson(3.0).pmf(5);
   `digest` `merge`.
 - **Distributions:** `normal`, `log_normal`, `uniform`, `exponential`
   (`pdf`, `cdf`, `quantile`), `poisson` and `binomial` (`pmf`, `cdf`).
+  Each has `sample(r)` for a `rand.Rng`, so a simulation or load
+  generator replays from one seed: the ziggurat for the normal and the
+  exponential, Hörmann's PTRS and BTRS (what numpy and TensorFlow use)
+  for the Poisson and binomial once the mean reaches 10, multiplication
+  or inversion below. All exact, all O(1) on average.
+
+For experiments, `math/stats` has the tests and planning numbers an A/B
+test needs, and the distributions they rest on:
+
+```slang
+let t = stats.two_proportion_z(120, 2400, 156, 2380);   // TestResult
+t.p_value < 0.05;                                       // B beats A at 5%
+stats.wilson(156, 2380, 0.95);                          // Interval { lo, hi }
+stats.sample_size_proportions(0.05, 0.06, 0.05, 0.8);   // 8158 per arm
+let s = stats.sprt(0.05, 0.06, 0.05, 0.2);
+s.add(converted);                    // Decision.Continue until it can stop
+```
+
+- **Tests** (two-sided p-values): `two_proportion_z`, `welch_t` (unequal
+  variances), `t_test` (one sample), `chi_square_test` (an r x c table of
+  counts), `chi_square_fit`.
+- **Intervals and planning:** `wilson` (stays in [0, 1], sane at 0 or n
+  successes), `mean_interval`, `sample_size_proportions`,
+  `power_proportions`, `sample_size_means`.
+- **Sequential:** `sprt(p0, p1, alpha, beta)`, Wald's test: `add` or
+  `add_n` outcomes and stop at `Decision.AcceptNull` or
+  `AcceptAlternative`. Peeking is part of its design, so stopping early
+  does not inflate the error rates.
+- **Distributions:** `student_t(df)` and `chi_squared(k)` (`pdf`, `cdf`,
+  `quantile` to full precision), and the regularized incomplete beta and
+  gamma functions under them, `inc_beta` and `inc_gamma`.
 
 A result with no value for its input -- the mean of no numbers, the
 variance of one, a correlation with a constant list -- is NaN, which
@@ -70,6 +102,10 @@ Through erfc, which keeps precision far into the lower tail where 1 + erf would 
 
 The x with cdf(x) = p; -inf at 0, inf at 1, NaN outside [0, 1].
 
+### `fn sample(self: Normal, r: rand.Rng) -> float`
+
+A random draw (rand.normal, the ziggurat); NaN for a bad sigma.
+
 ### `struct LogNormal`
 
 ### `fn log_normal(mu: float, sigma: float) -> LogNormal`
@@ -82,6 +118,8 @@ The distribution of exp(X) for X normal(mu, sigma): response times and sizes, wh
 
 ### `fn quantile(self: LogNormal, p: float) -> float`
 
+### `fn sample(self: LogNormal, r: rand.Rng) -> float`
+
 ### `struct Uniform`
 
 ### `fn uniform(lo: float, hi: float) -> Uniform`
@@ -93,6 +131,10 @@ The continuous uniform distribution on [lo, hi].
 ### `fn cdf(self: Uniform, x: float) -> float`
 
 ### `fn quantile(self: Uniform, p: float) -> float`
+
+### `fn sample(self: Uniform, r: rand.Rng) -> float`
+
+A draw from [lo, hi); NaN unless hi > lo.
 
 ### `struct Exponential`
 
@@ -108,6 +150,10 @@ The waiting time between events arriving at `rate` per unit time.
 
 ### `fn quantile(self: Exponential, p: float) -> float`
 
+### `fn sample(self: Exponential, r: rand.Rng) -> float`
+
+A draw (rand.exponential, the ziggurat, over the rate).
+
 ### `struct Poisson`
 
 ### `fn poisson(lambda: float) -> Poisson`
@@ -122,6 +168,10 @@ P(X = k): directly while k! is exact (k <= 20) and lambda^k cannot overflow, oth
 
 P(X <= k).
 
+### `fn sample(self: Poisson, r: rand.Rng) -> int`
+
+A random count. Panics for a lambda that is negative, NaN, or so large (above 2^52) that its counts have no exact int, as rand.below does for a bad bound.
+
 ### `struct Binomial`
 
 ### `fn binomial(n: int, p: float) -> Binomial`
@@ -135,6 +185,120 @@ P(X = k): directly while the binomial coefficient is exact (n up to 1000, as mat
 ### `fn cdf(self: Binomial, k: int) -> float`
 
 P(X <= k).
+
+### `fn sample(self: Binomial, r: rand.Rng) -> int`
+
+A random count of successes. Panics for n < 0 or p outside [0, 1].
+
+### `struct TestResult`
+
+A test statistic, its two-sided p-value, and its degrees of freedom (NaN for a z-test).
+
+### `struct Interval`
+
+A confidence interval.
+
+### `fn inc_beta(a: float, b: float, x: float) -> float`
+
+The regularized incomplete beta function I_x(a, b) (the cdf of a beta distribution), by Lentz's continued fraction on whichever side converges fast (Numerical Recipes 6.4).
+
+### `fn inc_gamma(a: float, x: float) -> float`
+
+The regularized lower incomplete gamma function P(a, x) (the cdf of a gamma distribution): its series below a + 1, its continued fraction above (Numerical Recipes 6.2).
+
+### `struct StudentT`
+
+### `fn student_t(df: float) -> StudentT`
+
+Student's t distribution with df degrees of freedom (df > 0).
+
+### `fn pdf(self: StudentT, x: float) -> float`
+
+### `fn cdf(self: StudentT, x: float) -> float`
+
+### `fn quantile(self: StudentT, p: float) -> float`
+
+The x with cdf(x) = p: Newton's method from the normal quantile, guarded by bisection, to full double precision.
+
+### `struct ChiSquared`
+
+### `fn chi_squared(k: float) -> ChiSquared`
+
+The chi-square distribution with k degrees of freedom (k > 0).
+
+### `fn pdf(self: ChiSquared, x: float) -> float`
+
+### `fn cdf(self: ChiSquared, x: float) -> float`
+
+### `fn quantile(self: ChiSquared, p: float) -> float`
+
+The x with cdf(x) = p: Newton's method from the Wilson-Hilferty approximation, guarded by bisection.
+
+### `fn two_proportion_z(successes_a: int, n_a: int, successes_b: int, n_b: int) -> TestResult`
+
+Whether two conversion rates differ: the pooled two-proportion z-test, for successes_a of n_a against successes_b of n_b. The statistic is positive when B's rate is higher.
+
+### `fn welch_t[T, U](xs: [T], ys: [U]) -> TestResult`
+
+Whether two means differ, without assuming equal variances: Welch's t-test with Welch-Satterthwaite degrees of freedom. Positive when ys' mean is higher. NaN with fewer than two values on a side.
+
+### `fn t_test[T](xs: [T], mu: float) -> TestResult`
+
+Whether the mean of xs differs from mu: the one-sample t-test.
+
+### `fn chi_square_test(table: [[int]]) -> TestResult`
+
+Whether counts in a table of rows (variants) by columns (outcomes) are independent: Pearson's chi-square test. Every row has the same number of columns; NaN for a table smaller than 2 x 2, ragged, negative, or with an empty row or column.
+
+### `fn chi_square_fit(observed: [int], expected: [float]) -> TestResult`
+
+Whether observed counts fit expected ones (same total, or scaled to it): the chi-square goodness-of-fit test, df = bins - 1.
+
+### `fn wilson(successes: int, n: int, confidence: float) -> Interval`
+
+The Wilson score interval for a proportion: successes of n at the given confidence (0.95). Unlike the textbook p +- z*se it stays inside [0, 1] and behaves at 0 or n successes.
+
+### `fn mean_interval[T](xs: [T], confidence: float) -> Interval`
+
+The t interval for the mean of xs at the given confidence.
+
+### `fn sample_size_proportions(p1: float, p2: float, alpha: float, power: float) -> int`
+
+Users needed in EACH arm to detect a change in conversion from p1 to p2 with a two-sided test at significance alpha (0.05) and the given power (0.8): the normal-approximation formula. -1 for invalid input.
+
+### `fn power_proportions(p1: float, p2: float, n: int, alpha: float) -> float`
+
+The power of that test with n users per arm.
+
+### `fn sample_size_means(delta: float, sd: float, alpha: float, power: float) -> int`
+
+Values needed in EACH arm to detect a difference `delta` between two means with common standard deviation sd, two-sided at alpha with the given power. -1 for invalid input.
+
+### `gc struct Sprt`
+
+Wald's sequential probability ratio test for a conversion rate: is it p0 (the null) or p1 (the alternative)? Feed outcomes one at a time and stop as soon as it decides; on average it needs far fewer observations than a fixed-size test with the same error rates (alpha: deciding p1 when it is p0; beta: deciding p0 when it is p1). Peeking is part of the design, so stopping early does not inflate the error rate.
+
+### `fn sprt(p0: float, p1: float, alpha: float, beta: float) -> Sprt`
+
+A test of p0 against p1 (both in (0, 1), different) with error rates alpha and beta (in (0, 1)); invalid input decides nothing ever.
+
+### `fn add(self: Sprt, success: bool) -> Decision`
+
+One observation. Once decided, further observations change nothing.
+
+### `fn add_n(self: Sprt, successes: int, n: int) -> Decision`
+
+A batch: successes of n.
+
+### `fn decision(self: Sprt) -> Decision`
+
+### `fn count(self: Sprt) -> int`
+
+Observations taken.
+
+### `fn log_ratio(self: Sprt) -> float`
+
+The log-likelihood ratio so far: positive leans to p1.
 
 ### `fn sum[T](xs: [T]) -> float`
 
