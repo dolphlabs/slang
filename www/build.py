@@ -195,6 +195,7 @@ PACKAGE_SECTIONS = {
     "math": ["`math`"],
     "math/stats": ["`math/stats`"],
     "math/numtheory": ["`math/numtheory`"],
+    "math/finance": ["`math/finance`"],
     "math/interp": ["`math/interp`"],
     "math/geo": ["`math/geo`"],
     "math/optimize": ["`math/optimize`"],

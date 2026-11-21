@@ -10,6 +10,7 @@
 / `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
 / `import "regex";` / `import "io";` / `import "encoding";` like any other package.
 
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/finance`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
 `http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/interp`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
 `http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/geo`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
 `http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/optimize`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
@@ -2876,6 +2877,47 @@ be coprime), `binomial_mod` (Lucas, for a prime modulus) and
 function given one <= 0 returns `none`, 0 or `false` rather than
 panicking, and no result is negative.
 
+#### `math/finance`
+
+Time value of money, loans, fees and market data. Analysis takes
+floats; anything booked (a schedule, a fee, a split) takes and returns
+`decimal.Decimal` and adds up to the cent.
+
+```slang
+import "math/finance";
+import "decimal";
+
+finance.npv(0.08, [-1000.0, 300.0, 400.0, 500.0]);    // 17.629...
+finance.irr([-1000.0, 300.0, 400.0, 500.0]);          // ok(0.08896...)
+finance.xirr(flows, days);                            // dated flows, actual/365
+finance.pmt(0.05 / 12.0, 360, 250000.0, 0.0, false);  // -1342.05
+
+let p = decimal.parse("250000.00") ?? decimal.zero();
+let rate = decimal.parse("0.05") ?? decimal.zero();
+let rows = finance.amortize(p, rate, 360, 12);        // [Payment], to the cent
+finance.progressive(amount, bounds, rates, 2, decimal.Rounding.HalfEven);
+finance.prorate(total, [share_a, share_b]);           // largest remainder
+```
+
+- **Value:** `npv`, `irr` (safeguarded Newton on the exact derivative
+  inside a scanned bracket), `xnpv`, `xirr`, and the spreadsheet set
+  `pmt`, `fv`, `pv`, `nper`, `ipmt`, `ppmt` with their sign convention
+  (money paid out is negative) and `at_start` for annuities due;
+  `effective_rate`, `nominal_rate`, `compound` (n <= 0: continuous),
+  `cagr`.
+- **Booked money:** `amortize` (interest rounded half-even each period,
+  the level payment rounded to the cent, the last payment absorbing the
+  difference so the balance ends at exactly zero; every line adds up),
+  `prorate` (by decimal weights, through `decimal.allocate`),
+  `apply_bps`, `progressive` (marginal brackets, as income tax),
+  `tiered` (the whole amount at its tier's rate).
+- **Market data:** `vwap`, `vwap_decimal`, `twap`, `candles` and
+  `candle_builder` (OHLCV bars from a trade feed, aligned to the
+  interval), `max_drawdown`, `bps_change`.
+
+`irr` and `xirr` are an error, not a guess, when the flows never change
+sign or no rate in (-99%, 100000%) balances them; with several sign
+changes they return the lowest rate.
 #### `math/interp`
 
 Values between known points: fee schedules, tiered rates, pricing and
@@ -4052,6 +4094,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [json](packages/json.md) -- compiler-provided, 0 public items
 - [log](packages/log.md) -- compiler-provided, 4 public items
 - [math](packages/math.md) -- compiler-provided, 131 public items
+- [math/finance](packages/math/finance.md) -- source package, 31 public items
 - [math/geo](packages/math/geo.md) -- source package, 18 public items
 - [math/interp](packages/math/interp.md) -- source package, 15 public items
 - [math/numtheory](packages/math/numtheory.md) -- source package, 16 public items

@@ -29,6 +29,7 @@
   <url><loc>https://slang.dolphlabs.com/packages/json</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/log</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/math</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/math/finance</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/math/geo</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/math/interp</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/math/numtheory</loc></url>
