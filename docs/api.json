@@ -5184,6 +5184,260 @@
         }
       ]
     },
+    "math/finance": {
+      "name": "math/finance",
+      "kind": "source",
+      "items": [
+        {
+          "name": "npv",
+          "decl": "fn",
+          "sig": "fn npv(rate: float, flows: [float]) -> float",
+          "doc": "Net present value at `rate` per period of flows[0] now, flows[1] one period later, and so on. Horner's rule: one division per flow.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 30
+        },
+        {
+          "name": "irr",
+          "decl": "fn",
+          "sig": "fn irr(flows: [float]) -> result[float, str]",
+          "doc": "The internal rate of return: the rate at which npv(rate, flows) is 0. Safeguarded Newton on the exact derivative inside a bracket found by scanning from -0.99 upward, so it converges whenever a root exists in (-0.99, 1000). An error when the flows never change sign (no rate can balance them) or no root lies in that range. Flows that change sign more than once can have several rates; this returns the lowest.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 47
+        },
+        {
+          "name": "xnpv",
+          "decl": "fn",
+          "sig": "fn xnpv(rate: float, flows: [float], days: [int]) -> float",
+          "doc": "npv for flows on given days: flows[i] lands days[i] days after day 0, discounted at the annual `rate` over actual/365 years (the XNPV convention). days need not be sorted.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 57
+        },
+        {
+          "name": "xirr",
+          "decl": "fn",
+          "sig": "fn xirr(flows: [float], days: [int]) -> result[float, str]",
+          "doc": "The annual rate at which xnpv is 0 (XIRR).",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 68
+        },
+        {
+          "name": "pmt",
+          "decl": "fn",
+          "sig": "fn pmt(rate: float, nper: int, pv: float, fv: float, at_start: bool) -> float",
+          "doc": "The payment per period that repays present value pv (and leaves future value fv) over nper periods at rate per period: the PMT of a spreadsheet. at_start is true for payments at the start of each period (an annuity due). pmt(0.05/12, 360, 250000, 0, false) is -1342.05.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 188
+        },
+        {
+          "name": "fv",
+          "decl": "fn",
+          "sig": "fn fv(rate: float, nper: int, pmt: float, pv: float, at_start: bool) -> float",
+          "doc": "The future value after nper periods of payment pmt from present value pv: the FV of a spreadsheet.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 203
+        },
+        {
+          "name": "pv",
+          "decl": "fn",
+          "sig": "fn pv(rate: float, nper: int, pmt: float, fv: float, at_start: bool) -> float",
+          "doc": "The present value of nper payments of pmt and a final fv: the PV of a spreadsheet.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 218
+        },
+        {
+          "name": "nper",
+          "decl": "fn",
+          "sig": "fn nper(rate: float, pmt: float, pv: float, fv: float, at_start: bool) -> float",
+          "doc": "The number of periods for payments of pmt to take pv to fv: the NPER of a spreadsheet (fractional). NaN when they never can.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 233
+        },
+        {
+          "name": "ipmt",
+          "decl": "fn",
+          "sig": "fn ipmt(rate: float, period: int, nper: int, pv: float, fv: float, at_start: bool) -> float",
+          "doc": "The interest part of payment number `period` (1-based): IPMT.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 254
+        },
+        {
+          "name": "ppmt",
+          "decl": "fn",
+          "sig": "fn ppmt(rate: float, period: int, nper: int, pv: float, fv: float, at_start: bool) -> float",
+          "doc": "The principal part of payment number `period`: PPMT.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 272
+        },
+        {
+          "name": "effective_rate",
+          "decl": "fn",
+          "sig": "fn effective_rate(nominal: float, n: int) -> float",
+          "doc": "The annual effective rate of a nominal rate compounded n times a year.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 282
+        },
+        {
+          "name": "nominal_rate",
+          "decl": "fn",
+          "sig": "fn nominal_rate(effective: float, n: int) -> float",
+          "doc": "The nominal rate, compounded n times a year, with annual effective rate `effective`.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 291
+        },
+        {
+          "name": "compound",
+          "decl": "fn",
+          "sig": "fn compound(principal: float, rate: float, years: float, n: int) -> float",
+          "doc": "principal grown at the annual `rate` for `years`, compounded n times a year (n <= 0: continuously).",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 300
+        },
+        {
+          "name": "cagr",
+          "decl": "fn",
+          "sig": "fn cagr(start: float, end: float, years: float) -> float",
+          "doc": "The compound annual growth rate taking `start` to `end` over `years`.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 309
+        },
+        {
+          "name": "Payment",
+          "decl": "struct",
+          "sig": "struct Payment",
+          "doc": "One line of an amortisation schedule.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 319
+        },
+        {
+          "name": "amortize",
+          "decl": "fn",
+          "sig": "fn amortize(principal: decimal.Decimal, annual_rate: decimal.Decimal, periods: int, per_year: int) -> result[[Payment], str]",
+          "doc": "The schedule repaying `principal` at `annual_rate` (0.05 for 5%) in `periods` equal payments, `per_year` a year, at the principal's scale. Interest each period is the balance times annual_rate / per_year, rounded half-even to the cent; the payment is the level payment rounded the same way, and the last payment is adjusted so the balance ends at exactly zero. Every line adds up: payment = interest + principal, and the principals sum to the loan.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 334
+        },
+        {
+          "name": "prorate",
+          "decl": "fn",
+          "sig": "fn prorate(amount: decimal.Decimal, weights: [decimal.Decimal]) -> result[[decimal.Decimal], str]",
+          "doc": "`amount` split in proportion to decimal weights (shares, hours, usage), adding up to `amount` exactly at its scale, by largest remainder as decimal.allocate does for int weights.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 386
+        },
+        {
+          "name": "apply_bps",
+          "decl": "fn",
+          "sig": "fn apply_bps(amount: decimal.Decimal, bps: decimal.Decimal, mode: decimal.Rounding) -> opt[decimal.Decimal]",
+          "doc": "amount * bps / 10000, rounded to amount's scale: a fee or spread in basis points. none on overflow.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 406
+        },
+        {
+          "name": "bps_change",
+          "decl": "fn",
+          "sig": "fn bps_change(a: float, b: float) -> float",
+          "doc": "The change from a to b in basis points: 10000 * (b - a) / a.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 418
+        },
+        {
+          "name": "progressive",
+          "decl": "fn",
+          "sig": "fn progressive(amount: decimal.Decimal, bounds: [decimal.Decimal], rates: [decimal.Decimal], scale: int, mode: decimal.Rounding) -> result[decimal.Decimal, str]",
+          "doc": "A marginal (progressive) charge: the part of `amount` in each bracket is charged at that bracket's rate, like income tax or tiered card fees. `bounds` are the ascending upper edges of every bracket but the last; `rates` has one more entry than `bounds`. progressive(1500, [1000], [0.02, 0.01]) is 1000 * 0.02 + 500 * 0.01 = 25. Rounded once, at the end, to `scale`.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 428
+        },
+        {
+          "name": "tiered",
+          "decl": "fn",
+          "sig": "fn tiered(amount: decimal.Decimal, bounds: [decimal.Decimal], rates: [decimal.Decimal], scale: int, mode: decimal.Rounding) -> result[decimal.Decimal, str]",
+          "doc": "A volume-tier charge: the whole amount at the rate of the tier it falls in (bounds as in progressive: the tier is the first bound at or above amount, else the last). Rounded to `scale`.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 470
+        },
+        {
+          "name": "vwap",
+          "decl": "fn",
+          "sig": "fn vwap(prices: [float], volumes: [float]) -> float",
+          "doc": "The volume-weighted average price. NaN when the volumes sum to 0.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 487
+        },
+        {
+          "name": "vwap_decimal",
+          "decl": "fn",
+          "sig": "fn vwap_decimal(prices: [decimal.Decimal], volumes: [decimal.Decimal], scale: int, mode: decimal.Rounding) -> result[decimal.Decimal, str]",
+          "doc": "VWAP in decimals, exact until the final division at `scale`.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 502
+        },
+        {
+          "name": "twap",
+          "decl": "fn",
+          "sig": "fn twap(prices: [float], times: [int], end: int) -> float",
+          "doc": "The time-weighted average price over [times[0], end]: each price holds from its time until the next one (or end). times ascend. NaN when the span is empty.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 530
+        },
+        {
+          "name": "Candle",
+          "decl": "struct",
+          "sig": "struct Candle",
+          "doc": "One bar of open, high, low, close and volume for [start, start + width).",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 549
+        },
+        {
+          "name": "candles",
+          "decl": "fn",
+          "sig": "fn candles(times: [int], prices: [float], volumes: [float], width: int) -> [Candle]",
+          "doc": "Trades (times ascending, in any unit) rolled into candles of `width`, aligned to multiples of width; intervals without trades are skipped.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 561
+        },
+        {
+          "name": "CandleBuilder",
+          "decl": "struct",
+          "sig": "gc struct CandleBuilder",
+          "doc": "Builds candles from a live trade feed, one trade at a time.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 577
+        },
+        {
+          "name": "candle_builder",
+          "decl": "fn",
+          "sig": "fn candle_builder(width: int) -> CandleBuilder",
+          "doc": "A builder of candles `width` wide (at least 1).",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 584
+        },
+        {
+          "name": "CandleBuilder.add",
+          "decl": "fn",
+          "sig": "fn add(self: CandleBuilder, t: int, price: float, volume: float) -> opt[Candle]",
+          "doc": "Adds a trade; returns the previous candle when this trade starts a new interval. A trade earlier than the current candle is counted in it (late prints are not dropped).",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 593
+        },
+        {
+          "name": "CandleBuilder.flush",
+          "decl": "fn",
+          "sig": "fn flush(self: CandleBuilder) -> opt[Candle]",
+          "doc": "The candle in progress, if any, ending it.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 615
+        },
+        {
+          "name": "max_drawdown",
+          "decl": "fn",
+          "sig": "fn max_drawdown(prices: [float]) -> float",
+          "doc": "The largest fall from a running peak, as a fraction of the peak (0.25 for a 25% drawdown). 0 for fewer than two prices or a series that only rises.",
+          "file": "stdlib/math/finance/finance.sl",
+          "line": 627
+        }
+      ]
+    },
     "math/numtheory": {
       "name": "math/numtheory",
       "kind": "source",

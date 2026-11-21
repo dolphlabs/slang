@@ -333,6 +333,10 @@ is an `i32`): `math.sqrt`, `math.pi`, `math.round_to(x, 2)`, and for money
 overflow. `math/stats` (mean, median, stddev, quantile, correlation,
 regression, streaming `running()`/`digest()`, distributions) and
 `math/numtheory` (mod_pow, is_prime, factorize) are written over it.
+`math/finance`: `finance.npv(rate, flows)`, `irr(flows)` (result), `xirr`,
+`pmt/pv/fv/nper(rate, n, ..)` with spreadsheet signs, `amortize(principal,
+annual_rate, periods, per_year)` (decimal `[Payment]` to the cent),
+`progressive`/`tiered` fees, `vwap`, `candles`.
 `rand` is seeded and non-cryptographic, for tests that replay:
 `let r = rand.new(42); rand.below(r, 10); rand.between(r, 1, 6);
 rand.shuffle(r, xs); rand.backoff(r, attempt, base, cap)`. Secrets use
@@ -422,6 +426,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - json: see /packages/json.md
 - log: debug, info, warn, error
 - math: abs, min, max, clamp, sign, is_nan, is_inf, is_finite, is_normal, signbit, copysign, nextafter (+119 more)
+- math/finance: npv, irr, xnpv, xirr, pmt, fv, pv, nper, ipmt, ppmt, effective_rate, nominal_rate (+16 more)
 - math/numtheory: mod_pow, mod_mul, ext_gcd, mod_inv, is_prime, next_prime, prev_prime, primes_below, factorize, divisors, totient, crt (+2 more)
 - math/stats: normal, Normal.pdf, Normal.cdf, Normal.quantile, log_normal, LogNormal.pdf, LogNormal.cdf, LogNormal.quantile, uniform, Uniform.pdf, Uniform.cdf, Uniform.quantile (+67 more)
 - mysql: parse_url, connect, connect_config, close, usable, in_transaction, server_version, connection_id, last_insert_id, affected_rows, ping, sqlstate (+32 more)
