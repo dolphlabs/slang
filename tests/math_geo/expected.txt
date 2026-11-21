@@ -1,0 +1,31 @@
+877465
+879699
+0
+true
+true
+246.7434
+0
+90
+true
+true
+-170
+90
+true
+false
+true
+true
+-180 180 90
+u4pruydqqvj
+u33dc0c
+true
+true
+geo: 'u4pa' is not a geohash
+["u33dc11", "u33dc14", "u33dc0f", "u33dc0d", "u33dc09", "u33dc08", "u33dc0b", "u33dc10"]
+5
+5
+true
+false
+false
+12364
+55598
+111195
