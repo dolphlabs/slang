@@ -5184,6 +5184,484 @@
         }
       ]
     },
+    "math/big": {
+      "name": "math/big",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Int",
+          "decl": "struct",
+          "sig": "gc struct Int",
+          "doc": "",
+          "file": "stdlib/math/big/int.sl",
+          "line": 29
+        },
+        {
+          "name": "zero",
+          "decl": "fn",
+          "sig": "fn zero() -> Int",
+          "doc": "",
+          "file": "stdlib/math/big/int.sl",
+          "line": 39
+        },
+        {
+          "name": "one",
+          "decl": "fn",
+          "sig": "fn one() -> Int",
+          "doc": "",
+          "file": "stdlib/math/big/int.sl",
+          "line": 44
+        },
+        {
+          "name": "from_int",
+          "decl": "fn",
+          "sig": "fn from_int(n: int) -> Int",
+          "doc": "",
+          "file": "stdlib/math/big/int.sl",
+          "line": 48
+        },
+        {
+          "name": "from_u64",
+          "decl": "fn",
+          "sig": "fn from_u64(n: u64) -> Int",
+          "doc": "",
+          "file": "stdlib/math/big/int.sl",
+          "line": 56
+        },
+        {
+          "name": "parse",
+          "decl": "fn",
+          "sig": "fn parse(s: str, base: int) -> result[Int, str]",
+          "doc": "An Int from text in `base` (2 to 36): an optional sign, then digits (either case for letters), with `_` allowed between digits. For base 16, 8 and 2 a 0x, 0o or 0b prefix is accepted too. Text longer than 100,000 characters is refused, to bound the work an input can ask for.",
+          "file": "stdlib/math/big/int.sl",
+          "line": 64
+        },
+        {
+          "name": "from_bytes_be",
+          "decl": "fn",
+          "sig": "fn from_bytes_be(b: bytes) -> Int",
+          "doc": "From big-endian unsigned bytes (as a key or a hash is written).",
+          "file": "stdlib/math/big/int.sl",
+          "line": 155
+        },
+        {
+          "name": "Int.sign",
+          "decl": "fn",
+          "sig": "fn sign(self: Int) -> int",
+          "doc": "",
+          "file": "stdlib/math/big/int.sl",
+          "line": 172
+        },
+        {
+          "name": "Int.is_zero",
+          "decl": "fn",
+          "sig": "fn is_zero(self: Int) -> bool",
+          "doc": "",
+          "file": "stdlib/math/big/int.sl",
+          "line": 182
+        },
+        {
+          "name": "Int.cmp",
+          "decl": "fn",
+          "sig": "fn cmp(self: Int, other: Int) -> int",
+          "doc": "-1, 0 or 1 as self is below, equal to or above other.",
+          "file": "stdlib/math/big/int.sl",
+          "line": 187
+        },
+        {
+          "name": "Int.eq",
+          "decl": "fn",
+          "sig": "fn eq(self: Int, other: Int) -> bool",
+          "doc": "",
+          "file": "stdlib/math/big/int.sl",
+          "line": 201
+        },
+        {
+          "name": "Int.neg",
+          "decl": "fn",
+          "sig": "fn neg(self: Int) -> Int",
+          "doc": "",
+          "file": "stdlib/math/big/int.sl",
+          "line": 205
+        },
+        {
+          "name": "Int.abs",
+          "decl": "fn",
+          "sig": "fn abs(self: Int) -> Int",
+          "doc": "",
+          "file": "stdlib/math/big/int.sl",
+          "line": 209
+        },
+        {
+          "name": "Int.add",
+          "decl": "fn",
+          "sig": "fn add(self: Int, other: Int) -> Int",
+          "doc": "",
+          "file": "stdlib/math/big/int.sl",
+          "line": 213
+        },
+        {
+          "name": "Int.sub",
+          "decl": "fn",
+          "sig": "fn sub(self: Int, other: Int) -> Int",
+          "doc": "",
+          "file": "stdlib/math/big/int.sl",
+          "line": 227
+        },
+        {
+          "name": "Int.mul",
+          "decl": "fn",
+          "sig": "fn mul(self: Int, other: Int) -> Int",
+          "doc": "",
+          "file": "stdlib/math/big/int.sl",
+          "line": 231
+        },
+        {
+          "name": "Int.div",
+          "decl": "fn",
+          "sig": "fn div(self: Int, d: Int) -> opt[Int]",
+          "doc": "The quotient truncated toward zero; none for a zero divisor.",
+          "file": "stdlib/math/big/int.sl",
+          "line": 236
+        },
+        {
+          "name": "Int.rem",
+          "decl": "fn",
+          "sig": "fn rem(self: Int, d: Int) -> opt[Int]",
+          "doc": "The remainder of div: it has self's sign. none for a zero divisor.",
+          "file": "stdlib/math/big/int.sl",
+          "line": 247
+        },
+        {
+          "name": "Int.div_floor",
+          "decl": "fn",
+          "sig": "fn div_floor(self: Int, d: Int) -> opt[Int]",
+          "doc": "The quotient rounded toward negative infinity.",
+          "file": "stdlib/math/big/int.sl",
+          "line": 258
+        },
+        {
+          "name": "Int.modulo",
+          "decl": "fn",
+          "sig": "fn modulo(self: Int, m: Int) -> opt[Int]",
+          "doc": "self mod m in [0, |m|): never negative. none for a zero modulus.",
+          "file": "stdlib/math/big/int.sl",
+          "line": 273
+        },
+        {
+          "name": "Int.pow",
+          "decl": "fn",
+          "sig": "fn pow(self: Int, e: int) -> Int",
+          "doc": "self^e for e >= 0 (square-and-multiply). Panics for a negative e, and for a result above 2^16,000,000 bits, which no program means.",
+          "file": "stdlib/math/big/int.sl",
+          "line": 289
+        },
+        {
+          "name": "Int.mod_pow",
+          "decl": "fn",
+          "sig": "fn mod_pow(self: Int, e: Int, m: Int) -> opt[Int]",
+          "doc": "self^e mod m for e >= 0 and m > 0; none otherwise. An odd modulus (RSA, Diffie-Hellman, most primes) runs Montgomery multiplication with a 4-bit window, no division per step; an even one squares and multiplies with a reduction after each.",
+          "file": "stdlib/math/big/int.sl",
+          "line": 315
+        },
+        {
+          "name": "Int.gcd",
+          "decl": "fn",
+          "sig": "fn gcd(self: Int, other: Int) -> Int",
+          "doc": "The greatest common divisor (never negative; gcd(0, 0) is 0).",
+          "file": "stdlib/math/big/int.sl",
+          "line": 343
+        },
+        {
+          "name": "Int.mod_inv",
+          "decl": "fn",
+          "sig": "fn mod_inv(self: Int, m: Int) -> opt[Int]",
+          "doc": "The inverse of self mod m (x with self * x = 1 mod m), in [0, m); none when it does not exist (m <= 0, or self and m share a factor).",
+          "file": "stdlib/math/big/int.sl",
+          "line": 356
+        },
+        {
+          "name": "Int.sqrt",
+          "decl": "fn",
+          "sig": "fn sqrt(self: Int) -> opt[Int]",
+          "doc": "The integer square root: the largest r with r * r <= self (Newton from above). none for a negative self.",
+          "file": "stdlib/math/big/int.sl",
+          "line": 381
+        },
+        {
+          "name": "Int.shl",
+          "decl": "fn",
+          "sig": "fn shl(self: Int, n: int) -> Int",
+          "doc": "self * 2^n (n >= 0).",
+          "file": "stdlib/math/big/int.sl",
+          "line": 400
+        },
+        {
+          "name": "Int.shr",
+          "decl": "fn",
+          "sig": "fn shr(self: Int, n: int) -> Int",
+          "doc": "self / 2^n rounded toward negative infinity (an arithmetic shift).",
+          "file": "stdlib/math/big/int.sl",
+          "line": 408
+        },
+        {
+          "name": "Int.bit_len",
+          "decl": "fn",
+          "sig": "fn bit_len(self: Int) -> int",
+          "doc": "The number of bits in |self| (0 for zero).",
+          "file": "stdlib/math/big/int.sl",
+          "line": 420
+        },
+        {
+          "name": "Int.bit",
+          "decl": "fn",
+          "sig": "fn bit(self: Int, i: int) -> bool",
+          "doc": "Bit i of the two's-complement form.",
+          "file": "stdlib/math/big/int.sl",
+          "line": 425
+        },
+        {
+          "name": "Int.and",
+          "decl": "fn",
+          "sig": "fn and(self: Int, other: Int) -> Int",
+          "doc": "",
+          "file": "stdlib/math/big/int.sl",
+          "line": 447
+        },
+        {
+          "name": "Int.or",
+          "decl": "fn",
+          "sig": "fn or(self: Int, other: Int) -> Int",
+          "doc": "",
+          "file": "stdlib/math/big/int.sl",
+          "line": 451
+        },
+        {
+          "name": "Int.xor",
+          "decl": "fn",
+          "sig": "fn xor(self: Int, other: Int) -> Int",
+          "doc": "",
+          "file": "stdlib/math/big/int.sl",
+          "line": 455
+        },
+        {
+          "name": "Int.not",
+          "decl": "fn",
+          "sig": "fn not(self: Int) -> Int",
+          "doc": "~self = -self - 1.",
+          "file": "stdlib/math/big/int.sl",
+          "line": 460
+        },
+        {
+          "name": "Int.int_of",
+          "decl": "fn",
+          "sig": "fn int_of(self: Int) -> opt[int]",
+          "doc": "self as an int, none when it does not fit.",
+          "file": "stdlib/math/big/int.sl",
+          "line": 465
+        },
+        {
+          "name": "Int.float_of",
+          "decl": "fn",
+          "sig": "fn float_of(self: Int) -> float",
+          "doc": "The nearest float (rounding the top 64 bits; huge values give infinity).",
+          "file": "stdlib/math/big/int.sl",
+          "line": 490
+        },
+        {
+          "name": "Int.format",
+          "decl": "fn",
+          "sig": "fn format(self: Int, base: int) -> str",
+          "doc": "The digits in `base` (2 to 36, lowercase letters), with a leading '-' when negative.",
+          "file": "stdlib/math/big/int.sl",
+          "line": 517
+        },
+        {
+          "name": "Int.bytes_be",
+          "decl": "fn",
+          "sig": "fn bytes_be(self: Int) -> bytes",
+          "doc": "|self| as big-endian bytes, no leading zero byte (empty for 0).",
+          "file": "stdlib/math/big/int.sl",
+          "line": 569
+        },
+        {
+          "name": "Rat",
+          "decl": "struct",
+          "sig": "gc struct Rat",
+          "doc": "",
+          "file": "stdlib/math/big/rat.sl",
+          "line": 7
+        },
+        {
+          "name": "rat_zero",
+          "decl": "fn",
+          "sig": "fn rat_zero() -> Rat",
+          "doc": "",
+          "file": "stdlib/math/big/rat.sl",
+          "line": 26
+        },
+        {
+          "name": "rat",
+          "decl": "fn",
+          "sig": "fn rat(n: Int, d: Int) -> opt[Rat]",
+          "doc": "n / d, reduced; none for a zero denominator.",
+          "file": "stdlib/math/big/rat.sl",
+          "line": 31
+        },
+        {
+          "name": "rat_from_int",
+          "decl": "fn",
+          "sig": "fn rat_from_int(n: int) -> Rat",
+          "doc": "",
+          "file": "stdlib/math/big/rat.sl",
+          "line": 38
+        },
+        {
+          "name": "rat_parse",
+          "decl": "fn",
+          "sig": "fn rat_parse(s: str) -> result[Rat, str]",
+          "doc": "A fraction from \"3/4\", \"-7\", \"0.125\" or \"-2.5e-3\" (exact: 0.1 is 1/10, not the float nearest it). Exponents are limited to +-10000.",
+          "file": "stdlib/math/big/rat.sl",
+          "line": 44
+        },
+        {
+          "name": "Rat.numerator",
+          "decl": "fn",
+          "sig": "fn numerator(self: Rat) -> Int",
+          "doc": "",
+          "file": "stdlib/math/big/rat.sl",
+          "line": 118
+        },
+        {
+          "name": "Rat.denominator",
+          "decl": "fn",
+          "sig": "fn denominator(self: Rat) -> Int",
+          "doc": "Always positive.",
+          "file": "stdlib/math/big/rat.sl",
+          "line": 123
+        },
+        {
+          "name": "Rat.add",
+          "decl": "fn",
+          "sig": "fn add(self: Rat, o: Rat) -> Rat",
+          "doc": "",
+          "file": "stdlib/math/big/rat.sl",
+          "line": 127
+        },
+        {
+          "name": "Rat.sub",
+          "decl": "fn",
+          "sig": "fn sub(self: Rat, o: Rat) -> Rat",
+          "doc": "",
+          "file": "stdlib/math/big/rat.sl",
+          "line": 131
+        },
+        {
+          "name": "Rat.mul",
+          "decl": "fn",
+          "sig": "fn mul(self: Rat, o: Rat) -> Rat",
+          "doc": "",
+          "file": "stdlib/math/big/rat.sl",
+          "line": 135
+        },
+        {
+          "name": "Rat.div",
+          "decl": "fn",
+          "sig": "fn div(self: Rat, o: Rat) -> opt[Rat]",
+          "doc": "none when dividing by zero.",
+          "file": "stdlib/math/big/rat.sl",
+          "line": 140
+        },
+        {
+          "name": "Rat.neg",
+          "decl": "fn",
+          "sig": "fn neg(self: Rat) -> Rat",
+          "doc": "",
+          "file": "stdlib/math/big/rat.sl",
+          "line": 147
+        },
+        {
+          "name": "Rat.cmp",
+          "decl": "fn",
+          "sig": "fn cmp(self: Rat, o: Rat) -> int",
+          "doc": "",
+          "file": "stdlib/math/big/rat.sl",
+          "line": 151
+        },
+        {
+          "name": "Rat.eq",
+          "decl": "fn",
+          "sig": "fn eq(self: Rat, o: Rat) -> bool",
+          "doc": "",
+          "file": "stdlib/math/big/rat.sl",
+          "line": 155
+        },
+        {
+          "name": "Rat.sign",
+          "decl": "fn",
+          "sig": "fn sign(self: Rat) -> int",
+          "doc": "",
+          "file": "stdlib/math/big/rat.sl",
+          "line": 159
+        },
+        {
+          "name": "Rat.is_int",
+          "decl": "fn",
+          "sig": "fn is_int(self: Rat) -> bool",
+          "doc": "",
+          "file": "stdlib/math/big/rat.sl",
+          "line": 163
+        },
+        {
+          "name": "Rat.floor",
+          "decl": "fn",
+          "sig": "fn floor(self: Rat) -> Int",
+          "doc": "The largest Int at or below the fraction.",
+          "file": "stdlib/math/big/rat.sl",
+          "line": 168
+        },
+        {
+          "name": "Rat.ceil",
+          "decl": "fn",
+          "sig": "fn ceil(self: Rat) -> Int",
+          "doc": "The smallest Int at or above it.",
+          "file": "stdlib/math/big/rat.sl",
+          "line": 173
+        },
+        {
+          "name": "Rat.round",
+          "decl": "fn",
+          "sig": "fn round(self: Rat) -> Int",
+          "doc": "The nearest Int, halves to even.",
+          "file": "stdlib/math/big/rat.sl",
+          "line": 179
+        },
+        {
+          "name": "Rat.float_of",
+          "decl": "fn",
+          "sig": "fn float_of(self: Rat) -> float",
+          "doc": "The nearest float (num and den each rounded once: within a few ulps; exact for fractions whose parts fit 53 bits).",
+          "file": "stdlib/math/big/rat.sl",
+          "line": 191
+        },
+        {
+          "name": "Rat.format",
+          "decl": "fn",
+          "sig": "fn format(self: Rat) -> str",
+          "doc": "\"n/d\", or \"n\" for a whole number.",
+          "file": "stdlib/math/big/rat.sl",
+          "line": 208
+        },
+        {
+          "name": "Rat.format_decimal",
+          "decl": "fn",
+          "sig": "fn format_decimal(self: Rat, places: int) -> str",
+          "doc": "The decimal expansion to `places` digits after the point, rounded half to even.",
+          "file": "stdlib/math/big/rat.sl",
+          "line": 217
+        }
+      ]
+    },
     "math/numtheory": {
       "name": "math/numtheory",
       "kind": "source",
