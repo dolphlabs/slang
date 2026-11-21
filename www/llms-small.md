@@ -335,8 +335,9 @@ regression, streaming `running()`/`digest()`, distributions) and
 `math/numtheory` (mod_pow, is_prime, factorize) are written over it.
 `rand` is seeded and non-cryptographic, for tests that replay:
 `let r = rand.new(42); rand.below(r, 10); rand.between(r, 1, 6);
-rand.shuffle(r, xs); rand.backoff(r, attempt, base, cap)`. Secrets use
-`crypto.rand`.
+rand.shuffle(r, xs); rand.backoff(r, attempt, base, cap)`, `rand.normal(r)`
+and `rand.exponential(r)`; every `math/stats` distribution has `.sample(r)`.
+Secrets use `crypto.rand`.
 The standalone `argon` package provides bounded Argon2id password hashing
 with standard PHC strings; its native crypto calls require OpenSSL 3.2+.
 

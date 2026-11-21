@@ -3874,6 +3874,7 @@ p.quantile(0.99);
 stats.normal(100.0, 15.0).cdf(130.0);        // 0.9772498680518208
 stats.normal(0.0, 1.0).quantile(0.975);      // 1.9599639845400538
 stats.poisson(3.0).pmf(5);
+stats.poisson(3.0).sample(rand.new(42));     // an int, replayable
 ```
 
 - **Center and spread:** `sum` (compensated), `product`, `mean`,
@@ -3890,6 +3891,11 @@ stats.poisson(3.0).pmf(5);
   `digest` `merge`.
 - **Distributions:** `normal`, `log_normal`, `uniform`, `exponential`
   (`pdf`, `cdf`, `quantile`), `poisson` and `binomial` (`pmf`, `cdf`).
+  Each has `sample(r)` for a `rand.Rng`, so a simulation or load
+  generator replays from one seed: the ziggurat for the normal and the
+  exponential, Hörmann's PTRS and BTRS (what numpy and TensorFlow use)
+  for the Poisson and binomial once the mean reaches 10, multiplication
+  or inversion below. All exact, all O(1) on average.
 
 A result with no value for its input -- the mean of no numbers, the
 variance of one, a correlation with a constant list -- is NaN, which
@@ -4003,6 +4009,8 @@ rand.pick(r, xs) ?? fallback;          // none when xs is empty
 // retry number `attempt` (0 first): uniform in [0, min(cap, base * 2^attempt)]
 time.sleep(rand.backoff(r, attempt, 100000000, 30000000000));
 rand.jitter(r, 60000000000, 0.1);      // 60s, give or take 10%
+rand.normal(r);                        // mean 0, stddev 1
+rand.exponential(r) / rate;            // waiting times
 ```
 
 The generator is `xoshiro256**`, seeded through `splitmix64`. The tests pin
@@ -4014,9 +4022,16 @@ of range, since there is no value to return. `backoff` uses full jitter,
 which spreads clients that failed together across the whole interval, and
 saturates at `cap` rather than overflowing. An `Rng` is not locked: give
 each spawned task its own with `rand.fork(r)`, which stays reproducible
-from the parent's seed. `rand.from_os()` seeds from the OS when runs
-should differ. Neither is for secrets: tokens, keys and salts come from
+from the parent's seed. `rand.from_os()` seeds from the OS
+(`/dev/urandom`) when runs should differ; importing `rand` links no
+OpenSSL. Neither is for secrets: tokens, keys and salts come from
 `crypto.rand`, because this generator's outputs reveal its state.
+
+`normal` and `exponential` use the ziggurat method (Marsaglia and Tsang,
+256 layers, the tables `rand_distr` uses): about 99% of draws are one
+64-bit step, a table lookup and a multiply, with no logarithm or
+trigonometry. Tails beyond the base layer use Marsaglia's exact tail
+method. `math/stats` distributions sample through these.
 
 #### `sort`
 
