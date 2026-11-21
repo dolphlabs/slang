@@ -333,16 +333,36 @@ is an `i32`): `math.sqrt`, `math.pi`, `math.round_to(x, 2)`, and for money
 overflow. `math/stats` (mean, median, stddev, quantile, correlation,
 regression, streaming `running()`/`digest()`, distributions) and
 `math/numtheory` (mod_pow, is_prime, factorize) are written over it.
-A/B tests: `stats.two_proportion_z(conv_a, n_a, conv_b, n_b).p_value`,
-`welch_t(xs, ys)`, `chi_square_test(table)`, `wilson(k, n, 0.95)`,
-`sample_size_proportions(p1, p2, 0.05, 0.8)`, `sprt(p0, p1, alpha, beta)`.
+`math/finance`: `finance.npv(rate, flows)`, `irr(flows)` (result), `xirr`,
+`pmt/pv/fv/nper(rate, n, ..)` with spreadsheet signs, `amortize(principal,
+annual_rate, periods, per_year)` (decimal `[Payment]` to the cent),
+`progressive`/`tiered` fees, `vwap`, `candles`.
+`math/interp`: `interp.linear(xs, ys)`, `step`, `monotone` (no overshoot),
+`spline` (each a result of `Curve`), then `c.at(x)`, `c.slope(x)`;
+`interp.grid(xs, ys, values).at(x, y)` is bilinear.
+`math/geo`: `geo.point(lat, lon)`, `geo.distance(a, b)` (metres),
+`bearing`, `destination(p, bearing, m)`, `bounding_box(p, m)` + `in_box`,
+`geohash(p, 7)`, `geohash_neighbors(h)`, `contains(polygon, p)`.
+`math/optimize`: `optimize.brent(f, lo, hi, tol)` (a root; result of
+`Root { x, fx, evals }`), `brent_min(f, a, b, tol)`, `integrate(f, a, b,
+abs_tol, rel_tol)` (infinite bounds allowed); `_with(f, ctx, ..)` forms pass
+data to `f(x, ctx)` since there are no closures.
+`math/shard` maps keys to nodes stably: `shard.jump_str(key, n)`,
+`shard.rendezvous(nodes).pick_str(key)` (opt index; `pick_n_str` for
+replicas), `shard.ring(160)` with `add(name, weight)`/`get_str(key)`,
+`shard.maglev(nodes, 65537).pick_str(key)`.
+`math/sketch` estimates in fixed memory, mergeable across tasks:
+`sketch.hyperloglog(14)` (`add_str`, `count`), `count_min(eps, delta)`,
+`top_k(k)`, `bloom(n, fpp)`, `cuckoo(n)` (with `remove_str`),
+`histogram(max, 7)` (`record`, `quantile(0.99)`, `buckets`), `reservoir(k, r)`.
 `math/vec` is native bulk math on `[float]`/`[f32]`: `vec.dot`, `cosine`,
 `distance`, `normalize` (in place), `vec.top_k_cosine(query, rows, dim, k)`
 over rows stored back to back, `to_f32`, `quantize` (int8) and `dot_q`.
 `rand` is seeded and non-cryptographic, for tests that replay:
 `let r = rand.new(42); rand.below(r, 10); rand.between(r, 1, 6);
-rand.shuffle(r, xs); rand.backoff(r, attempt, base, cap)`. Secrets use
-`crypto.rand`.
+rand.shuffle(r, xs); rand.backoff(r, attempt, base, cap)`, `rand.normal(r)`
+and `rand.exponential(r)`; every `math/stats` distribution has `.sample(r)`.
+Secrets use `crypto.rand`.
 The standalone `argon` package provides bounded Argon2id password hashing
 with standard PHC strings; its native crypto calls require OpenSSL 3.2+.
 
@@ -428,8 +448,14 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - json: see /packages/json.md
 - log: debug, info, warn, error
 - math: abs, min, max, clamp, sign, is_nan, is_inf, is_finite, is_normal, signbit, copysign, nextafter (+119 more)
+- math/finance: npv, irr, xnpv, xirr, pmt, fv, pv, nper, ipmt, ppmt, effective_rate, nominal_rate (+16 more)
+- math/geo: point, distance, distance_exact, bearing, destination, midpoint, bounding_box, in_box, geohash, geohash_box, geohash_decode, geohash_neighbors (+3 more)
+- math/interp: empty, linear, step, monotone, spline, Curve.at, Curve.at_all, Curve.slope, Curve.set_extrapolate, Curve.copy, Curve.size, grid (+1 more)
 - math/numtheory: mod_pow, mod_mul, ext_gcd, mod_inv, is_prime, next_prime, prev_prime, primes_below, factorize, divisors, totient, crt (+2 more)
-- math/stats: normal, Normal.pdf, Normal.cdf, Normal.quantile, log_normal, LogNormal.pdf, LogNormal.cdf, LogNormal.quantile, uniform, Uniform.pdf, Uniform.cdf, Uniform.quantile (+93 more)
+- math/optimize: no_root, no_min, no_integral, bracket, bracket_with, bisect, bisect_with, brent, brent_with, newton, newton_with, newton_safe (+9 more)
+- math/shard: hash_str, hash_int, jump, jump_str, jump_int, rendezvous, rendezvous_weighted, Rendezvous.pick, Rendezvous.pick_n, Rendezvous.pick_str, Rendezvous.pick_int, Rendezvous.pick_n_str (+18 more)
+- math/sketch: bloom, bloom_blocks, decode_bloom, Bloom.add_hash, Bloom.contains_hash, Bloom.add_str, Bloom.add_int, Bloom.add_bytes, Bloom.contains_str, Bloom.contains_int, Bloom.contains_bytes, Bloom.merge (+85 more)
+- math/stats: normal, Normal.pdf, Normal.cdf, Normal.quantile, Normal.sample, log_normal, LogNormal.pdf, LogNormal.cdf, LogNormal.quantile, LogNormal.sample, uniform, Uniform.pdf (+73 more)
 - math/vec: dot, sum, norm, distance, distance2, cosine, argmax, argmin, scale, axpy, add, sub (+11 more)
 - mysql: parse_url, connect, connect_config, close, usable, in_transaction, server_version, connection_id, last_insert_id, affected_rows, ping, sqlstate (+32 more)
 - nats: options, with_creds, connect, connect_with, publish, publish_reply, publish_headers, publish_full, subscribe, queue_subscribe, next_msg, unsubscribe (+15 more)
@@ -437,7 +463,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - os: setenv, unsetenv, environ, pid, hostname, tmpdir, exists, is_dir, is_file, size, mtime, mtime_ns (+6 more)
 - pg: rows_as, parse_url, sqlstate, scram_client_final, connect, connect_config, close, usable, in_transaction, server_param, arg_text, arg_int (+39 more)
 - proc: shutdown_requested, active_tasks, wait_idle, getenv, args, cwd, spawn, kill, wait
-- rand: new, from_os, fork, next_u64, below, between, unit, chance, shuffle, pick, backoff, jitter
+- rand: new, from_os, fork, next_u64, below, between, unit, chance, shuffle, pick, backoff, jitter (+2 more)
 - redis: encode, decode, decode_at, slot, parse_url, connect_config, connect, do, close, usable, ping, echo (+132 more)
 - regex: compile, free, groups, is_match, is_match_bytes, find, find_at, find_bytes, find_bytes_at
 - s3: new_client, from_env, put_object, get_object, get_range, head_object, delete_object, list_objects, create_multipart, upload_part, complete_multipart, abort_multipart (+8 more)

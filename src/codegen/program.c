@@ -1444,6 +1444,7 @@ void gen_function(CG *cg, Package *p, FuncDecl *f) {
     cg->cur_ret = sig->ret_slang;
     cg->cur_pkg = p->name;
     cg->cur_func = f->name;
+    cg->in_leaf_fn = sig->leaf;
 
     for (int j = 0; j < f->nparams; j++) {
         var_redecl_check(cg, f->params[j], f->line);
@@ -1481,8 +1482,18 @@ void gen_function(CG *cg, Package *p, FuncDecl *f) {
     emit_line(cg, "    sl_task *_sl_self = NULL; (void)_sl_self;");
     for (int j = 0; j < f->nparams; j++)
         emit_drop_flag(cg, f->params[j]);
+    size_t body_at = cg->out->len;
     gen_block(cg, f->body);
     emit_scope_drops(cg, 0);
+    /* A collection point in a leaf body runs while every caller's live
+     * values sit unrooted: heap corruption far from here. Fail the
+     * compile instead, whichever emitter put it there. */
+    if (sig->leaf && cg->out->len > body_at &&
+        (strstr(cg->out->data + body_at, "sl_rt_safepoint_enter") ||
+         strstr(cg->out->data + body_at, "sl_rt_poll")))
+        cg_error(f->line,
+                 "internal error: leaf function '%s' emitted a safepoint",
+                 f->name);
     emit_line(cg, "}");
     emit_line(cg, "");
     if (guard) {
@@ -1502,6 +1513,7 @@ void gen_function(CG *cg, Package *p, FuncDecl *f) {
     }
 
     cg->in_function = 0;
+    cg->in_leaf_fn = 0;
     cg->cur_ret = NULL;
     cg->cur_func = NULL;
 }
@@ -1513,6 +1525,7 @@ static void cg_reset_after_error(CG *cg, int indent) {
     cg->indent = indent;
     cg->expect = NULL;
     cg->in_function = 0;
+    cg->in_leaf_fn = 0;
     cg->open_backedge_brackets = 0;
     cg->loop_depth = 0;
     cg->cur_loop_has_bp = 0;

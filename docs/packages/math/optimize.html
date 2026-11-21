@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>math/optimize — slang</title>
+<meta name="description" content="Package math/optimize.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<meta name="theme-color" content="#07080a" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f7f5ef" media="(prefers-color-scheme: light)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="math/optimize">
+<meta property="og:description" content="Package math/optimize.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://slang.dolphlabs.com/packages/math/optimize">
+<meta property="og:image" content="https://slang.dolphlabs.com/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The slang rabbit mark beside the slang wordmark">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://slang.dolphlabs.com/packages/math/optimize">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../../packages/math/optimize.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preload" href="../../fonts/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../../style.css">
+<link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+<link rel="icon" href="../../favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../../apple-touch-icon.png">
+<script>
+/* Before first paint, so a saved light theme never flashes dark. */
+try { var t = localStorage.getItem("slang-theme");
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="nav" data-nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="../../" aria-label="slang home">
+      <img class="logo-on-dark" src="../../brand/slang-logo-light.svg" alt="" width="77" height="32">
+      <img class="logo-on-light" src="../../brand/slang-logo-dark.svg" alt="" width="77" height="32">
+    </a>
+    <nav class="nav-links" aria-label="Primary"><a href="../../guide/">Guide</a><a href="../../concurrency/">Concurrency</a><a class="active" href="../../packages/">Packages</a><a href="../../bench/">Benchmarks</a><a href="../../interop/">C interop</a><a href="../../internals/">Internals</a></nav>
+    <div class="nav-actions">
+      <button class="search-btn" type="button" data-search aria-label="Search the docs" aria-keyshortcuts="Control+K Meta+K /">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <span class="search-label">Search</span>
+        <kbd class="search-kbd">/</kbd>
+      </button>
+      <button class="icon-btn" type="button" data-theme-toggle aria-label="Switch to light theme" title="Switch theme">
+        <svg class="i-sun" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <svg class="i-moon" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.6A8 8 0 1 1 9.4 4a6.4 6.4 0 0 0 10.6 10.6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      </button>
+      <a class="btn btn-ghost btn-sm nav-gh" href="https://github.com/dolphlabs/slang">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span>GitHub</span>
+      </a>
+      <a class="btn btn-light btn-sm nav-start" href="../../#install">Get started</a>
+      <button class="nav-menu" type="button" aria-expanded="false" aria-controls="nav-sheet" aria-label="Menu" data-menu>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6h14M3 10h14M3 14h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </div>
+  <nav class="nav-sheet" id="nav-sheet" aria-label="Menu" hidden><a href="../../guide/">Guide</a><a href="../../concurrency/">Concurrency</a><a class="active" href="../../packages/">Packages</a><a href="../../bench/">Benchmarks</a><a href="../../interop/">C interop</a><a href="../../internals/">Internals</a><a href="https://github.com/dolphlabs/slang">GitHub</a></nav>
+</header>
+
+<div class="docbar">
+  <button class="docbar-btn" type="button" aria-expanded="false" aria-controls="sidebar" data-drawer>
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    <span>Docs</span>
+  </button>
+  <span class="docbar-here">math/optimize</span>
+</div>
+
+<div class="docs">
+  <aside class="sidebar" id="sidebar" aria-label="Documentation">
+    <div class="sidebar-inner"><div class="side-group"><p class="side-title">Start</p><ul class="side-list"><li><a href="../../">Overview</a></li><li><a href="../../guide/">Guide</a></li><li><a href="../../guide/data">Data types</a></li><li><a href="../../guide/errors">Errors</a></li><li><a href="../../guide/functions">Functions</a></li></ul></div><div class="side-group"><p class="side-title">Build</p><ul class="side-list"><li><a href="../../concurrency/">Concurrency</a></li><li><a href="../../testing/">Testing</a></li><li><a href="../../packages/">Packages</a></li><li><a href="../../interop/">C interop</a></li></ul></div><div class="side-group"><p class="side-title">Under the hood</p><ul class="side-list"><li><a href="../../internals/">Internals</a></li><li><a href="../../bench/">Benchmarks</a></li><li><a href="../../limitations/">Limitations</a></li></ul></div><details class="side-group side-pkgs" open><summary>Packages<span class="side-count">52</span></summary><ul class="side-list"><li><a href="../../packages/builder">builder</a></li><li><a href="../../packages/byteutil">byteutil</a></li><li><a href="../../packages/cache">cache</a></li><li><a href="../../packages/compress">compress</a></li><li><a href="../../packages/crypto">crypto</a></li><li><a href="../../packages/csv">csv</a></li><li><a href="../../packages/decimal">decimal</a></li><li><a href="../../packages/encoding">encoding</a></li><li><a href="../../packages/flags">flags</a></li><li><a href="../../packages/fs">fs</a></li><li><a href="../../packages/http">http</a></li><li><a href="../../packages/http2">http2</a></li><li><a href="../../packages/httpc">httpc</a></li><li><a href="../../packages/io">io</a></li><li><a href="../../packages/json">json</a></li><li><a href="../../packages/log">log</a></li><li><a href="../../packages/math">math</a></li><li><a href="../../packages/math/finance">math/finance</a></li><li><a href="../../packages/math/geo">math/geo</a></li><li><a href="../../packages/math/interp">math/interp</a></li><li><a href="../../packages/math/numtheory">math/numtheory</a></li><li><a href="../../packages/math/optimize" aria-current="page">math/optimize</a></li><li><a href="../../packages/math/shard">math/shard</a></li><li><a href="../../packages/math/sketch">math/sketch</a></li><li><a href="../../packages/math/stats">math/stats</a></li><li><a href="../../packages/math/vec">math/vec</a></li><li><a href="../../packages/mysql">mysql</a></li><li><a href="../../packages/nats">nats</a></li><li><a href="../../packages/net">net</a></li><li><a href="../../packages/os">os</a></li><li><a href="../../packages/pg">pg</a></li><li><a href="../../packages/proc">proc</a></li><li><a href="../../packages/rand">rand</a></li><li><a href="../../packages/redis">redis</a></li><li><a href="../../packages/regex">regex</a></li><li><a href="../../packages/s3">s3</a></li><li><a href="../../packages/sigv4">sigv4</a></li><li><a href="../../packages/sort">sort</a></li><li><a href="../../packages/sql">sql</a></li><li><a href="../../packages/strings">strings</a></li><li><a href="../../packages/tar">tar</a></li><li><a href="../../packages/template">template</a></li><li><a href="../../packages/time">time</a></li><li><a href="../../packages/timez">timez</a></li><li><a href="../../packages/toml">toml</a></li><li><a href="../../packages/unicode">unicode</a></li><li><a href="../../packages/uuid">uuid</a></li><li><a href="../../packages/websocket">websocket</a></li><li><a href="../../packages/x509">x509</a></li><li><a href="../../packages/xml">xml</a></li><li><a href="../../packages/yaml">yaml</a></li><li><a href="../../packages/zip">zip</a></li></ul></details></div>
+  </aside>
+  <div class="drawer-scrim" data-scrim hidden></div>
+
+  <main id="main" class="doc-main">
+
+    <article class="content">
+      <nav class="crumbs" aria-label="Breadcrumb"><a href="../../">Docs</a><span class="sep" aria-hidden="true">/</span><a href="../../packages/">Packages</a><span class="sep" aria-hidden="true">/</span><span aria-current="page">math/optimize</span></nav>
+      <header class="page-head">
+        <h1>math/optimize</h1>
+        <p class="tagline">Package math/optimize.</p>
+        <p class="agentline">
+          <a href="../../packages/math/optimize.md">Markdown</a><span aria-hidden="true">·</span><a href="../../llms.txt">llms.txt</a><span aria-hidden="true">·</span><a href="../../api.json">api.json</a>
+        </p>
+      </header>
+<p>Solving f(x) = 0, minimising f and integrating it, in one variable: implied rates, break-even points, the price that maximises revenue, the area under a curve. Written in slang; every routine stops at a tolerance or a fixed budget of evaluations and says which in its error, so none can loop forever whatever f returns (a NaN is an error, not an answer).</p>
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;math/optimize&quot;</span>;
+
+<span class="k">fn</span> <span class="f">f</span>(x: <span class="t">float</span>) -&gt; <span class="t">float</span> { <span class="k">return</span> x * x - <span class="n">2.0</span>; }
+<span class="k">let</span> r = optimize.<span class="f">brent</span>(f, <span class="n">0.0</span>, <span class="n">2.0</span>, <span class="n">1e</span>-<span class="n">12</span>);          <span class="c">// result[Root, str]</span>
+(r ?? optimize.<span class="f">no_root</span>()).x;                         <span class="c">// 1.41421356...</span>
+
+<span class="c">// slang has no closures: a function that needs data takes it second</span>
+<span class="k">struct</span> Loan { pv: <span class="t">float</span>, pmt: <span class="t">float</span>, n: <span class="t">int</span> }
+<span class="k">fn</span> <span class="f">gap</span>(rate: <span class="t">float</span>, l: Loan) -&gt; <span class="t">float</span> { ... }
+optimize.<span class="f">brent_with</span>(gap, loan, <span class="n">0.0001</span>, <span class="n">0.1</span>, <span class="n">1e</span>-<span class="n">12</span>);
+
+optimize.<span class="f">brent_min</span>(f, <span class="n">0.0</span>, <span class="n">10.0</span>, <span class="n">1e</span>-<span class="n">9</span>);              <span class="c">// result[Min, str]</span>
+optimize.<span class="f">integrate</span>(f, <span class="n">0.0</span>, math.inf, <span class="n">1e</span>-<span class="n">10</span>, <span class="n">1e</span>-<span class="n">10</span>);  <span class="c">// result[Integral, str]</span></code></pre></div>
+<ul><li><strong>Roots:</strong> <code>brent</code> (Brent&#x27;s zeroin: superlinear, never slower than bisection; the default), <code>bisect</code>, <code>newton</code> (needs the derivative; fast near a simple root, can diverge from a poor start), <code>newton_safe</code> (Newton kept inside a bracket, bisecting when a step would leave it), <code>bracket</code> (widens a guess until f changes sign).</li><li><strong>Minima</strong> of a unimodal f on [a, b]: <code>brent_min</code> (parabolic steps with golden-section fallbacks, as scipy&#x27;s <code>fminbound</code>), <code>golden</code>. x is good to about sqrt(machine epsilon) relative, the limit for any minimiser.</li><li><strong>Integrals:</strong> <code>integrate</code> (adaptive 7/15-point Gauss-Kronrod as QUADPACK&#x27;s QAG, with infinite bounds mapped onto finite ones) and <code>simpson</code> (adaptive, finite bounds). Each returns the value, an error estimate and the number of evaluations.</li></ul>
+<p>Each routine has a <code>_with</code> form whose f takes a context value of any type as its second argument, for the data a closure would carry.</p>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="root"><div class="api-sig"><code><span class="k">struct</span> Root</code> <span class="src">stdlib/math/optimize/optimize.sl:26</span><a class="anchor" href="#root">#</a></div><p class="api-doc">A root: f(x) is (near) zero. fx is f at x; evals counts calls to f.</p></div><div class="api-item" id="min"><div class="api-sig"><code><span class="k">struct</span> Min</code> <span class="src">stdlib/math/optimize/optimize.sl:33</span><a class="anchor" href="#min">#</a></div><p class="api-doc">A minimum of f on an interval: f(x) = fx.</p></div><div class="api-item" id="integral"><div class="api-sig"><code><span class="k">struct</span> Integral</code> <span class="src">stdlib/math/optimize/optimize.sl:40</span><a class="anchor" href="#integral">#</a></div><p class="api-doc">An integral, with an estimate of its absolute error.</p></div><div class="api-item" id="bracket"><div class="api-sig"><code><span class="k">struct</span> Bracket</code> <span class="src">stdlib/math/optimize/optimize.sl:47</span><a class="anchor" href="#bracket">#</a></div><p class="api-doc">A bracket [lo, hi] with f(lo) and f(hi) of opposite signs (or one 0).</p></div><div class="api-item" id="no-root"><div class="api-sig"><code><span class="k">fn</span> <span class="f">no_root</span>() -&gt; Root</code> <span class="src">stdlib/math/optimize/optimize.sl:53</span><a class="anchor" href="#no-root">#</a></div><p class="api-doc">NaNs, for <code>??</code> defaults: (r ?? optimize.no_root()).x is NaN on error.</p></div><div class="api-item" id="no-min"><div class="api-sig"><code><span class="k">fn</span> <span class="f">no_min</span>() -&gt; Min</code> <span class="src">stdlib/math/optimize/optimize.sl:57</span><a class="anchor" href="#no-min">#</a></div></div><div class="api-item" id="no-integral"><div class="api-sig"><code><span class="k">fn</span> <span class="f">no_integral</span>() -&gt; Integral</code> <span class="src">stdlib/math/optimize/optimize.sl:61</span><a class="anchor" href="#no-integral">#</a></div></div><div class="api-item" id="bracket"><div class="api-sig"><code><span class="k">fn</span> <span class="f">bracket</span>(f: <span class="k">fn</span>(<span class="t">float</span>) -&gt; <span class="t">float</span>, lo: <span class="t">float</span>, hi: <span class="t">float</span>) -&gt; <span class="t">result</span>[Bracket, <span class="t">str</span>]</code> <span class="src">stdlib/math/optimize/optimize.sl:80</span><a class="anchor" href="#bracket">#</a></div><p class="api-doc">Widens [lo, hi] geometrically (by 1.6 each side, up to 50 times) until f changes sign across it.</p></div><div class="api-item" id="bracket-with"><div class="api-sig"><code><span class="k">fn</span> bracket_with[C](f: <span class="k">fn</span>(<span class="t">float</span>, C) -&gt; <span class="t">float</span>, ctx: C, lo: <span class="t">float</span>, hi: <span class="t">float</span>) -&gt; <span class="t">result</span>[Bracket, <span class="t">str</span>]</code> <span class="src">stdlib/math/optimize/optimize.sl:84</span><a class="anchor" href="#bracket-with">#</a></div></div><div class="api-item" id="bisect"><div class="api-sig"><code><span class="k">fn</span> <span class="f">bisect</span>(f: <span class="k">fn</span>(<span class="t">float</span>) -&gt; <span class="t">float</span>, lo: <span class="t">float</span>, hi: <span class="t">float</span>, tol: <span class="t">float</span>) -&gt; <span class="t">result</span>[Root, <span class="t">str</span>]</code> <span class="src">stdlib/math/optimize/optimize.sl:115</span><a class="anchor" href="#bisect">#</a></div><p class="api-doc">Bisection: halves [lo, hi] until it is within tol. Slow (one bit per step) but certain; prefer brent.</p></div><div class="api-item" id="bisect-with"><div class="api-sig"><code><span class="k">fn</span> bisect_with[C](f: <span class="k">fn</span>(<span class="t">float</span>, C) -&gt; <span class="t">float</span>, ctx: C, lo: <span class="t">float</span>, hi: <span class="t">float</span>, tol: <span class="t">float</span>) -&gt; <span class="t">result</span>[Root, <span class="t">str</span>]</code> <span class="src">stdlib/math/optimize/optimize.sl:119</span><a class="anchor" href="#bisect-with">#</a></div></div><div class="api-item" id="brent"><div class="api-sig"><code><span class="k">fn</span> <span class="f">brent</span>(f: <span class="k">fn</span>(<span class="t">float</span>) -&gt; <span class="t">float</span>, lo: <span class="t">float</span>, hi: <span class="t">float</span>, tol: <span class="t">float</span>) -&gt; <span class="t">result</span>[Root, <span class="t">str</span>]</code> <span class="src">stdlib/math/optimize/optimize.sl:162</span><a class="anchor" href="#brent">#</a></div><p class="api-doc">Brent&#x27;s method (Brent 1973, the zeroin of netlib): inverse quadratic interpolation and secant steps, falling back to bisection whenever they would not shrink the bracket fast enough. Superlinear on smooth f, never slower than bisection. The default root finder.</p></div><div class="api-item" id="brent-with"><div class="api-sig"><code><span class="k">fn</span> brent_with[C](f: <span class="k">fn</span>(<span class="t">float</span>, C) -&gt; <span class="t">float</span>, ctx: C, lo: <span class="t">float</span>, hi: <span class="t">float</span>, tol: <span class="t">float</span>) -&gt; <span class="t">result</span>[Root, <span class="t">str</span>]</code> <span class="src">stdlib/math/optimize/optimize.sl:166</span><a class="anchor" href="#brent-with">#</a></div></div><div class="api-item" id="newton"><div class="api-sig"><code><span class="k">fn</span> <span class="f">newton</span>(f: <span class="k">fn</span>(<span class="t">float</span>) -&gt; <span class="t">float</span>, df: <span class="k">fn</span>(<span class="t">float</span>) -&gt; <span class="t">float</span>, x0: <span class="t">float</span>, tol: <span class="t">float</span>) -&gt; <span class="t">result</span>[Root, <span class="t">str</span>]</code> <span class="src">stdlib/math/optimize/optimize.sl:258</span><a class="anchor" href="#newton">#</a></div><p class="api-doc">Newton&#x27;s method from x0 with derivative df: quadratic convergence near a simple root, but it can diverge from a poor start. Use newton_safe when a bracket is known.</p></div><div class="api-item" id="newton-with"><div class="api-sig"><code><span class="k">fn</span> newton_with[C, D](f: <span class="k">fn</span>(<span class="t">float</span>, C) -&gt; <span class="t">float</span>, df: <span class="k">fn</span>(<span class="t">float</span>, D) -&gt; <span class="t">float</span>, ctx: C, x0: <span class="t">float</span>, tol: <span class="t">float</span>, dctx: D) -&gt; <span class="t">result</span>[Root, <span class="t">str</span>]</code> <span class="src">stdlib/math/optimize/optimize.sl:264</span><a class="anchor" href="#newton-with">#</a></div><p class="api-doc">newton with data: f and df each take ctx. (The derivative&#x27;s own data is passed as dctx, so f and df can differ in what they need.)</p></div><div class="api-item" id="newton-safe"><div class="api-sig"><code><span class="k">fn</span> <span class="f">newton_safe</span>(f: <span class="k">fn</span>(<span class="t">float</span>) -&gt; <span class="t">float</span>, df: <span class="k">fn</span>(<span class="t">float</span>) -&gt; <span class="t">float</span>, lo: <span class="t">float</span>, hi: <span class="t">float</span>, tol: <span class="t">float</span>) -&gt; <span class="t">result</span>[Root, <span class="t">str</span>]</code> <span class="src">stdlib/math/optimize/optimize.sl:296</span><a class="anchor" href="#newton-safe">#</a></div><p class="api-doc">Safeguarded Newton (rtsafe): Newton steps that stay inside a bracket [lo, hi] where f changes sign, with bisection whenever a step would leave it or shrink it too slowly. Fast and certain.</p></div><div class="api-item" id="newton-safe-with"><div class="api-sig"><code><span class="k">fn</span> newton_safe_with[C, D](f: <span class="k">fn</span>(<span class="t">float</span>, C) -&gt; <span class="t">float</span>, df: <span class="k">fn</span>(<span class="t">float</span>, D) -&gt; <span class="t">float</span>, ctx: C, lo: <span class="t">float</span>, hi: <span class="t">float</span>, tol: <span class="t">float</span>, dctx: D) -&gt; <span class="t">result</span>[Root, <span class="t">str</span>]</code> <span class="src">stdlib/math/optimize/optimize.sl:300</span><a class="anchor" href="#newton-safe-with">#</a></div></div><div class="api-item" id="golden"><div class="api-sig"><code><span class="k">fn</span> <span class="f">golden</span>(f: <span class="k">fn</span>(<span class="t">float</span>) -&gt; <span class="t">float</span>, a: <span class="t">float</span>, b: <span class="t">float</span>, tol: <span class="t">float</span>) -&gt; <span class="t">result</span>[Min, <span class="t">str</span>]</code> <span class="src">stdlib/math/optimize/optimize.sl:367</span><a class="anchor" href="#golden">#</a></div><p class="api-doc">Golden-section search for the minimum of a unimodal f on [a, b]: the interval shrinks by 0.618 per evaluation. Needs no derivative and no smoothness; prefer brent_min for smooth f.</p></div><div class="api-item" id="golden-with"><div class="api-sig"><code><span class="k">fn</span> golden_with[C](f: <span class="k">fn</span>(<span class="t">float</span>, C) -&gt; <span class="t">float</span>, ctx: C, a: <span class="t">float</span>, b: <span class="t">float</span>, tol: <span class="t">float</span>) -&gt; <span class="t">result</span>[Min, <span class="t">str</span>]</code> <span class="src">stdlib/math/optimize/optimize.sl:371</span><a class="anchor" href="#golden-with">#</a></div></div><div class="api-item" id="brent-min"><div class="api-sig"><code><span class="k">fn</span> <span class="f">brent_min</span>(f: <span class="k">fn</span>(<span class="t">float</span>) -&gt; <span class="t">float</span>, a: <span class="t">float</span>, b: <span class="t">float</span>, tol: <span class="t">float</span>) -&gt; <span class="t">result</span>[Min, <span class="t">str</span>]</code> <span class="src">stdlib/math/optimize/optimize.sl:412</span><a class="anchor" href="#brent-min">#</a></div><p class="api-doc">Brent&#x27;s minimisation (Brent 1973, localmin; scipy&#x27;s fminbound): parabolic interpolation through the best three points, golden-section steps when a parabola is not trustworthy. On [a, b], for unimodal f.</p></div><div class="api-item" id="brent-min-with"><div class="api-sig"><code><span class="k">fn</span> brent_min_with[C](f: <span class="k">fn</span>(<span class="t">float</span>, C) -&gt; <span class="t">float</span>, ctx: C, a0: <span class="t">float</span>, b0: <span class="t">float</span>, tol: <span class="t">float</span>) -&gt; <span class="t">result</span>[Min, <span class="t">str</span>]</code> <span class="src">stdlib/math/optimize/optimize.sl:416</span><a class="anchor" href="#brent-min-with">#</a></div></div><div class="api-item" id="simpson"><div class="api-sig"><code><span class="k">fn</span> <span class="f">simpson</span>(f: <span class="k">fn</span>(<span class="t">float</span>) -&gt; <span class="t">float</span>, a: <span class="t">float</span>, b: <span class="t">float</span>, tol: <span class="t">float</span>) -&gt; <span class="t">result</span>[Integral, <span class="t">str</span>]</code> <span class="src">stdlib/math/optimize/optimize.sl:512</span><a class="anchor" href="#simpson">#</a></div><p class="api-doc">Adaptive Simpson&#x27;s rule: splits wherever the two halves disagree with the whole by more than tol (absolute), with Richardson&#x27;s correction. For smooth f on a finite interval.</p></div><div class="api-item" id="simpson-with"><div class="api-sig"><code><span class="k">fn</span> simpson_with[C](f: <span class="k">fn</span>(<span class="t">float</span>, C) -&gt; <span class="t">float</span>, ctx: C, a: <span class="t">float</span>, b: <span class="t">float</span>, tol: <span class="t">float</span>) -&gt; <span class="t">result</span>[Integral, <span class="t">str</span>]</code> <span class="src">stdlib/math/optimize/optimize.sl:516</span><a class="anchor" href="#simpson-with">#</a></div></div><div class="api-item" id="integrate"><div class="api-sig"><code><span class="k">fn</span> <span class="f">integrate</span>(f: <span class="k">fn</span>(<span class="t">float</span>) -&gt; <span class="t">float</span>, a: <span class="t">float</span>, b: <span class="t">float</span>, abs_tol: <span class="t">float</span>, rel_tol: <span class="t">float</span>) -&gt; <span class="t">result</span>[Integral, <span class="t">str</span>]</code> <span class="src">stdlib/math/optimize/optimize.sl:593</span><a class="anchor" href="#integrate">#</a></div><p class="api-doc">Adaptive Gauss-Kronrod (7-point Gauss, 15-point Kronrod, as QUADPACK&#x27;s QAG): the interval with the largest error estimate is halved until the total error is within max(abs_tol, rel_tol * |integral|). Infinite bounds are mapped onto a finite interval (x = t / (1 - t^2) and its one-sided forms). The general-purpose integrator.</p></div><div class="api-item" id="integrate-with"><div class="api-sig"><code><span class="k">fn</span> integrate_with[C](f: <span class="k">fn</span>(<span class="t">float</span>, C) -&gt; <span class="t">float</span>, ctx: C, a: <span class="t">float</span>, b: <span class="t">float</span>, abs_tol: <span class="t">float</span>, rel_tol: <span class="t">float</span>) -&gt; <span class="t">result</span>[Integral, <span class="t">str</span>]</code> <span class="src">stdlib/math/optimize/optimize.sl:597</span><a class="anchor" href="#integrate-with">#</a></div></div></div>
+<nav class="pager" aria-label="Previous and next"><a class="prev" href="../../packages/math/numtheory"><span class="dir">Previous</span><span class="name">math/numtheory</span></a><a class="next" href="../../packages/math/shard"><span class="dir">Next</span><span class="name">math/shard</span></a></nav>
+    </article>
+  </main>
+
+  <aside class="toc" aria-label="On this page">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+
+<footer class="foot">
+  <div class="foot-inner">
+    <a class="foot-logo" href="../../" aria-label="slang home">
+      <img class="logo-on-dark" src="../../brand/slang-icon-light.svg" alt="" width="28" height="28">
+      <img class="logo-on-light" src="../../brand/slang-icon-dark.svg" alt="" width="28" height="28">
+    </a>
+    <p class="foot-by">Built and maintained by
+      <a href="https://dolphlabs.com" rel="noopener">Dolphlabs</a> · Dolph Tech Limited</p>
+    <p class="foot-note">Generated from the repository by <code>www/build.py</code>:
+      the guide from <code>README.md</code>, the API from the compiler's own
+      signature tables and the <code>pub</code> declarations in
+      <code>stdlib/</code>. Nothing here is written twice.</p>
+  </div>
+</footer>
+
+<div class="palette" id="palette" role="dialog" aria-modal="true" aria-label="Search the docs" hidden>
+  <div class="palette-box">
+    <div class="palette-field">
+      <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <input id="palette-input" type="search" placeholder="Search pages, packages and functions" autocomplete="off" spellcheck="false"
+             role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list">
+      <kbd>esc</kbd>
+    </div>
+    <div class="palette-list" id="palette-list" role="listbox" aria-label="Results"></div>
+    <div class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+
+<script src="../../app.js" defer></script>
+</body>
+</html>
