@@ -1,5 +1,11 @@
 # todo
 
+- [x] **`oidc` (2026-11-22, feat/oidc).** OAuth 2.0 / OpenID Connect
+  client: discovery with issuer and HTTPS checks, PKCE (S256),
+  authorization URLs, code exchange, refresh, client credentials, and
+  ID-token verification (RS256/ES256 against cached JWKS with rate-limited
+  refetch on rotation; issuer, audience, azp, expiry and nonce). Comes
+  with a small dynamic JSON reader, as ID-token claims vary in shape.
 - [x] **`acme` (2026-11-22, feat/acme).** An RFC 8555 client: ES256 JWS
   with replay nonces (badNonce retried), account registration, orders,
   http-01 challenges served from a store the program's handler answers,
