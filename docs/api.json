@@ -10616,6 +10616,13 @@
           "sig": "proc.spawn([str], [str], str, int) -> result[int,str]"
         },
         {
+          "name": "runtime_stats",
+          "params": [],
+          "ret": "[int]",
+          "tls": false,
+          "sig": "proc.runtime_stats() -> [int]"
+        },
+        {
           "name": "kill",
           "params": [
             "int",
@@ -12149,6 +12156,28 @@
           "ret": "[int]",
           "tls": false,
           "sig": "regex.find_bytes_at(rawptr, bytes, int) -> [int]"
+        }
+      ]
+    },
+    "runtime": {
+      "name": "runtime",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Stats",
+          "decl": "struct",
+          "sig": "struct Stats",
+          "doc": "",
+          "file": "stdlib/runtime/runtime.sl",
+          "line": 17
+        },
+        {
+          "name": "stats",
+          "decl": "fn",
+          "sig": "fn stats() -> Stats",
+          "doc": "",
+          "file": "stdlib/runtime/runtime.sl",
+          "line": 30
         }
       ]
     },
