@@ -48,6 +48,7 @@ Start with /llms-small.txt: the whole language on one page, about 3k tokens, eno
 - [mysql](packages/mysql.md): Package mysql.
 - [nats](packages/nats.md): Package nats.
 - [net](packages/net.md): Package net.
+- [oidc](packages/oidc.md): Package oidc.
 - [os](packages/os.md): Package os.
 - [pg](packages/pg.md): Package pg.
 - [proc](packages/proc.md): Package proc.

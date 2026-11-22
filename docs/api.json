@@ -9921,6 +9921,132 @@
         }
       ]
     },
+    "oidc": {
+      "name": "oidc",
+      "kind": "source",
+      "items": [
+        {
+          "name": "JValue",
+          "decl": "struct",
+          "sig": "gc struct JValue",
+          "doc": "",
+          "file": "stdlib/oidc/json.sl",
+          "line": 14
+        },
+        {
+          "name": "Provider",
+          "decl": "struct",
+          "sig": "struct Provider",
+          "doc": "",
+          "file": "stdlib/oidc/oidc.sl",
+          "line": 38
+        },
+        {
+          "name": "Client",
+          "decl": "struct",
+          "sig": "gc struct Client",
+          "doc": "",
+          "file": "stdlib/oidc/oidc.sl",
+          "line": 53
+        },
+        {
+          "name": "Pkce",
+          "decl": "struct",
+          "sig": "struct Pkce",
+          "doc": "",
+          "file": "stdlib/oidc/oidc.sl",
+          "line": 65
+        },
+        {
+          "name": "Tokens",
+          "decl": "struct",
+          "sig": "struct Tokens",
+          "doc": "",
+          "file": "stdlib/oidc/oidc.sl",
+          "line": 70
+        },
+        {
+          "name": "Claims",
+          "decl": "struct",
+          "sig": "struct Claims",
+          "doc": "",
+          "file": "stdlib/oidc/oidc.sl",
+          "line": 79
+        },
+        {
+          "name": "discover",
+          "decl": "fn",
+          "sig": "fn discover(issuer: str, deadline: until) -> result[Provider, str]",
+          "doc": "The provider's configuration from its discovery document. Its issuer must equal the one asked for, and endpoints must be https (http is allowed only on localhost, for tests).",
+          "file": "stdlib/oidc/oidc.sl",
+          "line": 96
+        },
+        {
+          "name": "client",
+          "decl": "fn",
+          "sig": "fn client(p: Provider, client_id: str, client_secret: str, redirect_uri: str) -> Client",
+          "doc": "",
+          "file": "stdlib/oidc/oidc.sl",
+          "line": 116
+        },
+        {
+          "name": "pkce",
+          "decl": "fn",
+          "sig": "fn pkce() -> result[Pkce, str]",
+          "doc": "A PKCE verifier (keep it in the session) and its S256 challenge.",
+          "file": "stdlib/oidc/oidc.sl",
+          "line": 124
+        },
+        {
+          "name": "random_token",
+          "decl": "fn",
+          "sig": "fn random_token() -> result[str, str]",
+          "doc": "32 random bytes, base64url: for state and nonce.",
+          "file": "stdlib/oidc/oidc.sl",
+          "line": 132
+        },
+        {
+          "name": "authorize_url",
+          "decl": "fn",
+          "sig": "fn authorize_url(o: Client, scopes: [str], state: str, nonce: str, pk: Pkce) -> str",
+          "doc": "Where to send the browser to sign in.",
+          "file": "stdlib/oidc/oidc.sl",
+          "line": 139
+        },
+        {
+          "name": "exchange",
+          "decl": "fn",
+          "sig": "fn exchange(o: Client, code: str, verifier: str, deadline: until) -> result[Tokens, str]",
+          "doc": "Trades an authorization code (with its PKCE verifier) for tokens.",
+          "file": "stdlib/oidc/oidc.sl",
+          "line": 150
+        },
+        {
+          "name": "refresh",
+          "decl": "fn",
+          "sig": "fn refresh(o: Client, refresh_token: str, deadline: until) -> result[Tokens, str]",
+          "doc": "",
+          "file": "stdlib/oidc/oidc.sl",
+          "line": 156
+        },
+        {
+          "name": "client_credentials",
+          "decl": "fn",
+          "sig": "fn client_credentials(o: Client, scopes: [str], deadline: until) -> result[Tokens, str]",
+          "doc": "Tokens for the client itself (service to service).",
+          "file": "stdlib/oidc/oidc.sl",
+          "line": 162
+        },
+        {
+          "name": "verify_id_token",
+          "decl": "fn",
+          "sig": "fn verify_id_token(o: Client, token: str, nonce: str, deadline: until) -> result[Claims, str]",
+          "doc": "Checks an ID token and returns its claims.",
+          "file": "stdlib/oidc/oidc.sl",
+          "line": 169
+        }
+      ]
+    },
     "os": {
       "name": "os",
       "kind": "native",
