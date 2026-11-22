@@ -268,7 +268,7 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg mysql redis regex
 strings unicode encoding compress math math/vec decimal rand builder byteutil flags sort
-uuid http http2 httpc websocket template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
+uuid http http2 httpc websocket envelope template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 `xml.parse(text)` gives the root `xml.Node` (`name`, `local`, `ns`, `attrs`, `children`);
 `n.find("a/b")`, `n.find_all(path)`, `n.child_text("link")`, `n.attr("id")`; DOCTYPE refused.
 `xml.element("a").set_attr("k", "v").add_text("t")` and `xml.write(n)` build one.
@@ -445,6 +445,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - csv: options, parse, parse_with, parse_bytes, new_reader, feed, end, finished, line, next, to_maps, write_options (+3 more)
 - decimal: zero, from_int, from_units, parse, parse_bytes, from_float, scale_of, precision, is_zero, is_neg, sign, format (+22 more)
 - encoding: hex_encode, hex_decode, base64_encode, base64_decode, base64url_encode, base64url_decode, url_encode, url_decode, form_encode, form_decode, query_get, query_keys (+11 more)
+- envelope: keyring, add_key, use_key, remove_key, seal, open, key_id, rewrap
 - flags: new, Set.add_str, Set.add_int, Set.add_float, Set.add_bool, Set.add_list, Set.require, Set.set_takes, Set.stop_at_first_arg, Set.parse, Set.parse_or_exit, Set.usage (+8 more)
 - fs: open, create, read, pread, write, close, mkdir, realpath, fstat
 - http: header, header_or, headers, request, parse_frame, method_is, method_is_at, path_is, path_is_at, path_param, path_param_at, frame_method (+40 more)

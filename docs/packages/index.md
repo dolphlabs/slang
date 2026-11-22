@@ -2575,6 +2575,32 @@ that case.
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
 
+#### `envelope`
+
+Envelope encryption for stored data: each value gets its own random data
+key, stored wrapped by a key-encryption key named by an id. Rotating the
+key-encryption key then rewrites a few dozen bytes per value, not the
+value, and old keys can stay for reading.
+
+```slang
+import "envelope";
+
+let kr = envelope.keyring();
+envelope.add_key(kr, "2026-11", key_from_kms);         // 32 bytes
+let box = envelope.seal(kr, to_bytes(ssn), to_bytes("user:42"));
+let back = envelope.open(kr, box ?? b"", to_bytes("user:42"));
+
+envelope.add_key(kr, "2027-01", next_key);              // now the sealing key
+let moved = envelope.rewrap(kr, box ?? b"");            // value untouched
+```
+
+Both layers are AES-256-GCM through `crypto.seal`, so nonces are always
+fresh. The aad binds a value to its context, so a box sealed for
+`"user:42"` will not open as `"user:43"`. The wrapped data key is bound
+to its key id. `key_id(box)` says which key sealed a box, `use_key`
+picks the sealing key, and `remove_key` drops an old one (never the
+current one).
+
 #### `websocket`
 
 A WebSocket client (RFC 6455) over `ws://` and `wss://`, with
@@ -4157,6 +4183,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [csv](packages/csv.md) -- source package, 18 public items
 - [decimal](packages/decimal.md) -- source package, 37 public items
 - [encoding](packages/encoding.md) -- compiler-provided, 23 public items
+- [envelope](packages/envelope.md) -- source package, 9 public items
 - [flags](packages/flags.md) -- source package, 23 public items
 - [fs](packages/fs.md) -- compiler-provided, 9 public items
 - [http](packages/http.md) -- source package, 58 public items

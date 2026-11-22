@@ -1678,6 +1678,84 @@
         }
       ]
     },
+    "envelope": {
+      "name": "envelope",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Keyring",
+          "decl": "struct",
+          "sig": "gc struct Keyring",
+          "doc": "",
+          "file": "stdlib/envelope/envelope.sl",
+          "line": 25
+        },
+        {
+          "name": "keyring",
+          "decl": "fn",
+          "sig": "fn keyring() -> Keyring",
+          "doc": "",
+          "file": "stdlib/envelope/envelope.sl",
+          "line": 31
+        },
+        {
+          "name": "add_key",
+          "decl": "fn",
+          "sig": "fn add_key(kr: Keyring, id: str, key: bytes) -> result[bool, str]",
+          "doc": "Adds a 32-byte key-encryption key under id (1 to 255 bytes) and makes it the one new values are sealed with.",
+          "file": "stdlib/envelope/envelope.sl",
+          "line": 38
+        },
+        {
+          "name": "use_key",
+          "decl": "fn",
+          "sig": "fn use_key(kr: Keyring, id: str) -> result[bool, str]",
+          "doc": "Makes an already added key the one new values are sealed with.",
+          "file": "stdlib/envelope/envelope.sl",
+          "line": 50
+        },
+        {
+          "name": "remove_key",
+          "decl": "fn",
+          "sig": "fn remove_key(kr: Keyring, id: str) -> result[bool, str]",
+          "doc": "Forgets a key: values sealed with it no longer open. Refused for the current key.",
+          "file": "stdlib/envelope/envelope.sl",
+          "line": 63
+        },
+        {
+          "name": "seal",
+          "decl": "fn",
+          "sig": "fn seal(kr: Keyring, plaintext: bytes, aad: bytes) -> result[bytes, str]",
+          "doc": "",
+          "file": "stdlib/envelope/envelope.sl",
+          "line": 74
+        },
+        {
+          "name": "open",
+          "decl": "fn",
+          "sig": "fn open(kr: Keyring, box: bytes, aad: bytes) -> result[bytes, str]",
+          "doc": "",
+          "file": "stdlib/envelope/envelope.sl",
+          "line": 91
+        },
+        {
+          "name": "key_id",
+          "decl": "fn",
+          "sig": "fn key_id(box: bytes) -> result[str, str]",
+          "doc": "The id of the key a box was sealed with.",
+          "file": "stdlib/envelope/envelope.sl",
+          "line": 102
+        },
+        {
+          "name": "rewrap",
+          "decl": "fn",
+          "sig": "fn rewrap(kr: Keyring, box: bytes) -> result[bytes, str]",
+          "doc": "The box with its data key wrapped by the current key instead; the sealed value itself is unchanged. For rotating keys over stored data.",
+          "file": "stdlib/envelope/envelope.sl",
+          "line": 110
+        }
+      ]
+    },
     "flags": {
       "name": "flags",
       "kind": "source",
