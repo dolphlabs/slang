@@ -2615,6 +2615,42 @@ that case.
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
 
+#### `protobuf`
+
+The Protocol Buffers wire format, written and read field by field
+without generated code: for talking to a gRPC or protobuf service whose
+messages are few, or for building a codec on top.
+
+```slang
+import "protobuf";
+
+// message User { int64 id = 1; string name = 2; repeated sint32 deltas = 3; }
+let w = protobuf.writer();
+protobuf.write_int64(w, 1, 42);
+protobuf.write_string(w, 2, "ada");
+protobuf.write_packed_sint(w, 3, [-1, 5, -9]);
+let data = protobuf.finish(w);
+
+let r = protobuf.reader(data);
+while protobuf.more(r) {
+    let fr = protobuf.next(r);              // field number and wire type
+    guard let f = fr else { break; }
+    if f.num == 2 {
+        name = protobuf.read_string(r) ?? "";
+    } else {
+        protobuf.skip(r, f.wire);           // a field this reader does not use
+    }
+}
+```
+
+There are writers for every scalar type (`write_int64`,
+`write_uint64`, `write_sint` with zigzag, `write_bool`, `write_fixed64`,
+`write_fixed32`, `write_double`, `write_float`), plus `write_bytes`,
+`write_string` and packed repeated fields. A nested message is its own
+`Writer`, passed to `write_bytes`. The readers mirror them;
+`read_packed_*` also accept an unpacked element, as parsers must. Lengths
+are checked against the input and varints against their ten-byte limit.
+Groups (wire types 3 and 4) are not read.
 #### `pool`
 
 A bounded pool of connections (or any costly resource) shared by many
@@ -4298,6 +4334,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [pg](packages/pg.md) -- source package, 58 public items
 - [pool](packages/pool.md) -- source package, 11 public items
 - [proc](packages/proc.md) -- compiler-provided, 9 public items
+- [protobuf](packages/protobuf.md) -- source package, 40 public items
 - [rand](packages/rand.md) -- source package, 15 public items
 - [redis](packages/redis.md) -- source package, 161 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
