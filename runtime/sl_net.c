@@ -40,7 +40,21 @@
 static void sl_net_set_nonblocking(int fd) {
     int fl = fcntl(fd, F_GETFL, 0);
     if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+    /* Every socket the runtime makes passes through here, so this is also
+     * where it stops leaking into child processes: without FD_CLOEXEC,
+     * proc.spawn's children inherited every listener and connection the
+     * program had open, holding ports and peers open after the program
+     * closed them. Linux sockets get SOCK_CLOEXEC at creation as well
+     * (SL_SOCK_CLOEXEC); an accepted one, and every socket on macOS, gets
+     * the flag here, a few instructions after it exists. */
+    fcntl(fd, F_SETFD, FD_CLOEXEC);
 }
+
+#ifdef SOCK_CLOEXEC
+#define SL_SOCK_CLOEXEC SOCK_CLOEXEC
+#else
+#define SL_SOCK_CLOEXEC 0
+#endif
 
 /* TLS parks on the same reactor (WANT_READ/WANT_WRITE). FDs stay
  * non-blocking; sl_net_tls_* retries through sl_reactor_wait. */
@@ -1912,7 +1926,7 @@ static sl_res_i32_str *sl_net_listen(int port) {
  * precisely the collapse the error model says not to do. */
 static int sl_net_listen_fd(int port, int reuse_port, int *err) {
     *err = 0;
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    int fd = socket(AF_INET, SOCK_STREAM | SL_SOCK_CLOEXEC, 0);
     if (fd < 0) { *err = errno; return -1; }
     int one = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
@@ -1983,7 +1997,7 @@ static sl_res_i32_str *sl_net_accept(int lfd) {
  * deadline). */
 static int sl_net_connect_addr(struct sockaddr *addr, socklen_t alen,
                                int family, sl_until u, int *err) {
-    int fd = socket(family, SOCK_STREAM, 0);
+    int fd = socket(family, SOCK_STREAM | SL_SOCK_CLOEXEC, 0);
     if (fd < 0) { *err = errno; return -1; }
     sl_net_set_nonblocking(fd);
     if (connect(fd, addr, alen) == 0) {
@@ -2103,7 +2117,7 @@ static int sl_net_dial_fd(const char *host, int port, sl_until u, int *err,
     while (winner < 0) {
         if (next < n && (nf == 0 || sl_now_ns() >= started + SL_HE_DELAY_NS)) {
             struct addrinfo *a = order[next++];
-            int fd = socket(a->ai_family, SOCK_STREAM, 0);
+            int fd = socket(a->ai_family, SOCK_STREAM | SL_SOCK_CLOEXEC, 0);
             if (fd < 0) { last = errno; continue; }
             sl_net_set_nonblocking(fd);
             if (connect(fd, a->ai_addr, a->ai_addrlen) == 0) {
@@ -2223,7 +2237,7 @@ static sl_res_i32_str *sl_net_listen_unix(const char *path) {
     struct sockaddr_un sa;
     const char *why = NULL;
     if (sl_net_unix_addr(path, &sa, &why) != 0) return sl_net_err_i32(why);
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    int fd = socket(AF_UNIX, SOCK_STREAM | SL_SOCK_CLOEXEC, 0);
     if (fd < 0) return sl_net_err_i32(strerror(errno));
     if (bind(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0 ||
         listen(fd, 1024) != 0) {

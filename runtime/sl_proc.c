@@ -5,8 +5,10 @@
 #include <sys/wait.h>
 #include <sys/types.h>
 #include <fcntl.h>
+#include <sys/resource.h>
 #if defined(__APPLE__)
 #include <sys/event.h>
+#include <mach/mach.h>
 #elif defined(__linux__)
 #include <sys/syscall.h>
 #ifndef SYS_pidfd_open
@@ -311,6 +313,65 @@ static sl_res_int_str *sl_proc_spawn(sl_arr *argv_arr, sl_arr *env_arr, const ch
 
     sl_rt_preempt_enable();
     return sl_proc_ok_int((long long)pid);
+}
+
+/* Resident set size now, in bytes; 0 if the system will not say. */
+static long long sl_proc_rss_now(void) {
+#if defined(__APPLE__)
+    mach_task_basic_info_data_t info;
+    mach_msg_type_number_t n = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&info,
+                  &n) != KERN_SUCCESS)
+        return 0;
+    return (long long)info.resident_size;
+#elif defined(__linux__)
+    char buf[128];
+    int fd = open("/proc/self/statm", O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+        return 0;
+    ssize_t r = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (r <= 0)
+        return 0;
+    buf[r] = 0;
+    long long pages_total = 0, pages_res = 0;
+    if (sscanf(buf, "%lld %lld", &pages_total, &pages_res) != 2)
+        return 0;
+    return pages_res * (long long)sysconf(_SC_PAGESIZE);
+#else
+    return 0;
+#endif
+}
+
+/* proc.runtime_stats: the runtime's counters, in a fixed order the
+ * `runtime` package names (stdlib/runtime). */
+static sl_arr *sl_proc_runtime_stats(void) {
+    long long v[10];
+    v[0] = (long long)atomic_load_explicit(&sl_gc_rt_majors, memory_order_relaxed);
+    v[1] = (long long)atomic_load_explicit(&sl_gc_minors_done, memory_order_relaxed);
+    v[2] = (long long)atomic_load_explicit(&sl_gc_rt_pause_ns_total, memory_order_relaxed);
+    v[3] = (long long)atomic_load_explicit(&sl_gc_rt_pause_ns_max, memory_order_relaxed);
+    v[4] = (long long)atomic_load_explicit(&sl_gc_rt_live_bytes, memory_order_relaxed);
+    v[5] = (long long)atomic_load_explicit(&sl_gc_bytes_since_collect, memory_order_relaxed);
+    sl_rt_preempt_disable();
+    v[6] = sl_proc_rss_now();
+    struct rusage ru;
+    long long peak = 0;
+    if (getrusage(RUSAGE_SELF, &ru) == 0) {
+#if defined(__APPLE__)
+        peak = (long long)ru.ru_maxrss;          /* bytes on macOS */
+#else
+        peak = (long long)ru.ru_maxrss * 1024;   /* kilobytes on Linux */
+#endif
+    }
+    sl_rt_preempt_enable();
+    v[7] = peak;
+    v[8] = (long long)atomic_load(&sl_rt_active_spawns);
+    v[9] = (long long)sl_pool_nworkers;
+    sl_arr *a = sl_arr_new(sizeof(long long), SL_ELEM_NOPTR);
+    for (int i = 0; i < 10; i++)
+        sl_arr_push(a, &v[i], sizeof(long long));
+    return a;
 }
 
 static sl_res_bool_str *sl_proc_kill(long long pid, int sig) {
