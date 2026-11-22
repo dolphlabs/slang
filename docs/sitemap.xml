@@ -25,6 +25,7 @@
   <url><loc>https://slang.dolphlabs.com/packages/http</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/http2</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/httpc</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/idempotency</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/io</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/json</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/log</loc></url>
@@ -43,6 +44,7 @@
   <url><loc>https://slang.dolphlabs.com/packages/nats</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/net</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/os</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/outbox</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/pg</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/proc</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/rand</loc></url>

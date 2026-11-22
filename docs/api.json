@@ -3785,6 +3785,76 @@
         }
       ]
     },
+    "idempotency": {
+      "name": "idempotency",
+      "kind": "source",
+      "items": [
+        {
+          "name": "NEW",
+          "decl": "let",
+          "sig": "let NEW = 0;",
+          "doc": "",
+          "file": "stdlib/idempotency/idempotency.sl",
+          "line": 30
+        },
+        {
+          "name": "IN_PROGRESS",
+          "decl": "let",
+          "sig": "let IN_PROGRESS = 1;",
+          "doc": "",
+          "file": "stdlib/idempotency/idempotency.sl",
+          "line": 31
+        },
+        {
+          "name": "DONE",
+          "decl": "let",
+          "sig": "let DONE = 2;",
+          "doc": "",
+          "file": "stdlib/idempotency/idempotency.sl",
+          "line": 32
+        },
+        {
+          "name": "MISMATCH",
+          "decl": "let",
+          "sig": "let MISMATCH = 3;",
+          "doc": "",
+          "file": "stdlib/idempotency/idempotency.sl",
+          "line": 33
+        },
+        {
+          "name": "Begin",
+          "decl": "struct",
+          "sig": "struct Begin",
+          "doc": "",
+          "file": "stdlib/idempotency/idempotency.sl",
+          "line": 35
+        },
+        {
+          "name": "begin",
+          "decl": "fn",
+          "sig": "fn begin(c: redis.Conn, key: str, fingerprint: str, lock_ms: int, deadline: until) -> result[Begin, str]",
+          "doc": "Reserves key for this request, or reports what an earlier one did.",
+          "file": "stdlib/idempotency/idempotency.sl",
+          "line": 46
+        },
+        {
+          "name": "complete",
+          "decl": "fn",
+          "sig": "fn complete(c: redis.Conn, key: str, b: Begin, response: bytes, keep_ms: int, deadline: until) -> result[bool, str]",
+          "doc": "Stores the response of a NEW request for keep_ms: false if the reservation was lost (it expired and another request took the key).",
+          "file": "stdlib/idempotency/idempotency.sl",
+          "line": 83
+        },
+        {
+          "name": "abandon",
+          "decl": "fn",
+          "sig": "fn abandon(c: redis.Conn, key: str, b: Begin, deadline: until) -> result[bool, str]",
+          "doc": "Gives the key up after a failure that should let a retry run again.",
+          "file": "stdlib/idempotency/idempotency.sl",
+          "line": 94
+        }
+      ]
+    },
     "io": {
       "name": "io",
       "kind": "native",
@@ -10082,6 +10152,52 @@
           "ret": "result[bool,str]",
           "tls": false,
           "sig": "os.watch_close(int) -> result[bool,str]"
+        }
+      ]
+    },
+    "outbox": {
+      "name": "outbox",
+      "kind": "source",
+      "items": [
+        {
+          "name": "schema",
+          "decl": "fn",
+          "sig": "fn schema() -> str",
+          "doc": "",
+          "file": "stdlib/outbox/outbox.sl",
+          "line": 29
+        },
+        {
+          "name": "add",
+          "decl": "fn",
+          "sig": "fn add(c: pg.Conn, topic: str, payload: bytes, deadline: until) -> result[int, str]",
+          "doc": "Queues an event; call it inside the transaction that makes the change. Returns the event's id.",
+          "file": "stdlib/outbox/outbox.sl",
+          "line": 40
+        },
+        {
+          "name": "Message",
+          "decl": "struct",
+          "sig": "struct Message",
+          "doc": "",
+          "file": "stdlib/outbox/outbox.sl",
+          "line": 47
+        },
+        {
+          "name": "relay",
+          "decl": "fn",
+          "sig": "fn relay(c: pg.Conn, batch: int, publish: fn(Message) -> bool, deadline: until) -> result[int, str]",
+          "doc": "Publishes up to batch ready events with publish (true: it went out), deleting those that did and pushing back those that did not (by 2^attempts seconds, at most an hour). Returns how many were published. Uses its own transaction: call it on a connection that is not in one.",
+          "file": "stdlib/outbox/outbox.sl",
+          "line": 58
+        },
+        {
+          "name": "pending",
+          "decl": "fn",
+          "sig": "fn pending(c: pg.Conn, deadline: until) -> result[int, str]",
+          "doc": "Events waiting, ready or not.",
+          "file": "stdlib/outbox/outbox.sl",
+          "line": 92
         }
       ]
     },

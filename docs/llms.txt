@@ -31,6 +31,7 @@ Start with /llms-small.txt: the whole language on one page, about 3k tokens, eno
 - [http](packages/http.md): Package http.
 - [http2](packages/http2.md): Package http2.
 - [httpc](packages/httpc.md): Package httpc.
+- [idempotency](packages/idempotency.md): Package idempotency.
 - [io](packages/io.md): Package io.
 - [json](packages/json.md): Package json.
 - [log](packages/log.md): Package log.
@@ -49,6 +50,7 @@ Start with /llms-small.txt: the whole language on one page, about 3k tokens, eno
 - [nats](packages/nats.md): Package nats.
 - [net](packages/net.md): Package net.
 - [os](packages/os.md): Package os.
+- [outbox](packages/outbox.md): Package outbox.
 - [pg](packages/pg.md): Package pg.
 - [proc](packages/proc.md): Package proc.
 - [rand](packages/rand.md): Package rand.
