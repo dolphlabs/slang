@@ -35,9 +35,9 @@ standalone repo under `slangpackages/`.
   today, so it cannot reach an IPv6 address: this fixes that.
   Status: IPv6 dialing with happy eyeballs is in feat/net-dial-ipv6; the
   wire-protocol client with a TTL cache waits for UDP (#600) to merge.
-- [ ] **Graceful restart and draining** (stdlib): hand listening sockets to
+- [x] **Graceful restart and draining** (stdlib): hand listening sockets to
   a new process, stop accepting, and drain open connections with a
-  deadline.
+  deadline. PR #626 (open).
 
 ## 2. Resilience
 
