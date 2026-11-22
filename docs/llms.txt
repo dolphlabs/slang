@@ -21,6 +21,7 @@ Start with /llms-small.txt: the whole language on one page, about 3k tokens, eno
 - [builder](packages/builder.md): Package builder.
 - [byteutil](packages/byteutil.md): Package byteutil.
 - [cache](packages/cache.md): Package cache.
+- [cbor](packages/cbor.md): Package cbor.
 - [compress](packages/compress.md): Package compress.
 - [context](packages/context.md): Package context.
 - [crdt](packages/crdt.md): Package crdt.
@@ -48,6 +49,7 @@ Start with /llms-small.txt: the whole language on one page, about 3k tokens, eno
 - [math/stats](packages/math/stats.md): Package math/stats.
 - [math/vec](packages/math/vec.md): Package math/vec.
 - [metrics](packages/metrics.md): Package metrics.
+- [msgpack](packages/msgpack.md): Package msgpack.
 - [multipart](packages/multipart.md): Package multipart.
 - [mysql](packages/mysql.md): Package mysql.
 - [nats](packages/nats.md): Package nats.

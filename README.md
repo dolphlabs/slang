@@ -3685,6 +3685,50 @@ that case.
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
 
+#### `msgpack` and `cbor`
+
+MessagePack and CBOR (RFC 8949), the two common binary forms of JSON's
+data model, with binary strings added. CBOR also has tags; COSE,
+WebAuthn and CWT are built on it.
+
+```slang
+import "cbor";
+import "msgpack";
+
+// streaming: nothing allocated but the output
+let w = msgpack.writer();
+msgpack.write_map(w, 1);
+msgpack.write_str(w, "id");
+msgpack.write_int(w, 42);
+let data = msgpack.finish(w);
+
+let r = msgpack.reader(data);
+let pairs = msgpack.read_map(r) ?? 0;
+let key = msgpack.read_str(r) ?? "";
+let id = msgpack.read_int(r) ?? 0;
+
+// or as a tree
+let v = cbor.decode(bytes_in) ?? cbor.null_value();
+let temp = cbor.get(v, "temp");
+```
+
+- **Writers** (`write_int`, `write_str`/`write_text`, `write_bin`/
+  `write_bytes`, `write_float`, `write_array`, `write_map`, and so on)
+  always use the shortest form. CBOR writes a float in the smallest of
+  half, single or double precision that holds it exactly, its preferred
+  serialization. MessagePack has `write_ext` and `write_timestamp`; CBOR
+  has `write_tag`.
+- **Readers** read one value at a time (`peek`/`peek_major` says what
+  comes next) and `skip` past what is not needed. CBOR reads
+  indefinite-length strings and containers (`-1` from `read_array` /
+  `read_map`, then items until `at_break`).
+- **Values:** `decode`/`encode` and `read_value`/`write_value` work on a
+  `Value` tree; `get(v, key)` finds a map entry.
+- **Untrusted input:** every length is checked against the bytes left
+  before anything is allocated, so a five-byte "array of 4 billion"
+  fails at once. Nesting is limited to `MAX_DEPTH` (512), and CBOR text
+  must be UTF-8. Both are checked against the specifications' example
+  vectors.
 #### `crdt`
 
 Conflict-free replicated data types: state that replicas update on their

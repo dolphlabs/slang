@@ -1,5 +1,12 @@
 # todo
 
+- [x] **`msgpack` and `cbor` (2026-11-22, feat/msgpack-cbor).** Streaming
+  writers and readers plus a `Value` tree for each. CBOR writes preferred
+  serialization (shortest heads and shortest exact float, half included)
+  and reads indefinite lengths; both refuse lengths beyond the input
+  before allocating. CBOR is checked against RFC 8949 Appendix A. A typed
+  struct codec, like `json.encode`/`decode`, would need compiler support
+  and is a follow-up.
 - [x] **`crdt` (2026-11-22, feat/crdt).** G-counter, PN-counter, an
   optimized OR-set (no tombstones; checked to stay bounded through 1000
   adds and removes) and an LWW-map with tombstone compaction. Merges are

@@ -15,6 +15,7 @@
   <url><loc>https://slang.dolphlabs.com/packages/builder</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/byteutil</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/cache</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/cbor</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/compress</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/context</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/crdt</loc></url>
@@ -42,6 +43,7 @@
   <url><loc>https://slang.dolphlabs.com/packages/math/stats</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/math/vec</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/metrics</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/msgpack</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/multipart</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/mysql</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/nats</loc></url>

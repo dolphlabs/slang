@@ -221,6 +221,8 @@ PACKAGE_SECTIONS = {
     "http": ["`http`"],
     "httpc": ["`httpc`"],
     "websocket": ["`websocket`"],
+    "msgpack": ["`msgpack` and `cbor`"],
+    "cbor": ["`msgpack` and `cbor`"],
     "crdt": ["`crdt`"],
     "singleflight": ["`singleflight`"],
     "resilience": ["`resilience`"],
