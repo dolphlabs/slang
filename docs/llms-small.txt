@@ -268,7 +268,22 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg mysql redis regex
 strings unicode encoding compress math math/vec decimal rand builder byteutil flags sort
-uuid http http2 httpc websocket balance template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
+uuid http http2 httpc websocket memcache template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
+uuid http http2 httpc websocket envelope template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
+uuid http http2 httpc websocket otp template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
+uuid http http2 httpc websocket idempotency outbox template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
+uuid http http2 httpc websocket msgpack cbor template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
+uuid http http2 httpc websocket crdt template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
+uuid http http2 httpc websocket singleflight template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
+uuid http http2 httpc websocket resilience template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
+uuid http http2 httpc websocket multipart sse template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
+uuid http http2 httpc websocket smtp template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
+uuid http http2 httpc websocket trace template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
+uuid http http2 httpc websocket metrics template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
+uuid http http2 httpc websocket proxyproto template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
+uuid http http2 httpc websocket protobuf template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
+uuid http http2 httpc websocket pool template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
+uuid http http2 httpc websocket context template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 `xml.parse(text)` gives the root `xml.Node` (`name`, `local`, `ns`, `attrs`, `children`);
 `n.find("a/b")`, `n.find_all(path)`, `n.child_text("link")`, `n.attr("id")`; DOCTYPE refused.
 `xml.element("a").set_attr("k", "v").add_text("t")` and `xml.write(n)` build one.
@@ -437,20 +452,24 @@ println("ok");
 
 Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 
-- balance: options, new, with_options, set_backends, pick, done, status
 - builder: new_str, Str.write, Str.write_int, Str.write_line, Str.size, Str.is_empty, Str.finish, Str.take, Str.reset, new_bytes, Bytes.write_byte, Bytes.write (+6 more)
 - byteutil: find, find_wire, has_prefix, has_suffix, trim, split
 - cache: options, new, get, put, put_ttl, put_sized, remove, clear, len_of, stats, get_or_load
+- cbor: writer, finish, write_uint, write_int, write_bytes, write_text, write_array, write_map, write_tag, write_bool, write_null, write_undefined (+32 more)
 - compress: crc32, crc32_update, gzip, gzip_level, deflate, deflate_raw, deflate_raw_flush, gunzip, inflate, inflate_raw
+- context: background, with_cancel, with_timeout, with_deadline_at, cancel, release, is_done, cause, deadline, remaining, watch_fd, unwatch_fd (+1 more)
+- crdt: gcounter, gc_inc, gc_value, gc_merge, pncounter, pn_add, pn_value, pn_merge, orset, set_add, set_remove, set_has (+9 more)
 - crypto: sha256, hmac_sha256, rand, sha1, md5, pbkdf2_sha256, argon2id_raw, argon2id_verify, scrypt, bcrypt_verify, rsa_verify_sha256, sha384 (+42 more)
 - csv: options, parse, parse_with, parse_bytes, new_reader, feed, end, finished, line, next, to_maps, write_options (+3 more)
 - decimal: zero, from_int, from_units, parse, parse_bytes, from_float, scale_of, precision, is_zero, is_neg, sign, format (+22 more)
 - encoding: hex_encode, hex_decode, base64_encode, base64_decode, base64url_encode, base64url_decode, url_encode, url_decode, form_encode, form_decode, query_get, query_keys (+11 more)
+- envelope: keyring, add_key, use_key, remove_key, seal, open, key_id, rewrap
 - flags: new, Set.add_str, Set.add_int, Set.add_float, Set.add_bool, Set.add_list, Set.require, Set.set_takes, Set.stop_at_first_arg, Set.parse, Set.parse_or_exit, Set.usage (+8 more)
 - fs: open, create, read, pread, write, close, mkdir, realpath, fstat
-- http: header, header_or, headers, request, parse_frame, method_is, method_is_at, path_is, path_is_at, path_param, path_param_at, frame_method (+40 more)
+- http: header, header_or, headers, request, parse_frame, method_is, method_is_at, path_is, path_is_at, path_param, path_param_at, frame_method (+42 more)
 - http2: client_settings, client_preface, client_request_msg, client_read_response, client_start, client_max_streams, client_call, client_close, raw_msg, grant_msg, response_msg, response_trailers_msg (+57 more)
 - httpc: parse_url, header, new_client, enable_cookies, clear_cookies, parse_cookie_date, set_cookie, cookies, new_request, client_send, client_get, client_head (+18 more)
+- idempotency: begin, complete, abandon
 - io: read_line, read_all, eprint, eprintln, flush, is_tty, term_width, term_height, read_secret, raw_on, raw_off, read_key
 - json: see /packages/json.md
 - log: debug, info, warn, error
@@ -465,25 +484,39 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - math/sketch: bloom, bloom_blocks, decode_bloom, Bloom.add_hash, Bloom.contains_hash, Bloom.add_str, Bloom.add_int, Bloom.add_bytes, Bloom.contains_str, Bloom.contains_int, Bloom.contains_bytes, Bloom.merge (+85 more)
 - math/stats: normal, Normal.pdf, Normal.cdf, Normal.quantile, Normal.sample, log_normal, LogNormal.pdf, LogNormal.cdf, LogNormal.quantile, LogNormal.sample, uniform, Uniform.pdf (+99 more)
 - math/vec: dot, sum, norm, distance, distance2, cosine, argmax, argmin, scale, axpy, add, sub (+11 more)
+- memcache: new, get, gets, get_multi, set, add, replace, cas, delete, incr, decr, touch (+1 more)
+- metrics: registry, default_buckets, exponential_buckets, counter, gauge, histogram, with, remove, inc, add, dec, set (+3 more)
+- msgpack: writer, finish, write_nil, write_bool, write_int, write_uint, write_float, write_float32, write_str, write_bin, write_array, write_map (+30 more)
+- multipart: boundary_of, parser, feed, finish, parse, body, add_field, add_file, close, content_type
 - mysql: parse_url, connect, connect_config, close, usable, in_transaction, server_version, connection_id, last_insert_id, affected_rows, ping, sqlstate (+32 more)
 - nats: options, with_creds, connect, connect_with, publish, publish_reply, publish_headers, publish_full, subscribe, queue_subscribe, next_msg, unsubscribe (+15 more)
 - net: listen, port, accept, dial, dial_until, lookup_srv_until, lookup_txt_until, dial_unix, listen_unix, send, recv, recv_until (+34 more)
 - os: setenv, unsetenv, environ, pid, hostname, tmpdir, exists, is_dir, is_file, size, mtime, mtime_ns (+6 more)
+- otp: totp_options, new_secret, hotp, totp, step_of, verify_totp, verify_hotp, uri, parse_secret
+- outbox: schema, add, relay, pending
 - pg: rows_as, parse_url, sqlstate, scram_client_final, connect, connect_config, close, usable, in_transaction, server_param, arg_text, arg_int (+39 more)
+- pool: options, new, acquire, release, discard, close, stats
 - proc: shutdown_requested, active_tasks, wait_idle, getenv, args, cwd, spawn, kill, wait
+- protobuf: writer, finish, size, write_int64, write_uint64, write_sint, write_bool, write_fixed64, write_fixed32, write_double, write_float, write_bytes (+21 more)
+- proxyproto: parse, read_until, encode_v1, encode_v2
 - rand: new, from_os, fork, next_u64, below, between, unit, chance, shuffle, pick, backoff, jitter (+2 more)
 - redis: encode, decode, decode_at, slot, parse_url, connect_config, connect, do, close, usable, ping, echo (+132 more)
 - regex: compile, free, groups, is_match, is_match_bytes, find, find_at, find_bytes, find_bytes_at
+- resilience: breaker_options, breaker, allow, record, breaker_state, trips, bulkhead, try_enter, leave, bulkhead_active, bulkhead_rejected, retry_budget (+12 more)
 - s3: new_client, from_env, put_object, get_object, get_range, head_object, delete_object, list_objects, create_multipart, upload_part, complete_multipart, abort_multipart (+8 more)
 - sigv4: new_signer, amz_date_now, payload_hash, derive_key, signing_key, scope, uri_encode, canonical_query, authorization, sign, presign_query, presign
+- singleflight: group, call, forget, runs, joins
+- smtp: config, message, send, build, send_raw, address_of
 - sort: ints, floats, strings, by, by_stable, search_ints, search_floats, search_strings, search_by
 - sql: open, close, exec, last_insert_id, prepare, finalize, reset, bind_int, bind_float, bind_text, bind_blob, bind_null (+8 more)
+- sse: head, event, comment, retry, parser, feed, retry_ms
 - strings: find, rfind, contains, has_prefix, has_suffix, count, hash, trim, trim_start, trim_end, to_upper, to_lower (+16 more)
 - tar: default_limits, parse, parse_with, safe_path, new_writer, Writer.add_file, Writer.add_dir, Writer.add_symlink, Writer.finish
 - template: parse, parse_text, add, render, render_named, escape_html
 - time: mono, wall, sleep, http_date, put_http_date
 - timez: Time.rfc3339, Time.rfc3339_milli, Time.rfc3339_nano, Time.rfc3339_at, Time.http_date, Time.rfc2822, Time.format, parse_date, parse_rfc3339, parse_http_date, parse_rfc2822, relative (+116 more)
 - toml: to_json, decode
+- trace: options, tracer, tracer_with, start, child, set_kind, set_str, set_int, set_float, set_bool, set_error, set_ok (+7 more)
 - unicode: valid, valid_bytes, count, runes, encode, truncate, fold, equal_fold, nfc, nfd, is_nfc
 - uuid: v4, v7, v7_at, is_valid, parse, version, time_ms, to_binary, from_binary
 - websocket: options, dial, dial_with, send_text, send_text_bytes, send_binary, ping, recv, text, close, close_now, is_open (+1 more)
