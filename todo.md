@@ -1,5 +1,11 @@
 # todo
 
+- [x] **`idempotency` and `outbox` (2026-11-22, feat/outbox-idempotency).**
+  Redis idempotency keys (atomic reservation, replay, in-progress and
+  fingerprint-mismatch states, owner-checked complete/abandon) and a
+  Postgres transactional outbox with a SKIP LOCKED relay and backoff.
+  tests/live/outbox runs both against real servers in CI; the Redis
+  half was also run locally.
 - [x] **`msgpack` and `cbor` (2026-11-22, feat/msgpack-cbor).** Streaming
   writers and readers plus a `Value` tree for each. CBOR writes preferred
   serialization (shortest heads and shortest exact float, half included)

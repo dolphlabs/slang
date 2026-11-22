@@ -221,6 +221,8 @@ PACKAGE_SECTIONS = {
     "http": ["`http`"],
     "httpc": ["`httpc`"],
     "websocket": ["`websocket`"],
+    "idempotency": ["`idempotency` and `outbox`"],
+    "outbox": ["`idempotency` and `outbox`"],
     "msgpack": ["`msgpack` and `cbor`"],
     "cbor": ["`msgpack` and `cbor`"],
     "crdt": ["`crdt`"],

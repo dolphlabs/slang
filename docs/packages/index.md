@@ -2626,6 +2626,50 @@ that case.
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
 
+#### `idempotency` and `outbox`
+
+Two patterns for doing a thing exactly once in effect.
+
+**Idempotency keys** (the `Idempotency-Key` header): a retried request
+with the same key gets the first one's response instead of running
+twice.
+
+```slang
+import "idempotency";
+
+let br = idempotency.begin(redis_conn, key, request_fingerprint, 30000, deadline);
+guard let b = br else { return unavailable(); }
+if b.state == idempotency.DONE { return replay(b.response); }
+if b.state == idempotency.IN_PROGRESS { return conflict(); }          // 409
+if b.state == idempotency.MISMATCH { return unprocessable(); }        // 422
+let resp = handle();                                                  // NEW: run it
+idempotency.complete(redis_conn, key, b, resp, 86400000, deadline);   // keep a day
+```
+
+The reservation is one atomic `SET NX`, so two copies of a request
+arriving together cannot both run. It expires after `lock_ms` if the
+process dies, so the key does not stay stuck. `complete` and `abandon`
+act only on the caller's own reservation, and the fingerprint catches a
+key reused for a different request.
+
+**The transactional outbox:** write an event in the same Postgres
+transaction as the change it describes, and let a relay publish it.
+The event goes out if and only if the change commits.
+
+```slang
+import "outbox";
+
+pg.exec(conn, outbox.schema(), deadline);                  // in a migration
+// inside the business transaction:
+outbox.add(conn, "orders.created", payload, deadline);
+// in a relay task, in a loop (publish is fn(outbox.Message) -> bool):
+let n = outbox.relay(conn, 100, publish_to_kafka, deadline);
+```
+
+`relay` claims a batch with `FOR UPDATE SKIP LOCKED`, so several relays
+can share the table. Published rows are deleted, and failed ones are
+retried after 2, 4, 8, ... seconds (at most an hour). Delivery is at
+least once, so consumers should be idempotent too.
 #### `msgpack` and `cbor`
 
 MessagePack and CBOR (RFC 8949), the two common binary forms of JSON's
@@ -4651,6 +4695,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [http](packages/http.md) -- source package, 61 public items
 - [http2](packages/http2.md) -- source package, 133 public items
 - [httpc](packages/httpc.md) -- source package, 35 public items
+- [idempotency](packages/idempotency.md) -- source package, 8 public items
 - [io](packages/io.md) -- compiler-provided, 12 public items
 - [json](packages/json.md) -- compiler-provided, 0 public items
 - [log](packages/log.md) -- compiler-provided, 4 public items
@@ -4672,6 +4717,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [nats](packages/nats.md) -- source package, 31 public items
 - [net](packages/net.md) -- compiler-provided, 46 public items
 - [os](packages/os.md) -- compiler-provided, 18 public items
+- [outbox](packages/outbox.md) -- source package, 5 public items
 - [pg](packages/pg.md) -- source package, 58 public items
 - [pool](packages/pool.md) -- source package, 11 public items
 - [proc](packages/proc.md) -- compiler-provided, 9 public items
