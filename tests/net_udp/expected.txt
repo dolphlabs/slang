@@ -1,0 +1,8 @@
+send_to/recv_from: ok
+empty datagram: ok
+truncated: reported
+silent socket: timeout after waiting
+many senders: 200 datagrams
+bad group: not a multicast group address
+ipv6 literal: [::1]:53
+done
