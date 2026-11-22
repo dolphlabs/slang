@@ -1,5 +1,11 @@
 # todo
 
+- [x] **`metrics` (2026-11-22, feat/metrics).** Prometheus counters,
+  gauges and histograms with labels and the text exposition format.
+  Histograms are classic fixed-bucket rather than `math/sketch` (as the
+  plan said): Prometheus scrapes fixed buckets anyway, and a few ints a
+  series is far less memory than an HDR array per label combination.
+
 - [x] **A leaf function could hold a safepoint (found 2026-11-21 when
   math/big's tests crashed after merging dev; fixed in
   fix/leaf-body-no-safepoint).** Callers skip their bracket around a call
