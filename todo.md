@@ -1,5 +1,14 @@
 # todo
 
+- [x] **Listener handoff and bounded drain (2026-11-22,
+  feat/listener-handoff).** `proc.spawn_fds(argv, env, dir, flags, fds)`
+  passes fds to a child as 3, 4, ... with `LISTEN_FDS` (via numbers above
+  them all, so overlapping sources and targets are safe);
+  `net.inherited()` takes them (systemd socket activation too); and
+  `proc.wait_idle_until(deadline)` bounds a drain. Adds the `NA_ARR_I32`
+  native argument kind. Follow-up seen on the way: `fs.fstat` builds its
+  `[int]` with `elem_is_ptr` 4, so the collector scans it as pointers.
+
 - [x] **A leaf function could hold a safepoint (found 2026-11-21 when
   math/big's tests crashed after merging dev; fixed in
   fix/leaf-body-no-safepoint).** Callers skip their bracket around a call

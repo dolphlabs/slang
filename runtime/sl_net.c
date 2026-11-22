@@ -2300,6 +2300,39 @@ static sl_res_bool_str *sl_net_nonblock(int fd) {
     return sl_net_ok_bool(true);
 }
 
+/* Listening sockets passed in by a parent (proc.spawn_fds) or by systemd
+ * socket activation: LISTEN_FDS of them from fd 3 up. A LISTEN_PID, when
+ * set, must be this process (systemd sets it; spawn_fds cannot know the
+ * pid in advance and leaves it out). The variables are removed once read,
+ * so this program's own children do not take the count for theirs, and a
+ * second call returns nothing. */
+static sl_arr *sl_net_inherited(void) {
+    sl_arr *out = sl_arr_new(sizeof(int32_t), SL_ELEM_NOPTR);
+    sl_rt_preempt_disable();
+    const char *n_s = getenv("LISTEN_FDS");
+    const char *pid_s = getenv("LISTEN_PID");
+    long n = n_s ? strtol(n_s, NULL, 10) : 0;
+    int mine = !pid_s || strtol(pid_s, NULL, 10) == (long)getpid();
+    unsetenv("LISTEN_FDS");
+    unsetenv("LISTEN_PID");
+    unsetenv("LISTEN_FDNAMES");
+    sl_rt_preempt_enable();
+    if (!mine || n <= 0 || n > 64)
+        return out;
+    for (int fd = 3; fd < 3 + (int)n; fd++) {
+        if (fcntl(fd, F_GETFD) < 0)
+            continue;
+        sl_net_set_nonblocking(fd);
+        fcntl(fd, F_SETFD, FD_CLOEXEC);
+        sl_rt_preempt_disable();
+        sl_reactor_clear_closing(fd);
+        sl_rt_preempt_enable();
+        int32_t v = (int32_t)fd;
+        sl_arr_push(out, &v, sizeof(int32_t));
+    }
+    return out;
+}
+
 static int sl_link_fault_kind(int e) {
     if (e == ETIMEDOUT)
         return SL_FAULT_TIMEOUT;

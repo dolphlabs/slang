@@ -38,6 +38,9 @@ const NatSig NET_SIGS[] = {
      * which would call every dead connection alive. */
     {"net", "idle_alive", 1, {NA_INT}, "bool", 0},
     {"net", "nonblock", 1, {NA_INT}, "result[bool,str]", 0},
+    /* listeners passed in by proc.spawn_fds or systemd socket activation
+       (LISTEN_FDS); empty when there are none */
+    {"net", "inherited", 0, {0}, "[i32]", 0},
     {"net", "tls_server_ctx", 2, {NA_STR, NA_STR}, "result[rawptr,str]", 1},
     {"net", "tls_client_ctx", 1, {NA_STR}, "result[rawptr,str]", 1},
     {"net", "tls_accept", 2, {NA_INT, NA_RAWPTR}, "result[rawptr,str]", 1},

@@ -1621,6 +1621,47 @@ while !proc.shutdown_requested() {
 proc.wait_idle();
 ```
 
+`proc.wait_idle_until(deadline)` is `wait_idle` with a limit: true once
+the program is idle, false if the deadline passed first, so a drain can
+give up on a stuck connection instead of holding the shutdown forever.
+
+##### Restarting without dropping connections
+
+A new version of a server can take over the old one's listening sockets,
+so the port never stops accepting. The old process starts the new one
+with `proc.spawn_fds`, which passes the listeners as fds 3, 4, ... and
+sets `LISTEN_FDS` to their count (the systemd socket-activation
+convention); the new process takes them with `net.inherited()`:
+
+```slang
+import "net";
+import "proc";
+import "time";
+
+// at startup: the parent's listeners if there are any, our own otherwise
+let inh = net.inherited();
+let lfd = -1 as i32;
+if len(inh) > 0 {
+    lfd = inh[0];
+} else {
+    lfd = net.listen(8080) ?? (-1 as i32);
+}
+
+// on a restart request: start the new binary on the same socket, stop
+// accepting, and drain what is in flight for up to 30 seconds
+let noenv: [str] = [];
+let sr = proc.spawn_fds(["/srv/app/bin/server"], noenv, "", 0, [lfd]);
+net.close(lfd);
+proc.wait_idle_until(until_of(time.mono() + 30000000000));
+exit(0);
+```
+
+`net.inherited()` returns `[]` when nothing was passed. It also accepts
+listeners from systemd itself (checking `LISTEN_PID` when set), and it
+clears the variables once read, so this program's own children do not
+take the fds for theirs. Every other fd stays out of the child: sockets
+and files are close-on-exec.
+
 `proc.getenv(name)` reads an environment variable, returning
 `opt[str]` (`none` if unset). `proc.args()` is the process argument
 list (`[str]`); `args[0]` is the executable path. To parse options out of it, see

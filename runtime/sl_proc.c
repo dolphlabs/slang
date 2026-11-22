@@ -77,6 +77,41 @@ static void sl_proc_wait_idle(void) {
     sl_rt_wait_idle();
 }
 
+/* proc.wait_idle bounded by u: whether the program went idle (the same
+ * test as wait_idle) before the deadline. It looks every 5 ms, parking on
+ * a pipe nothing writes to as its timer: a drain is rare and short, and
+ * this keeps wait_idle's own lock-step wake-up untouched. */
+static bool sl_proc_wait_idle_until(sl_until u) {
+    static int tick_rd = -1;
+    for (;;) {
+        long long others = atomic_load(&sl_rt_active_spawns) -
+                           atomic_load(&sl_rt_idle_spawned_waiters);
+        if (sl_rt_cur_is_spawned())
+            others--;
+        if (others <= 0)
+            return true;
+        if (u && sl_until_hit(u))
+            return false;
+        if (tick_rd < 0) {
+            int p[2];
+            sl_rt_preempt_disable();
+            if (pipe(p) == 0) {
+                fcntl(p[0], F_SETFD, FD_CLOEXEC);
+                fcntl(p[1], F_SETFD, FD_CLOEXEC);
+                fcntl(p[0], F_SETFL, fcntl(p[0], F_GETFL, 0) | O_NONBLOCK);
+                tick_rd = p[0]; /* p[1] stays open, so p[0] never reads EOF */
+            }
+            sl_rt_preempt_enable();
+            if (tick_rd < 0)
+                return others <= 0;
+        }
+        sl_until step = sl_until_of(sl_now_ns() + 5000000LL);
+        if (u && u < step)
+            step = u;
+        (void)sl_reactor_wait_until(tick_rd, SL_REACTOR_READ, 0, step);
+    }
+}
+
 static int sl_proc_argc;
 static char **sl_proc_argv;
 
@@ -183,7 +218,46 @@ typedef struct sl_child {
 static sl_child *sl_proc_children = NULL;
 static pthread_mutex_t sl_proc_children_mu = PTHREAD_MUTEX_INITIALIZER;
 
+#define SL_SPAWN_MAX_FDS 64
+
+/* LISTEN_FDS and its companions, which a handed-off child must not see
+   from this process's own environment (a stale count, or another
+   process's pid). */
+static int sl_proc_is_listen_var(const char *kv) {
+    return !strncmp(kv, "LISTEN_FDS=", 11) || !strncmp(kv, "LISTEN_PID=", 11) ||
+           !strncmp(kv, "LISTEN_FDNAMES=", 15);
+}
+
+static sl_res_int_str *sl_proc_spawn_impl(sl_arr *argv_arr, sl_arr *env_arr,
+                                          const char *dir, int flags,
+                                          sl_arr *fds_arr);
+
 static sl_res_int_str *sl_proc_spawn(sl_arr *argv_arr, sl_arr *env_arr, const char *dir, int flags) {
+    return sl_proc_spawn_impl(argv_arr, env_arr, dir, flags, NULL);
+}
+
+/* proc.spawn that also passes fds to the child as 3, 4, ... and sets
+ * LISTEN_FDS to their count: the systemd socket-activation convention,
+ * which net.inherited() reads. Used to hand listening sockets to a new
+ * version of a server so it accepts on the same ports with no gap. */
+static sl_res_int_str *sl_proc_spawn_fds(sl_arr *argv_arr, sl_arr *env_arr,
+                                         const char *dir, int flags,
+                                         sl_arr *fds_arr) {
+    if (!fds_arr || fds_arr->len == 0)
+        return sl_proc_err_int("proc.spawn_fds: no fds to pass");
+    if (fds_arr->len > SL_SPAWN_MAX_FDS)
+        return sl_proc_err_int("proc.spawn_fds: more than 64 fds");
+    const int32_t *fds = (const int32_t *)fds_arr->data;
+    for (long long i = 0; i < fds_arr->len; i++) {
+        if (fds[i] < 0 || fcntl(fds[i], F_GETFD) < 0)
+            return sl_proc_err_int("proc.spawn_fds: not an open fd");
+    }
+    return sl_proc_spawn_impl(argv_arr, env_arr, dir, flags, fds_arr);
+}
+
+static sl_res_int_str *sl_proc_spawn_impl(sl_arr *argv_arr, sl_arr *env_arr,
+                                          const char *dir, int flags,
+                                          sl_arr *fds_arr) {
     if (!argv_arr || argv_arr->len == 0)
         return sl_proc_err_int("proc.spawn: argv cannot be empty");
 
@@ -206,23 +280,51 @@ static sl_res_int_str *sl_proc_spawn(sl_arr *argv_arr, sl_arr *env_arr, const ch
 
     char **envp = NULL;
     int free_envp = 0;
+    int nfds = fds_arr ? (int)fds_arr->len : 0;
+    char listen_fds[32];
     if (env_arr && env_arr->len > 0) {
         int envc = (int)env_arr->len;
         const char **env_items = (const char **)env_arr->data;
-        envp = (char **)malloc((size_t)(envc + 1) * sizeof(char *));
+        envp = (char **)malloc((size_t)(envc + 2) * sizeof(char *));
         if (!envp) {
             free(argv);
             sl_rt_preempt_enable();
             return sl_proc_err_int("proc.spawn: out of memory");
         }
+        int k = 0;
         for (int i = 0; i < envc; i++) {
-            envp[i] = (char *)env_items[i];
+            if (nfds > 0 && sl_proc_is_listen_var(env_items[i]))
+                continue;
+            envp[k++] = (char *)env_items[i];
         }
-        envp[envc] = NULL;
+        envp[k] = NULL;
         free_envp = 1;
     } else {
         extern char **environ;
         envp = environ;
+        if (nfds > 0) {
+            int envc = 0;
+            while (environ[envc]) envc++;
+            envp = (char **)malloc((size_t)(envc + 2) * sizeof(char *));
+            if (!envp) {
+                free(argv);
+                sl_rt_preempt_enable();
+                return sl_proc_err_int("proc.spawn: out of memory");
+            }
+            int k = 0;
+            for (int i = 0; i < envc; i++)
+                if (!sl_proc_is_listen_var(environ[i]))
+                    envp[k++] = environ[i];
+            envp[k] = NULL;
+            free_envp = 1;
+        }
+    }
+    if (nfds > 0) {
+        int k = 0;
+        while (envp[k]) k++;
+        snprintf(listen_fds, sizeof(listen_fds), "LISTEN_FDS=%d", nfds);
+        envp[k] = listen_fds;
+        envp[k + 1] = NULL;
     }
 
     posix_spawnattr_t attr;
@@ -252,6 +354,23 @@ static sl_res_int_str *sl_proc_spawn(sl_arr *argv_arr, sl_arr *env_arr, const ch
 
     if (flags & 2) { // SPAWN_NULL_STDIN = 2
         posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0);
+    }
+
+    if (nfds > 0) {
+        /* Into 3, 4, ... by way of numbers above them all, so a source
+           that is also a target (fd 4 to 3 while fd 3 goes to 4) is not
+           overwritten before it is copied. dup2 clears close-on-exec on
+           the copy, so exactly these reach the child. */
+        const int32_t *fds = (const int32_t *)fds_arr->data;
+        int base = 3 + nfds;
+        for (int i = 0; i < nfds; i++)
+            if (fds[i] >= base) base = fds[i] + 1;
+        for (int i = 0; i < nfds; i++)
+            posix_spawn_file_actions_adddup2(&actions, fds[i], base + i);
+        for (int i = 0; i < nfds; i++)
+            posix_spawn_file_actions_adddup2(&actions, base + i, 3 + i);
+        for (int i = 0; i < nfds; i++)
+            posix_spawn_file_actions_addclose(&actions, base + i);
     }
 
     if (dir && dir[0] != '\0') {
