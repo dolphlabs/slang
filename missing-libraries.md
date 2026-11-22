@@ -57,9 +57,9 @@ standalone repo under `slangpackages/`.
 
 - [x] **Prometheus metrics** (stdlib): counters, gauges and histograms with
   labels, text exposition format, histograms over `math/sketch`. PR #607 (open).
-- [ ] **OpenTelemetry export** (stdlib or package): OTLP over HTTP/protobuf
+- [x] **OpenTelemetry export** (stdlib or package): OTLP over HTTP/protobuf
   for traces, metrics and logs, with W3C `traceparent` propagation in
-  `http` and `httpc`.
+  `http` and `httpc`. PR #608 (open).
 - [ ] **Runtime stats API** (stdlib): GC cycles and pauses, heap and RSS,
   task count, reactor queue depth.
 - [ ] **Profiler endpoint** (stdlib): sampled CPU profiles, allocation
