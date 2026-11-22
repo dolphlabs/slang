@@ -1,5 +1,12 @@
 # todo
 
+- [x] **`context` (2026-11-22, feat/context).** Cancellation trees with
+  deadlines: `with_cancel`, `with_timeout`, `with_deadline_at`,
+  `cancel`/`release`, `cause`, `deadline` (an `until`), `remaining`,
+  `watch_fd` (cancel closes the fd, waking a parked op) and `done_chan`
+  for `select`. Clients take it through `context.deadline(c)` today;
+  context-taking client APIs (httpc, pg, redis) are follow-ups.
+
 - [x] **A leaf function could hold a safepoint (found 2026-11-21 when
   math/big's tests crashed after merging dev; fixed in
   fix/leaf-body-no-safepoint).** Callers skip their bracket around a call
