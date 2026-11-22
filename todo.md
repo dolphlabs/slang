@@ -1,5 +1,11 @@
 # todo
 
+- [x] **`pool` (2026-11-22, feat/pool).** A generic connection pool,
+  `pool.Pool[T]` over `dial`/`close`/`probe` functions, with the FIFO
+  hand-off, slot passing, waiter reuse and reaper of `pg`'s pool plus
+  `max_idle`, `max_lifetime` and wait statistics. `pg` and `mysql` keep
+  their own pools for now; moving them onto this one is a follow-up.
+
 - [x] **A leaf function could hold a safepoint (found 2026-11-21 when
   math/big's tests crashed after merging dev; fixed in
   fix/leaf-body-no-safepoint).** Callers skip their bracket around a call
