@@ -510,6 +510,16 @@ const char *infer_call(CG *cg, Expr *e) {
             cg_error(e->line, "until_never() takes no arguments");
         return "until";
     }
+    if (!strcmp(name, "until_min")) {
+        if (n != 2)
+            cg_error(e->line, "until_min() takes exactly two arguments");
+        for (int i = 0; i < 2; i++) {
+            const char *t = infer_type(cg, e->as.call.args[i]);
+            if (!is_until(t))
+                cg_error(e->line, "until_min() expects two untils (got %s)", t);
+        }
+        return "until";
+    }
     if (!strcmp(name, "until_hit")) {
         if (n != 1)
             cg_error(e->line, "until_hit() takes exactly one argument");

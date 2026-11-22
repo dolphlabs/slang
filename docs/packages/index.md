@@ -204,6 +204,19 @@ report both "timed out" and "wrote this much". A `"timeout"` from
 connection must be closed, not retried. For a framed protocol that is
 the right contract regardless — a half-written frame is unrecoverable.
 
+An `until` is opaque: it cannot be compared or turned back into a
+number, so code that holds two deadlines combines them with
+`until_min(a, b)`, the earlier of the two (`until_never()` is later than
+any instant). That is how a call gives up at its own timeout or the
+caller's deadline, whichever comes first:
+
+```slang
+let attempt = until_min(deadline, until_of(time.mono() + 1000000000));
+let rr = net.recv_until(cfd, 4096, attempt);   // 1s, or less if deadline is sooner
+```
+
+`until_hit(u)` says whether `u` has passed (never for `until_never()`).
+
 `net.tls_recv_until` / `net.tls_send_until` are the same thing over
 TLS, with the same reserved string. The `link` API takes an `until` on
 `accept`/`send`/`recv` already.
@@ -3451,6 +3464,55 @@ it once.
 for `"none"`, and whatever format arrives is recorded in
 `Credential.format` and trusted no further. There is no metadata-service
 lookup by AAGUID.
+#### `dns`
+
+A DNS client over the wire: A, AAAA, CNAME, MX, TXT, SRV, NS and PTR
+lookups, with `/etc/resolv.conf`, `/etc/hosts`, search domains, a TTL
+cache and a deadline on every call.
+
+```slang
+import "dns";
+
+let r = dns.system_resolver();                     // resolv.conf + hosts, read once
+let ips = dns.lookup_ip(r, "api.example.com", deadline);   // IPv4 first, then IPv6
+let mx = dns.lookup_mx(r, "example.com", deadline);        // by preference
+let srv = dns.lookup_srv(r, "_imap._tcp.example.com", deadline);
+guard let found = ips else let e = err_of(ips) {
+    if e == "no such host" { /* NXDOMAIN, after every search domain */ }
+    return;
+}
+```
+
+A lookup parks its task on the reactor and holds no thread, unlike
+`net.dial`'s `getaddrinfo`, which runs on a resolver thread. A and AAAA
+go out at once. Each try gets the configured per-try timeout or what is
+left of the caller's deadline, whichever is sooner, so a silent server
+costs one try and the next server answers.
+
+- **Transport.** UDP with EDNS0 (1232-byte answers), and TCP when an answer
+  comes back truncated.
+- **Spoofing.** Each query has a random id and a fresh socket, so a random
+  source port. A reply counts only if it comes from the server asked and
+  carries the id and question that were sent; anything else is ignored.
+- **Failures.** SERVFAIL, REFUSED and errors move on to the next server;
+  `options rotate` spreads queries over them.
+- **Cache.** Answers are kept for their TTL, at most `max_ttl` (an hour).
+  NXDOMAIN and empty answers are kept for the zone's negative TTL (the
+  SOA's, RFC 2308), and not at all without one. The cache holds at most
+  `max_entries` (10,000).
+- **Names.** Search domains and `ndots` work as in glibc. CNAME chains are
+  followed, inside an answer or with a new query, up to 8 hops.
+  `localhost` is the loopback addresses (RFC 6761), and an IP literal is
+  itself.
+
+`dns.exchange(server, name, type, deadline)` sends one query, and
+`dns.encode` / `dns.decode` build and read messages, for a server or a
+test's fake one. `parse_ip`, `format_ip` (RFC 5952) and `reverse_name`
+handle addresses.
+
+**Not done, deliberately:** no DNSSEC validation, no DNS over TLS or
+HTTPS, no single-flight for identical lookups in flight, and `net.dial`
+still resolves with `getaddrinfo`.
 
 #### `context`
 
@@ -5075,6 +5137,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [crypto](packages/crypto.md) -- compiler-provided, 54 public items
 - [csv](packages/csv.md) -- source package, 18 public items
 - [decimal](packages/decimal.md) -- source package, 37 public items
+- [dns](packages/dns.md) -- source package, 48 public items
 - [encoding](packages/encoding.md) -- compiler-provided, 23 public items
 - [envelope](packages/envelope.md) -- source package, 9 public items
 - [flags](packages/flags.md) -- source package, 23 public items

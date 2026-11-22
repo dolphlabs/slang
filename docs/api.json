@@ -2584,6 +2584,396 @@
         }
       ]
     },
+    "dns": {
+      "name": "dns",
+      "kind": "source",
+      "items": [
+        {
+          "name": "A",
+          "decl": "let",
+          "sig": "let A = 1;",
+          "doc": "Record types.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 37
+        },
+        {
+          "name": "NS",
+          "decl": "let",
+          "sig": "let NS = 2;",
+          "doc": "",
+          "file": "stdlib/dns/dns.sl",
+          "line": 38
+        },
+        {
+          "name": "CNAME",
+          "decl": "let",
+          "sig": "let CNAME = 5;",
+          "doc": "",
+          "file": "stdlib/dns/dns.sl",
+          "line": 39
+        },
+        {
+          "name": "SOA",
+          "decl": "let",
+          "sig": "let SOA = 6;",
+          "doc": "",
+          "file": "stdlib/dns/dns.sl",
+          "line": 40
+        },
+        {
+          "name": "PTR",
+          "decl": "let",
+          "sig": "let PTR = 12;",
+          "doc": "",
+          "file": "stdlib/dns/dns.sl",
+          "line": 41
+        },
+        {
+          "name": "MX",
+          "decl": "let",
+          "sig": "let MX = 15;",
+          "doc": "",
+          "file": "stdlib/dns/dns.sl",
+          "line": 42
+        },
+        {
+          "name": "TXT",
+          "decl": "let",
+          "sig": "let TXT = 16;",
+          "doc": "",
+          "file": "stdlib/dns/dns.sl",
+          "line": 43
+        },
+        {
+          "name": "AAAA",
+          "decl": "let",
+          "sig": "let AAAA = 28;",
+          "doc": "",
+          "file": "stdlib/dns/dns.sl",
+          "line": 44
+        },
+        {
+          "name": "SRV",
+          "decl": "let",
+          "sig": "let SRV = 33;",
+          "doc": "",
+          "file": "stdlib/dns/dns.sl",
+          "line": 45
+        },
+        {
+          "name": "NOERROR",
+          "decl": "let",
+          "sig": "let NOERROR = 0;",
+          "doc": "Response codes.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 49
+        },
+        {
+          "name": "FORMERR",
+          "decl": "let",
+          "sig": "let FORMERR = 1;",
+          "doc": "",
+          "file": "stdlib/dns/dns.sl",
+          "line": 50
+        },
+        {
+          "name": "SERVFAIL",
+          "decl": "let",
+          "sig": "let SERVFAIL = 2;",
+          "doc": "",
+          "file": "stdlib/dns/dns.sl",
+          "line": 51
+        },
+        {
+          "name": "NXDOMAIN",
+          "decl": "let",
+          "sig": "let NXDOMAIN = 3;",
+          "doc": "",
+          "file": "stdlib/dns/dns.sl",
+          "line": 52
+        },
+        {
+          "name": "NOTIMP",
+          "decl": "let",
+          "sig": "let NOTIMP = 4;",
+          "doc": "",
+          "file": "stdlib/dns/dns.sl",
+          "line": 53
+        },
+        {
+          "name": "REFUSED",
+          "decl": "let",
+          "sig": "let REFUSED = 5;",
+          "doc": "",
+          "file": "stdlib/dns/dns.sl",
+          "line": 54
+        },
+        {
+          "name": "Record",
+          "decl": "struct",
+          "sig": "gc struct Record",
+          "doc": "One resource record, decoded. `name` is lowercased with no final dot. `value` is the address (A, AAAA), the target name (CNAME, NS, PTR, MX, SRV, and SOA's primary server), or the text (TXT, its strings joined). `priority` is MX's preference or SRV's priority; `weight` and `port` are SRV's. A SOA's `ttl` is already its negative TTL: the lesser of the record's TTL and its MINIMUM field.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 69
+        },
+        {
+          "name": "Question",
+          "decl": "struct",
+          "sig": "gc struct Question",
+          "doc": "",
+          "file": "stdlib/dns/dns.sl",
+          "line": 79
+        },
+        {
+          "name": "Message",
+          "decl": "struct",
+          "sig": "gc struct Message",
+          "doc": "",
+          "file": "stdlib/dns/dns.sl",
+          "line": 84
+        },
+        {
+          "name": "Server",
+          "decl": "struct",
+          "sig": "gc struct Server",
+          "doc": "A name server: an IP literal and a port.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 99
+        },
+        {
+          "name": "Config",
+          "decl": "struct",
+          "sig": "gc struct Config",
+          "doc": "What /etc/resolv.conf says. timeout is per try, in nanoseconds; a lookup makes up to attempts passes over servers.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 106
+        },
+        {
+          "name": "Hosts",
+          "decl": "struct",
+          "sig": "gc struct Hosts",
+          "doc": "/etc/hosts: addresses by lowercased name, in file order.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 116
+        },
+        {
+          "name": "Resolver",
+          "decl": "struct",
+          "sig": "gc struct Resolver",
+          "doc": "",
+          "file": "stdlib/dns/dns.sl",
+          "line": 126
+        },
+        {
+          "name": "parse_ip",
+          "decl": "fn",
+          "sig": "fn parse_ip(s: str) -> result[bytes, str]",
+          "doc": "An IP address in text: 4 bytes for IPv4, 16 for IPv6.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 382
+        },
+        {
+          "name": "format_ip",
+          "decl": "fn",
+          "sig": "fn format_ip(b: bytes) -> str",
+          "doc": "An address's canonical text: dotted IPv4, or RFC 5952 IPv6.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 462
+        },
+        {
+          "name": "reverse_name",
+          "decl": "fn",
+          "sig": "fn reverse_name(ip: str) -> result[str, str]",
+          "doc": "The PTR name for an address: \"4.3.2.1.in-addr.arpa\" or the IPv6 nibbles under ip6.arpa.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 474
+        },
+        {
+          "name": "encode_query",
+          "decl": "fn",
+          "sig": "fn encode_query(id: int, name: str, qtype: int) -> result[bytes, str]",
+          "doc": "A query for `name`, recursion desired, with an EDNS0 OPT record asking for answers up to 1232 bytes over UDP.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 522
+        },
+        {
+          "name": "encode",
+          "decl": "fn",
+          "sig": "fn encode(m: Message) -> result[bytes, str]",
+          "doc": "A whole message, uncompressed: for a server, or a test's fake one.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 619
+        },
+        {
+          "name": "decode",
+          "decl": "fn",
+          "sig": "fn decode(b: bytes) -> result[Message, str]",
+          "doc": "A message from the wire. Records this package does not read (OPT, other classes, other types) are skipped.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 783
+        },
+        {
+          "name": "exchange",
+          "decl": "fn",
+          "sig": "fn exchange(s: Server, name: str, qtype: int, deadline: until) -> result[Message, str]",
+          "doc": "One query to one server: over UDP, then over TCP when the answer came back truncated. Replies that are malformed, or answer some other query, are ignored and the wait goes on until `deadline`.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 906
+        },
+        {
+          "name": "default_config",
+          "decl": "fn",
+          "sig": "fn default_config() -> Config",
+          "doc": "What a machine with no resolv.conf gets, as glibc and Go do: the local host on port 53, ndots 1, 5s per try, 2 attempts.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 977
+        },
+        {
+          "name": "parse_resolv_conf",
+          "decl": "fn",
+          "sig": "fn parse_resolv_conf(text: str) -> Config",
+          "doc": "/etc/resolv.conf's text: nameserver, search, domain, and the options ndots, timeout, attempts and rotate (caps as glibc's: ndots 15, timeout 30s, attempts 5). A nameserver that is not an IP address is skipped; with none left, the local host is used.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 993
+        },
+        {
+          "name": "system_config",
+          "decl": "fn",
+          "sig": "fn system_config() -> Config",
+          "doc": "/etc/resolv.conf, or default_config() when it cannot be read.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 1067
+        },
+        {
+          "name": "no_hosts",
+          "decl": "fn",
+          "sig": "fn no_hosts() -> Hosts",
+          "doc": "",
+          "file": "stdlib/dns/dns.sl",
+          "line": 1075
+        },
+        {
+          "name": "parse_hosts",
+          "decl": "fn",
+          "sig": "fn parse_hosts(text: str) -> Hosts",
+          "doc": "A hosts file's text: an address, then its names. Lines whose address does not parse are skipped.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 1082
+        },
+        {
+          "name": "system_hosts",
+          "decl": "fn",
+          "sig": "fn system_hosts() -> Hosts",
+          "doc": "/etc/hosts, or no hosts when it cannot be read.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 1107
+        },
+        {
+          "name": "new_resolver",
+          "decl": "fn",
+          "sig": "fn new_resolver(cfg: Config, hosts: Hosts) -> Resolver",
+          "doc": "",
+          "file": "stdlib/dns/dns.sl",
+          "line": 1117
+        },
+        {
+          "name": "system_resolver",
+          "decl": "fn",
+          "sig": "fn system_resolver() -> Resolver",
+          "doc": "A resolver over /etc/resolv.conf and /etc/hosts, read once, now.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 1124
+        },
+        {
+          "name": "queries_sent",
+          "decl": "fn",
+          "sig": "fn queries_sent(r: Resolver) -> int",
+          "doc": "How many queries this resolver has sent: answers from the cache or hosts send none.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 1130
+        },
+        {
+          "name": "cache_len",
+          "decl": "fn",
+          "sig": "fn cache_len(r: Resolver) -> int",
+          "doc": "",
+          "file": "stdlib/dns/dns.sl",
+          "line": 1137
+        },
+        {
+          "name": "cache_clear",
+          "decl": "fn",
+          "sig": "fn cache_clear(r: Resolver)",
+          "doc": "",
+          "file": "stdlib/dns/dns.sl",
+          "line": 1144
+        },
+        {
+          "name": "lookup",
+          "decl": "fn",
+          "sig": "fn lookup(r: Resolver, name: str, qtype: int, deadline: until) -> result[[Record], str]",
+          "doc": "The records of `qtype` for `name`, after search domains and CNAMEs. err(\"no such host\") when no candidate name exists; ok([]) when one exists without records of this type.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 1363
+        },
+        {
+          "name": "lookup_ip",
+          "decl": "fn",
+          "sig": "fn lookup_ip(r: Resolver, host: str, deadline: until) -> result[[str], str]",
+          "doc": "The addresses of `host`: IPv4 first, then IPv6. An IP literal is itself; then /etc/hosts; \"localhost\" and names under it are the loopback addresses (RFC 6761); anything else asks for A and AAAA at once. One family failing while the other answers is not an error.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 1413
+        },
+        {
+          "name": "lookup_cname",
+          "decl": "fn",
+          "sig": "fn lookup_cname(r: Resolver, name: str, deadline: until) -> result[str, str]",
+          "doc": "The name `name` is an alias of, after every CNAME; `name` itself when it is not an alias.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 1495
+        },
+        {
+          "name": "lookup_mx",
+          "decl": "fn",
+          "sig": "fn lookup_mx(r: Resolver, name: str, deadline: until) -> result[[Record], str]",
+          "doc": "Mail exchangers, by preference (lowest first). `value` is the host, `priority` its preference.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 1515
+        },
+        {
+          "name": "lookup_srv",
+          "decl": "fn",
+          "sig": "fn lookup_srv(r: Resolver, name: str, deadline: until) -> result[[Record], str]",
+          "doc": "Service records for a full name such as \"_imap._tcp.example.com\", by priority (lowest first) and then weight (highest first). Choosing among one priority's records by weight, as RFC 2782 has a client do, is the caller's.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 1527
+        },
+        {
+          "name": "lookup_txt",
+          "decl": "fn",
+          "sig": "fn lookup_txt(r: Resolver, name: str, deadline: until) -> result[[str], str]",
+          "doc": "Each TXT record's text, its strings joined.",
+          "file": "stdlib/dns/dns.sl",
+          "line": 1536
+        },
+        {
+          "name": "lookup_ns",
+          "decl": "fn",
+          "sig": "fn lookup_ns(r: Resolver, name: str, deadline: until) -> result[[str], str]",
+          "doc": "",
+          "file": "stdlib/dns/dns.sl",
+          "line": 1540
+        },
+        {
+          "name": "lookup_addr",
+          "decl": "fn",
+          "sig": "fn lookup_addr(r: Resolver, ip: str, deadline: until) -> result[[str], str]",
+          "doc": "The names an address points back to (PTR records).",
+          "file": "stdlib/dns/dns.sl",
+          "line": 1545
+        }
+      ]
+    },
     "encoding": {
       "name": "encoding",
       "kind": "native",

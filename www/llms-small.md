@@ -217,6 +217,9 @@ nothing is captured. Blocking calls (`chan_recv`, `net.*`, `time.sleep`) park
 the task, not the OS thread, so there is no async/await. `select { case let v
 = chan_recv(a) { .. } case chan_send(b, x) { .. } default { .. } }` waits on
 several channels.
+Waiting calls take an `until`, an absolute deadline:
+`until_of(time.mono() + ns)`, `until_never()`, `until_hit(u)` (passed?) and
+`until_min(a, b)` (the earlier; an `until` cannot be compared directly).
 
 ## Functions as values
 
@@ -268,27 +271,10 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg mysql redis regex
 strings unicode encoding compress math math/vec decimal rand builder byteutil flags sort
-uuid http http2 httpc websocket runtime template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
-uuid http http2 httpc websocket oidc template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
-uuid http http2 httpc websocket acme template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
-uuid http http2 httpc websocket lease template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
-uuid http http2 httpc websocket balance template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
-uuid http http2 httpc websocket memcache template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
-uuid http http2 httpc websocket envelope template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
-uuid http http2 httpc websocket otp template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
-uuid http http2 httpc websocket idempotency outbox template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
-uuid http http2 httpc websocket msgpack cbor template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
-uuid http http2 httpc websocket crdt template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
-uuid http http2 httpc websocket singleflight template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
-uuid http http2 httpc websocket resilience template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
-uuid http http2 httpc websocket multipart sse template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
-uuid http http2 httpc websocket smtp template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
-uuid http http2 httpc websocket trace template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
-uuid http http2 httpc websocket metrics template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
-uuid http http2 httpc websocket proxyproto template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
-uuid http http2 httpc websocket protobuf template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
-uuid http http2 httpc websocket pool template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
-uuid http http2 httpc websocket context template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
+uuid http http2 httpc websocket runtime oidc acme lease balance memcache
+envelope otp idempotency outbox msgpack cbor crdt singleflight resilience
+multipart sse smtp trace metrics proxyproto protobuf pool context dns webauthn template
+csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 `xml.parse(text)` gives the root `xml.Node` (`name`, `local`, `ns`, `attrs`, `children`);
 `n.find("a/b")`, `n.find_all(path)`, `n.child_text("link")`, `n.attr("id")`; DOCTYPE refused.
 `xml.element("a").set_attr("k", "v").add_text("t")` and `xml.write(n)` build one.
