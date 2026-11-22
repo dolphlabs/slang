@@ -221,6 +221,7 @@ PACKAGE_SECTIONS = {
     "http": ["`http`"],
     "httpc": ["`httpc`"],
     "websocket": ["`websocket`"],
+    "lease": ["`lease`"],
     "balance": ["`balance`"],
     "memcache": ["`memcache`"],
     "envelope": ["`envelope`"],

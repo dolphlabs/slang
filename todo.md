@@ -1,5 +1,11 @@
 # todo
 
+- [x] **`lease` (2026-11-22, feat/lease).** Redis leases with
+  token-checked renew/release and fencing tokens, a leader elector, and
+  Postgres session advisory locks. Unit-tested against a fake Redis, run
+  against a real Redis locally, and wired into CI (a Redis container in
+  the Postgres job) through tests/live/lease. Found: CI has no job
+  running tests/live/redis, though that test says it does.
 - [x] **`balance` (2026-11-22, feat/balance).** Client-side load
   balancing: round robin, random, least loaded, P2C over in-flight and
   latency EWMA, and rendezvous hashing with fail-over, plus ejection with
