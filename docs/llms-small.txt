@@ -268,6 +268,7 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg mysql redis regex
 strings unicode encoding compress math math/vec decimal rand builder byteutil flags sort
+uuid http http2 httpc websocket metrics template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 uuid http http2 httpc websocket proxyproto template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 uuid http http2 httpc websocket protobuf template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 uuid http http2 httpc websocket pool template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
@@ -468,6 +469,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - math/sketch: bloom, bloom_blocks, decode_bloom, Bloom.add_hash, Bloom.contains_hash, Bloom.add_str, Bloom.add_int, Bloom.add_bytes, Bloom.contains_str, Bloom.contains_int, Bloom.contains_bytes, Bloom.merge (+85 more)
 - math/stats: normal, Normal.pdf, Normal.cdf, Normal.quantile, Normal.sample, log_normal, LogNormal.pdf, LogNormal.cdf, LogNormal.quantile, LogNormal.sample, uniform, Uniform.pdf (+99 more)
 - math/vec: dot, sum, norm, distance, distance2, cosine, argmax, argmin, scale, axpy, add, sub (+11 more)
+- metrics: registry, default_buckets, exponential_buckets, counter, gauge, histogram, with, remove, inc, add, dec, set (+3 more)
 - mysql: parse_url, connect, connect_config, close, usable, in_transaction, server_version, connection_id, last_insert_id, affected_rows, ping, sqlstate (+32 more)
 - nats: options, with_creds, connect, connect_with, publish, publish_reply, publish_headers, publish_full, subscribe, queue_subscribe, next_msg, unsubscribe (+15 more)
 - net: listen, port, accept, dial, dial_until, lookup_srv_until, lookup_txt_until, dial_unix, listen_unix, send, recv, recv_until (+34 more)
