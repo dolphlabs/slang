@@ -239,6 +239,7 @@ static const char *const BUILTIN_NAMES[] = {
     "wire_put_bytes", "make_chan", "chan_send", "chan_recv", "chan_close",
     "make_mutex", "mutex_lock", "mutex_unlock", "mutex_trylock",
     "join_wait", "arena_new", "until_of", "until_never", "until_hit",
+    "until_min",
     "fault_timeout", "fault_reset", "fault_closed", "fault_io",
     "fault_refused", "fault_kind", "fault_code", "fault_op", "peer_v4",
     "peer_port", "trip_new", "link_listen", "link_dial", "__enum_from_int",
