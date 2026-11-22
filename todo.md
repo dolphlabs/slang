@@ -1,5 +1,10 @@
 # todo
 
+- [x] **`memcache` (2026-11-22, feat/memcache).** A memcached text
+  protocol client: get/gets/get_multi, set/add/replace/cas,
+  delete/incr/decr/touch, rendezvous hashing over servers, idle
+  connection reuse with errored connections dropped. Tested against an
+  in-test server (no memcached on the machine or in CI).
 - [x] **`envelope` (2026-11-22, feat/envelope).** Envelope encryption over
   `crypto.seal`: a random data key per value wrapped by a named
   key-encryption key, aad binding, key rotation with `rewrap` (the value

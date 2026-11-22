@@ -221,6 +221,7 @@ PACKAGE_SECTIONS = {
     "http": ["`http`"],
     "httpc": ["`httpc`"],
     "websocket": ["`websocket`"],
+    "memcache": ["`memcache`"],
     "envelope": ["`envelope`"],
     "otp": ["`otp`"],
     "idempotency": ["`idempotency` and `outbox`"],

@@ -268,6 +268,7 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg mysql redis regex
 strings unicode encoding compress math math/vec decimal rand builder byteutil flags sort
+uuid http http2 httpc websocket memcache template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 uuid http http2 httpc websocket envelope template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 uuid http http2 httpc websocket otp template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 uuid http http2 httpc websocket idempotency outbox template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
@@ -483,6 +484,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - math/sketch: bloom, bloom_blocks, decode_bloom, Bloom.add_hash, Bloom.contains_hash, Bloom.add_str, Bloom.add_int, Bloom.add_bytes, Bloom.contains_str, Bloom.contains_int, Bloom.contains_bytes, Bloom.merge (+85 more)
 - math/stats: normal, Normal.pdf, Normal.cdf, Normal.quantile, Normal.sample, log_normal, LogNormal.pdf, LogNormal.cdf, LogNormal.quantile, LogNormal.sample, uniform, Uniform.pdf (+99 more)
 - math/vec: dot, sum, norm, distance, distance2, cosine, argmax, argmin, scale, axpy, add, sub (+11 more)
+- memcache: new, get, gets, get_multi, set, add, replace, cas, delete, incr, decr, touch (+1 more)
 - metrics: registry, default_buckets, exponential_buckets, counter, gauge, histogram, with, remove, inc, add, dec, set (+3 more)
 - msgpack: writer, finish, write_nil, write_bool, write_int, write_uint, write_float, write_float32, write_str, write_bin, write_array, write_map (+30 more)
 - multipart: boundary_of, parser, feed, finish, parse, body, add_field, add_file, close, content_type
