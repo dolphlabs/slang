@@ -107,7 +107,7 @@ standalone repo under `slangpackages/`.
   Status: needs a new slangpackages repository; not created without approval.
 - [ ] **Cassandra / Scylla client** (package).
   Status: needs a new slangpackages repository; not created without approval.
-- [ ] **memcached client** (stdlib or package).
+- [x] **memcached client** (stdlib or package). PR #619 (open).
 - [ ] **etcd and Consul** (package): key/value, watches, service discovery.
   Status: needs a new slangpackages repository; not created without approval.
 
