@@ -9724,6 +9724,13 @@
           "sig": "net.nonblock(int) -> result[bool,str]"
         },
         {
+          "name": "inherited",
+          "params": [],
+          "ret": "[i32]",
+          "tls": false,
+          "sig": "net.inherited() -> [i32]"
+        },
+        {
           "name": "udp_bind",
           "params": [
             "str",
@@ -10698,6 +10705,15 @@
           "sig": "proc.wait_idle()"
         },
         {
+          "name": "wait_idle_until",
+          "params": [
+            "until"
+          ],
+          "ret": "bool",
+          "tls": false,
+          "sig": "proc.wait_idle_until(until) -> bool"
+        },
+        {
           "name": "getenv",
           "params": [
             "str"
@@ -10731,6 +10747,19 @@
           "ret": "result[int,str]",
           "tls": false,
           "sig": "proc.spawn([str], [str], str, int) -> result[int,str]"
+        },
+        {
+          "name": "spawn_fds",
+          "params": [
+            "[str]",
+            "[str]",
+            "str",
+            "int",
+            "NA_ARR_I32"
+          ],
+          "ret": "result[int,str]",
+          "tls": false,
+          "sig": "proc.spawn_fds([str], [str], str, int, NA_ARR_I32) -> result[int,str]"
         },
         {
           "name": "kill",

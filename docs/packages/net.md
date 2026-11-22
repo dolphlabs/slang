@@ -346,6 +346,8 @@ the session, one OpenSSL call at a time. A link splits once.
 
 ### `net.nonblock(int) -> result[bool,str]`
 
+### `net.inherited() -> [i32]`
+
 ### `net.udp_bind(str, int) -> result[i32,str]`
 
 ### `net.udp_bind_shared(str, int) -> result[i32,str]`
