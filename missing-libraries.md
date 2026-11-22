@@ -87,9 +87,9 @@ standalone repo under `slangpackages/`.
 
 ## 5. Identity and security
 
-- [ ] **OAuth2 and OpenID Connect client** (stdlib or package):
+- [x] **OAuth2 and OpenID Connect client** (stdlib or package):
   authorization code with PKCE, client credentials, refresh, discovery,
-  ID-token checks against JWKS.
+  ID-token checks against JWKS. PR #624 (open).
 - [x] **ACME** (stdlib): automatic certificates from Let's Encrypt with
   renewal, served through `tls_ctx_add_sni`. PR #622 (open).
 - [x] **TOTP and HOTP** (stdlib): RFC 6238/4226 codes and checks with skew. PR #617 (open).
