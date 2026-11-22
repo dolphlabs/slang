@@ -2575,6 +2575,51 @@ that case.
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
 
+#### `msgpack` and `cbor`
+
+MessagePack and CBOR (RFC 8949), the two common binary forms of JSON's
+data model, with binary strings added. CBOR also has tags; COSE,
+WebAuthn and CWT are built on it.
+
+```slang
+import "cbor";
+import "msgpack";
+
+// streaming: nothing allocated but the output
+let w = msgpack.writer();
+msgpack.write_map(w, 1);
+msgpack.write_str(w, "id");
+msgpack.write_int(w, 42);
+let data = msgpack.finish(w);
+
+let r = msgpack.reader(data);
+let pairs = msgpack.read_map(r) ?? 0;
+let key = msgpack.read_str(r) ?? "";
+let id = msgpack.read_int(r) ?? 0;
+
+// or as a tree
+let v = cbor.decode(bytes_in) ?? cbor.null_value();
+let temp = cbor.get(v, "temp");
+```
+
+- **Writers** (`write_int`, `write_str`/`write_text`, `write_bin`/
+  `write_bytes`, `write_float`, `write_array`, `write_map`, and so on)
+  always use the shortest form. CBOR writes a float in the smallest of
+  half, single or double precision that holds it exactly, its preferred
+  serialization. MessagePack has `write_ext` and `write_timestamp`; CBOR
+  has `write_tag`.
+- **Readers** read one value at a time (`peek`/`peek_major` says what
+  comes next) and `skip` past what is not needed. CBOR reads
+  indefinite-length strings and containers (`-1` from `read_array` /
+  `read_map`, then items until `at_break`).
+- **Values:** `decode`/`encode` and `read_value`/`write_value` work on a
+  `Value` tree; `get(v, key)` finds a map entry.
+- **Untrusted input:** every length is checked against the bytes left
+  before anything is allocated, so a five-byte "array of 4 billion"
+  fails at once. Nesting is limited to `MAX_DEPTH` (512), and CBOR text
+  must be UTF-8. Both are checked against the specifications' example
+  vectors.
+
 #### `websocket`
 
 A WebSocket client (RFC 6455) over `ws://` and `wss://`, with
@@ -4152,6 +4197,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [builder](packages/builder.md) -- source package, 20 public items
 - [byteutil](packages/byteutil.md) -- source package, 6 public items
 - [cache](packages/cache.md) -- source package, 14 public items
+- [cbor](packages/cbor.md) -- source package, 68 public items
 - [compress](packages/compress.md) -- compiler-provided, 10 public items
 - [crypto](packages/crypto.md) -- compiler-provided, 54 public items
 - [csv](packages/csv.md) -- source package, 18 public items
@@ -4176,6 +4222,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [math/sketch](packages/math/sketch.md) -- source package, 105 public items
 - [math/stats](packages/math/stats.md) -- source package, 128 public items
 - [math/vec](packages/math/vec.md) -- compiler-provided, 23 public items
+- [msgpack](packages/msgpack.md) -- source package, 60 public items
 - [mysql](packages/mysql.md) -- source package, 49 public items
 - [nats](packages/nats.md) -- source package, 31 public items
 - [net](packages/net.md) -- compiler-provided, 35 public items
