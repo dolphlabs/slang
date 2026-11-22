@@ -2626,6 +2626,33 @@ that case.
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
 
+#### `otp`
+
+One-time passwords for two-factor sign-in: HOTP (RFC 4226) and TOTP
+(RFC 6238), the codes authenticator apps show.
+
+```slang
+import "otp";
+
+// enrolment: keep the secret, show the URI as a QR code
+let secret = otp.new_secret() ?? b"";
+let uri = otp.uri(secret, "Acme", "ada@example.com", otp.totp_options());
+
+// sign-in: accept each code once
+let matched = otp.verify_totp(secret, code, now_unix_secs, otp.totp_options());
+guard let step = matched else { return deny(); }
+if step <= user.last_otp_step { return deny(); }   // a replay
+user.last_otp_step = step;
+```
+
+`totp_options()` gives 6 digits, 30-second steps, one step of skew either
+side, and SHA-1 (what apps assume; `"SHA256"` and `"SHA512"` also work).
+`verify_totp` compares in constant time and returns the time step that
+matched, so a code cannot be used twice: within its 30 seconds it is
+otherwise valid for anyone who saw it. There are also `hotp`, `totp`,
+`verify_hotp` (with a look-ahead window), `parse_secret` (base32 as apps
+show it) and `new_secret` (160 random bits). Checked against both RFCs'
+test vectors.
 #### `idempotency` and `outbox`
 
 Two patterns for doing a thing exactly once in effect.
@@ -4717,6 +4744,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [nats](packages/nats.md) -- source package, 31 public items
 - [net](packages/net.md) -- compiler-provided, 46 public items
 - [os](packages/os.md) -- compiler-provided, 18 public items
+- [otp](packages/otp.md) -- source package, 10 public items
 - [outbox](packages/outbox.md) -- source package, 5 public items
 - [pg](packages/pg.md) -- source package, 58 public items
 - [pool](packages/pool.md) -- source package, 11 public items
