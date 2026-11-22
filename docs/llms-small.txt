@@ -273,7 +273,7 @@ Standard packages: `time net json proc fs os io log crypto sql pg mysql redis re
 strings unicode encoding compress math math/vec decimal rand builder byteutil flags sort
 uuid http http2 httpc websocket runtime oidc acme lease balance memcache
 envelope otp idempotency outbox msgpack cbor crdt singleflight resilience
-multipart sse smtp trace metrics proxyproto protobuf pool context dns template
+multipart sse smtp trace metrics proxyproto protobuf pool context dns webauthn template
 csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 `xml.parse(text)` gives the root `xml.Node` (`name`, `local`, `ns`, `attrs`, `children`);
 `n.find("a/b")`, `n.find_all(path)`, `n.child_text("link")`, `n.attr("id")`; DOCTYPE refused.
@@ -516,6 +516,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - trace: options, tracer, tracer_with, start, child, set_kind, set_str, set_int, set_float, set_bool, set_error, set_ok (+7 more)
 - unicode: valid, valid_bytes, count, runes, encode, truncate, fold, equal_fold, nfc, nfd, is_nfc
 - uuid: v4, v7, v7_at, is_valid, parse, version, time_ms, to_binary, from_binary
+- webauthn: relying_party, begin_registration, begin_login, verify_registration, finish_registration, verify_login, login_credential_id, finish_login
 - websocket: options, dial, dial_with, send_text, send_text_bytes, send_binary, ping, recv, text, close, close_now, is_open (+1 more)
 - x509: parse_pem, parse_der, matches_host, valid_at, expires_in, verify, csr, self_signed
 - xml: default_limits, parse, parse_with, Node.attr, Node.attr_ns, Node.elements, Node.child, Node.child_ns, Node.children_named, Node.text_content, Node.child_text, Node.find (+10 more)

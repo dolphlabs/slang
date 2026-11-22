@@ -19066,6 +19066,148 @@
         }
       ]
     },
+    "webauthn": {
+      "name": "webauthn",
+      "kind": "source",
+      "items": [
+        {
+          "name": "JValue",
+          "decl": "struct",
+          "sig": "gc struct JValue",
+          "doc": "",
+          "file": "stdlib/webauthn/json.sl",
+          "line": 15
+        },
+        {
+          "name": "ES256",
+          "decl": "let",
+          "sig": "let ES256 = -7;",
+          "doc": "COSE algorithm ids.",
+          "file": "stdlib/webauthn/webauthn.sl",
+          "line": 41
+        },
+        {
+          "name": "EDDSA",
+          "decl": "let",
+          "sig": "let EDDSA = -8;",
+          "doc": "",
+          "file": "stdlib/webauthn/webauthn.sl",
+          "line": 42
+        },
+        {
+          "name": "RS256",
+          "decl": "let",
+          "sig": "let RS256 = -257;",
+          "doc": "",
+          "file": "stdlib/webauthn/webauthn.sl",
+          "line": 43
+        },
+        {
+          "name": "RelyingParty",
+          "decl": "struct",
+          "sig": "gc struct RelyingParty",
+          "doc": "",
+          "file": "stdlib/webauthn/webauthn.sl",
+          "line": 52
+        },
+        {
+          "name": "relying_party",
+          "decl": "fn",
+          "sig": "fn relying_party(id: str, name: str, origins: [str]) -> RelyingParty",
+          "doc": "",
+          "file": "stdlib/webauthn/webauthn.sl",
+          "line": 66
+        },
+        {
+          "name": "User",
+          "decl": "struct",
+          "sig": "gc struct User",
+          "doc": "The account a credential is made for. `id` is an opaque handle of at most 64 bytes, never an email or a name: authenticators show `name` and `display_name`, and may keep `id` where anyone holding the device can read it.",
+          "file": "stdlib/webauthn/webauthn.sl",
+          "line": 75
+        },
+        {
+          "name": "Challenge",
+          "decl": "struct",
+          "sig": "gc struct Challenge",
+          "doc": "A challenge to keep (value) and the options to send (options: JSON for parseCreationOptionsFromJSON / parseRequestOptionsFromJSON).",
+          "file": "stdlib/webauthn/webauthn.sl",
+          "line": 83
+        },
+        {
+          "name": "Credential",
+          "decl": "struct",
+          "sig": "gc struct Credential",
+          "doc": "A registered credential: what to store for the user. public_key is the COSE key as the authenticator sent it.",
+          "file": "stdlib/webauthn/webauthn.sl",
+          "line": 90
+        },
+        {
+          "name": "Login",
+          "decl": "struct",
+          "sig": "gc struct Login",
+          "doc": "A login that checked out. user_handle is the User.id the authenticator keeps for a passkey (\"\" for a security key that does not): when it is not empty it must name the account the credential belongs to.",
+          "file": "stdlib/webauthn/webauthn.sl",
+          "line": 108
+        },
+        {
+          "name": "begin_registration",
+          "decl": "fn",
+          "sig": "fn begin_registration(rp: RelyingParty, user: User, exclude: [Credential]) -> result[Challenge, str]",
+          "doc": "Options for navigator.credentials.create: ES256, EdDSA and RS256 keys, a discoverable credential (a passkey) preferred, no attestation, and `exclude` (the user's existing credentials) so one authenticator is not registered twice.",
+          "file": "stdlib/webauthn/webauthn.sl",
+          "line": 153
+        },
+        {
+          "name": "begin_login",
+          "decl": "fn",
+          "sig": "fn begin_login(rp: RelyingParty, allow: [Credential]) -> result[Challenge, str]",
+          "doc": "Options for navigator.credentials.get. `allow` lists the credentials that may answer; empty lets the user pick any passkey for this site.",
+          "file": "stdlib/webauthn/webauthn.sl",
+          "line": 181
+        },
+        {
+          "name": "verify_registration",
+          "decl": "fn",
+          "sig": "fn verify_registration(rp: RelyingParty, challenge: bytes, client_data: bytes, attestation_object: bytes) -> result[Credential, str]",
+          "doc": "Checks a registration from its parts: the client data JSON and the attestation object, both raw bytes (not base64url).",
+          "file": "stdlib/webauthn/webauthn.sl",
+          "line": 531
+        },
+        {
+          "name": "finish_registration",
+          "decl": "fn",
+          "sig": "fn finish_registration(rp: RelyingParty, challenge: bytes, response_json: str) -> result[Credential, str]",
+          "doc": "Checks a registration as the browser posts it: JSON.stringify of the PublicKeyCredential (its toJSON()).",
+          "file": "stdlib/webauthn/webauthn.sl",
+          "line": 645
+        },
+        {
+          "name": "verify_login",
+          "decl": "fn",
+          "sig": "fn verify_login(rp: RelyingParty, challenge: bytes, cred: Credential, client_data: bytes, authenticator_data: bytes, signature: bytes) -> result[Login, str]",
+          "doc": "Checks a login from its parts, all raw bytes: the client data JSON, the authenticator data and the signature over both. The caller looked up `cred` by the credential id the browser sent.",
+          "file": "stdlib/webauthn/webauthn.sl",
+          "line": 673
+        },
+        {
+          "name": "login_credential_id",
+          "decl": "fn",
+          "sig": "fn login_credential_id(response_json: str) -> result[bytes, str]",
+          "doc": "The credential id a posted login names, to look the stored credential up by before finish_login.",
+          "file": "stdlib/webauthn/webauthn.sl",
+          "line": 714
+        },
+        {
+          "name": "finish_login",
+          "decl": "fn",
+          "sig": "fn finish_login(rp: RelyingParty, challenge: bytes, cred: Credential, response_json: str) -> result[Login, str]",
+          "doc": "Checks a login as the browser posts it: JSON.stringify of the PublicKeyCredential.",
+          "file": "stdlib/webauthn/webauthn.sl",
+          "line": 724
+        }
+      ]
+    },
     "websocket": {
       "name": "websocket",
       "kind": "source",

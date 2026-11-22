@@ -92,8 +92,8 @@ standalone repo under `slangpackages/`.
 - [x] **ACME** (stdlib): automatic certificates from Let's Encrypt with
   renewal, served through `tls_ctx_add_sni`. PR #622 (open).
 - [x] **TOTP and HOTP** (stdlib): RFC 6238/4226 codes and checks with skew. PR #617 (open).
-- [ ] **WebAuthn / passkeys** (package): registration and assertion.
-  Status: waits for the CBOR PR (feat/msgpack-cbor) to merge.
+- [x] **WebAuthn / passkeys** (stdlib, `webauthn`): registration and
+  assertion. On feat/webauthn; attestation is recorded, not verified.
 - [x] **Envelope encryption** (stdlib, `crypto`): AES-GCM data keys wrapped
   by a key-encryption key, with key ids for rotation. PR #618 (open).
 

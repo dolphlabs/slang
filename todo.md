@@ -1,5 +1,11 @@
 # todo
 
+- [x] **`webauthn` (2026-11-22, feat/webauthn).** Relying-party
+  registration and login: options JSON, client data, authenticator data
+  and COSE keys checked, ES256/EdDSA/RS256 signatures, the clone counter.
+  Tested with a software authenticator signing with real keys. Its JSON
+  reader is a third copy of oidc's (one shared package is a follow-up)
+  and refuses a `\u0000` that would cut a str short.
 - [x] **`dns` (2026-11-22, feat/dns).** A wire-protocol DNS client:
   A/AAAA/CNAME/MX/TXT/SRV/NS/PTR over UDP with TCP on truncation,
   resolv.conf and hosts, search domains and ndots, CNAME chains, a TTL
