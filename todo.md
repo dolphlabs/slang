@@ -1,5 +1,14 @@
 # todo
 
+- [x] **Dialing IPv6 with happy eyeballs (2026-11-22, feat/net-dial-ipv6).**
+  `net.dial` resolved IPv4 only (`AF_INET` hints), so it could not reach
+  an IPv6 address, and `link_dial` used only the first address and
+  ignored its deadline during the lookup. All dials now resolve both
+  families and race them per RFC 8305 (250 ms attempt delay), and an IP
+  literal skips the resolver thread. A positive IPv6 connection test
+  needs an IPv6 listener, which `net.listen_with` (feat/net-sockopts)
+  adds; tests/net_dial_families covers the rest. Part of the DNS
+  resolver item; the wire-protocol client with a TTL cache follows UDP.
 - [x] **Children inherited every socket and file (found 2026-11-22 while
   designing listener handoff; fixed in fix/net-cloexec).** No runtime fd
   was close-on-exec, so a `proc.spawn` child held every listener,

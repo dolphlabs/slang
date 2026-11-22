@@ -3089,9 +3089,15 @@ TLS, with the same reserved string. The `link` API takes an `until` on
 `net.dial_until(host, port, deadline)` bounds connecting: the DNS lookup
 and the TCP connect together. A lookup still running when the deadline
 passes is abandoned to the resolver thread (`getaddrinfo` cannot be
-interrupted), so the caller gets `"timeout"` on time. Every address the
-name resolves to is tried in turn — `net.dial` does the same, without a
-deadline.
+interrupted), so the caller gets `"timeout"` on time.
+
+`net.dial`, `net.dial_until`, `net.tls_dial` and `link_dial` resolve
+IPv4 and IPv6 and race the addresses (happy eyeballs, RFC 8305): they
+are tried alternating families, in the resolver's order, and an attempt
+that has not connected within 250 ms does not hold up the next one. The
+first to connect wins and the others are closed, so a broken IPv6 route
+costs a quarter of a second, not a TCP connect timeout. An IP literal,
+IPv4 or IPv6, skips the resolver thread.
 
 ##### DNS SRV and TXT lookups
 
@@ -15655,9 +15661,15 @@ TLS, with the same reserved string. The `link` API takes an `until` on
 `net.dial_until(host, port, deadline)` bounds connecting: the DNS lookup
 and the TCP connect together. A lookup still running when the deadline
 passes is abandoned to the resolver thread (`getaddrinfo` cannot be
-interrupted), so the caller gets `"timeout"` on time. Every address the
-name resolves to is tried in turn — `net.dial` does the same, without a
-deadline.
+interrupted), so the caller gets `"timeout"` on time.
+
+`net.dial`, `net.dial_until`, `net.tls_dial` and `link_dial` resolve
+IPv4 and IPv6 and race the addresses (happy eyeballs, RFC 8305): they
+are tried alternating families, in the resolver's order, and an attempt
+that has not connected within 250 ms does not hold up the next one. The
+first to connect wins and the others are closed, so a broken IPv6 route
+costs a quarter of a second, not a TCP connect timeout. An IP literal,
+IPv4 or IPv6, skips the resolver thread.
 
 ##### DNS SRV and TXT lookups
 
