@@ -255,6 +255,46 @@ that is still running; remove a stale one with `os.remove` first. A path
 longer than the platform allows (104 bytes on macOS, 108 on Linux) is an
 error, not truncated.
 
+##### UDP
+
+Datagram sockets use the same fds, reactor and deadlines as TCP. A peer
+address is an opaque `bytes` value: `recv_from` hands back the sender's
+and `send_to` takes it as is, so a reply never resolves a name or
+formats a string. `net.udp_addr` resolves one ahead of time; print one
+with `net.addr_str`.
+
+```slang
+import "net";
+import "time";
+
+let br = net.udp_bind("0.0.0.0", 5353);     // "" also means any IPv4 address
+guard let fd = br else let e = err_of(br) { println(e); exit(1); }
+while true {
+    let rr = net.recv_from(fd, 0);            // 0 = up to 65535 bytes
+    guard let dgram = rr else { break; }
+    // dgram[0] is the data, dgram[1] the sender
+    net.send_to(fd, dgram[0], dgram[1]);       // echo it back
+    println(net.addr_str(dgram[1]));           // "203.0.113.7:41000"
+}
+```
+
+- `udp_bind(host, port)`: `host` is an IP literal (IPv4 or IPv6) or `""`.
+  `udp_bind_shared` also sets `SO_REUSEADDR` and `SO_REUSEPORT`, for
+  several sockets on one port: multicast listeners, or one socket per
+  core.
+- `udp_dial(host, port, deadline)`: a connected socket. `net.send` and
+  `net.recv` work on it, and the kernel drops datagrams from anyone else.
+  Use `send` on it, not `send_to`: macOS refuses an address on a connected
+  socket.
+- `send_to` / `send_to_until` send one whole datagram; `recv_from` /
+  `recv_from_until` receive one as `[data, sender]`. A datagram longer
+  than `max` is the error `"truncated"` rather than a silent cut.
+- `udp_join(fd, group, iface)` / `udp_leave` manage multicast membership,
+  IPv4 or IPv6 by the group's form; `iface` `""` lets the kernel choose.
+
+An address's bytes are this process's sockaddr, not a wire format: don't
+store them or send them to another machine.
+
 See `examples/httpd/` for a minimal HTTP server on `link` plus the
 `http` stdlib package.
 
@@ -561,47 +601,6 @@ while !proc.shutdown_requested() {
 
 proc.wait_idle();
 ```
-
-`proc.wait_idle_until(deadline)` is `wait_idle` with a limit: true once
-the program is idle, false if the deadline passed first, so a drain can
-give up on a stuck connection instead of holding the shutdown forever.
-
-##### Restarting without dropping connections
-
-A new version of a server can take over the old one's listening sockets,
-so the port never stops accepting. The old process starts the new one
-with `proc.spawn_fds`, which passes the listeners as fds 3, 4, ... and
-sets `LISTEN_FDS` to their count (the systemd socket-activation
-convention); the new process takes them with `net.inherited()`:
-
-```slang
-import "net";
-import "proc";
-import "time";
-
-// at startup: the parent's listeners if there are any, our own otherwise
-let inh = net.inherited();
-let lfd = -1 as i32;
-if len(inh) > 0 {
-    lfd = inh[0];
-} else {
-    lfd = net.listen(8080) ?? (-1 as i32);
-}
-
-// on a restart request: start the new binary on the same socket, stop
-// accepting, and drain what is in flight for up to 30 seconds
-let noenv: [str] = [];
-let sr = proc.spawn_fds(["/srv/app/bin/server"], noenv, "", 0, [lfd]);
-net.close(lfd);
-proc.wait_idle_until(until_of(time.mono() + 30000000000));
-exit(0);
-```
-
-`net.inherited()` returns `[]` when nothing was passed. It also accepts
-listeners from systemd itself (checking `LISTEN_PID` when set), and it
-clears the variables once read, so this program's own children do not
-take the fds for theirs. Every other fd stays out of the child: sockets
-and files are close-on-exec.
 
 `proc.getenv(name)` reads an environment variable, returning
 `opt[str]` (`none` if unset). `proc.args()` is the process argument
@@ -4219,10 +4218,10 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [math/vec](packages/math/vec.md) -- compiler-provided, 23 public items
 - [mysql](packages/mysql.md) -- source package, 49 public items
 - [nats](packages/nats.md) -- source package, 31 public items
-- [net](packages/net.md) -- compiler-provided, 36 public items
+- [net](packages/net.md) -- compiler-provided, 46 public items
 - [os](packages/os.md) -- compiler-provided, 18 public items
 - [pg](packages/pg.md) -- source package, 58 public items
-- [proc](packages/proc.md) -- compiler-provided, 11 public items
+- [proc](packages/proc.md) -- compiler-provided, 9 public items
 - [rand](packages/rand.md) -- source package, 15 public items
 - [redis](packages/redis.md) -- source package, 161 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
