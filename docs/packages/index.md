@@ -2403,6 +2403,17 @@ Percent-escapes are emitted uppercase (RFC 3986 §2.1) and hex digests
 lowercase (what `sha256sum`, git and every API that returns one use).
 Both decoders accept either case.
 
+##### Range requests
+
+`http.parse_range(header, size)` reads a `Range` header for a resource of
+`size` bytes. It gives `ok([])` to send the whole resource (no header, or
+one worth ignoring: malformed, a unit other than bytes, more than 16
+ranges), `ok(ranges)` to answer 206 with those ranges (clipped to the
+end, suffix ranges like `bytes=-500` resolved), or an error to answer 416
+with `Content-Range: bytes */size`. `http.content_range(r, size)` gives
+the `Content-Range` value. With `net.send_file`, a range of a file goes
+straight from the page cache.
+
 #### `httpc`
 
 An HTTP/1.1 **client** — the mirror of `http`, which serves. Speaks
@@ -2615,6 +2626,58 @@ that case.
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
 
+#### `multipart`
+
+`multipart/form-data` (RFC 7578), the body of HTML file uploads, read as a
+stream so a large upload never has to fit in memory.
+
+```slang
+import "multipart";
+
+let b = multipart.boundary_of(content_type) ?? "";
+let p = multipart.parser(b);
+// as each chunk of the body arrives:
+let er = multipart.feed(p, chunk);
+guard let evs = er else { return bad_request(); }
+for e in evs {
+    if e.kind == multipart.PART { /* e.part.name, filename, content_type */ }
+    else if e.kind == multipart.DATA { /* the next e.data bytes of the part */ }
+    else if e.kind == multipart.PART_END { /* the part is complete */ }
+}
+// when the body ends: multipart.finish(p) is an error if it was cut short
+```
+
+Part data comes out as it arrives; the parser holds back only the bytes
+that could start a boundary. Part headers are limited to
+`max_header_bytes` (8 KB) and parts to `max_parts` (1000). `filename*`
+(RFC 5987) is decoded. `parse(body, boundary)` reads a body already in
+memory. `body(boundary)`, `add_field`, `add_file`, `close` and
+`content_type` build one for an upload.
+
+#### `sse`
+
+Server-Sent Events: a server pushing events to a browser's `EventSource`
+over one long response, and a client reading such a stream.
+
+```slang
+import "sse";
+
+// server, on a link after reading the request
+c.send_bytes(sse.head(), deadline);
+c.send_bytes(sse.event("tick", "{\"n\":1}", "1"), deadline);
+c.send_bytes(sse.comment("keep-alive"), deadline);     // every ~15 seconds
+
+// client
+let p = sse.parser();
+for e in sse.feed(p, chunk) { println(e.kind + ": " + e.data); }
+```
+
+`head()` sends no Content-Length (the stream ends when the server closes
+the connection) and tells buffering proxies not to hold events back.
+`event` splits multi-line data into data lines. The parser follows the
+HTML specification: CR, LF and CRLF line endings even when split between
+chunks, the last event id (for `Last-Event-ID` on reconnect), `retry_ms`,
+comments, and a leading byte-order mark.
 #### `smtp`
 
 Sending mail: an SMTP client (RFC 5321) with STARTTLS or implicit TLS and
@@ -4444,7 +4507,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [encoding](packages/encoding.md) -- compiler-provided, 23 public items
 - [flags](packages/flags.md) -- source package, 23 public items
 - [fs](packages/fs.md) -- compiler-provided, 9 public items
-- [http](packages/http.md) -- source package, 58 public items
+- [http](packages/http.md) -- source package, 61 public items
 - [http2](packages/http2.md) -- source package, 133 public items
 - [httpc](packages/httpc.md) -- source package, 35 public items
 - [io](packages/io.md) -- compiler-provided, 12 public items
@@ -4462,6 +4525,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [math/stats](packages/math/stats.md) -- source package, 128 public items
 - [math/vec](packages/math/vec.md) -- compiler-provided, 23 public items
 - [metrics](packages/metrics.md) -- source package, 19 public items
+- [multipart](packages/multipart.md) -- source package, 19 public items
 - [mysql](packages/mysql.md) -- source package, 49 public items
 - [nats](packages/nats.md) -- source package, 31 public items
 - [net](packages/net.md) -- compiler-provided, 46 public items
@@ -4479,6 +4543,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [smtp](packages/smtp.md) -- source package, 9 public items
 - [sort](packages/sort.md) -- source package, 9 public items
 - [sql](packages/sql.md) -- compiler-provided, 20 public items
+- [sse](packages/sse.md) -- source package, 9 public items
 - [strings](packages/strings.md) -- compiler-provided, 28 public items
 - [tar](packages/tar.md) -- source package, 12 public items
 - [template](packages/template.md) -- source package, 7 public items

@@ -1,5 +1,9 @@
 # todo
 
+- [x] **HTTP extras (2026-11-22, feat/http-extras).** `http.parse_range` /
+  `content_range` (RFC 9110, ignoring more than 16 ranges), a streaming
+  `multipart` parser and body builder with header and part limits, and
+  `sse` event formatting with a spec-following client parser.
 - [x] **`smtp` (2026-11-22, feat/smtp).** An SMTP client with STARTTLS
   (refusing a server without it before any password is sent), implicit
   TLS and AUTH PLAIN, and a MIME builder. The test caught AUTH PLAIN

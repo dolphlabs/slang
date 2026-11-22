@@ -221,6 +221,8 @@ PACKAGE_SECTIONS = {
     "http": ["`http`"],
     "httpc": ["`httpc`"],
     "websocket": ["`websocket`"],
+    "multipart": ["`multipart`"],
+    "sse": ["`sse`"],
     "smtp": ["`smtp`"],
     "trace": ["`trace`"],
     "metrics": ["`metrics`"],

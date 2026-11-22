@@ -268,6 +268,7 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg mysql redis regex
 strings unicode encoding compress math math/vec decimal rand builder byteutil flags sort
+uuid http http2 httpc websocket multipart sse template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 uuid http http2 httpc websocket smtp template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 uuid http http2 httpc websocket trace template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 uuid http http2 httpc websocket metrics template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
