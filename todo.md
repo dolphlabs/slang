@@ -1,5 +1,10 @@
 # todo
 
+- [x] **HTTP extras (2026-11-22, feat/http-extras).** `http.parse_range` /
+  `content_range` (RFC 9110, ignoring more than 16 ranges), a streaming
+  `multipart` parser and body builder with header and part limits, and
+  `sse` event formatting with a spec-following client parser.
+
 - [x] **A leaf function could hold a safepoint (found 2026-11-21 when
   math/big's tests crashed after merging dev; fixed in
   fix/leaf-body-no-safepoint).** Callers skip their bracket around a call
