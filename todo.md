@@ -1,5 +1,14 @@
 # todo
 
+- [x] **Children inherited every socket and file (found 2026-11-22 while
+  designing listener handoff; fixed in fix/net-cloexec).** No runtime fd
+  was close-on-exec, so a `proc.spawn` child held every listener,
+  connection, Unix socket and `fs` fd the program had open: a port stayed
+  bound and a peer saw no close until the child exited. Sockets now get
+  `FD_CLOEXEC` in `sl_net_set_nonblocking`, which every socket path
+  calls (plus `SOCK_CLOEXEC` at creation where defined), and `fs.open` /
+  `fs.create` use `O_CLOEXEC`. tests/proc_spawn_no_fd_leak: 5 of 5 fds
+  leaked before, none after.
 - [x] **Runtime stats (2026-11-22, feat/runtime-stats).** `runtime.stats()`
   over a new `proc.runtime_stats()`: GC collections and pauses (always
   counted now, once per collection; a major's start time was only read

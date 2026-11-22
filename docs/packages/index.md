@@ -602,6 +602,11 @@ while !proc.shutdown_requested() {
 proc.wait_idle();
 ```
 
+A process started with `proc.spawn` inherits standard input, output and
+error and nothing else: every socket and file the runtime opens is
+close-on-exec, so a child cannot hold a listener's port or a client's
+connection open after the program closes it.
+
 `proc.getenv(name)` reads an environment variable, returning
 `opt[str]` (`none` if unset). `proc.args()` is the process argument
 list (`[str]`); `args[0]` is the executable path. To parse options out of it, see
