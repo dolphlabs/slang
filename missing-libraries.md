@@ -33,6 +33,8 @@ standalone repo under `slangpackages/`.
   fallback, `/etc/resolv.conf` and `/etc/hosts`, a TTL cache, timeouts,
   and happy-eyeballs dialing (RFC 8305). `net.dial` resolves IPv4 only
   today, so it cannot reach an IPv6 address: this fixes that.
+  Status: IPv6 dialing with happy eyeballs is in feat/net-dial-ipv6; the
+  wire-protocol client with a TTL cache waits for UDP (#600) to merge.
 - [ ] **Graceful restart and draining** (stdlib): hand listening sockets to
   a new process, stop accepting, and drain open connections with a
   deadline.
@@ -62,11 +64,15 @@ standalone repo under `slangpackages/`.
   task count, reactor queue depth.
 - [ ] **Profiler endpoint** (stdlib): sampled CPU profiles, allocation
   sites and task dumps, readable by standard tools.
+  Status: not started. Needs a design first: sampling by signal next to
+  the preemption signals, and symbolising static functions in generated C.
 
 ## 4. Compression and formats
 
 - [ ] **zstd, brotli and lz4** (stdlib, `compress`): streaming encode and
   decode; zstd and brotli as HTTP `Content-Encoding`, lz4 for Kafka.
+  Status: needs a decision. The libraries are not on the build machines;
+  system dependencies or vendored sources?
 - [ ] **MessagePack and CBOR** (stdlib): encode and decode, structs
   included, with size limits.
 - [ ] **Protobuf codec** (stdlib or package): wire-format encode and decode
@@ -75,7 +81,9 @@ standalone repo under `slangpackages/`.
   multipart/form-data uploads, and range requests.
 - [ ] **gRPC streaming** (package `slangpackages/grpc`): server, client and
   bidirectional streams; the package is unary only.
+  Status: not started (separate repo).
 - [ ] **HTTP/3 and QUIC** (stdlib): after UDP.
+  Status: not started; after UDP.
 
 ## 5. Identity and security
 
@@ -86,6 +94,7 @@ standalone repo under `slangpackages/`.
   renewal, served through `tls_ctx_add_sni`.
 - [ ] **TOTP and HOTP** (stdlib): RFC 6238/4226 codes and checks with skew.
 - [ ] **WebAuthn / passkeys** (package): registration and assertion.
+  Status: waits for the CBOR PR (feat/msgpack-cbor) to merge.
 - [ ] **Envelope encryption** (stdlib, `crypto`): AES-GCM data keys wrapped
   by a key-encryption key, with key ids for rotation.
 
@@ -93,10 +102,14 @@ standalone repo under `slangpackages/`.
 
 - [ ] **SMTP client and MIME** (stdlib): STARTTLS, AUTH, multipart mail.
 - [ ] **ClickHouse client** (package).
+  Status: needs a new slangpackages repository; not created without approval.
 - [ ] **OpenSearch / Elasticsearch client** (package).
+  Status: needs a new slangpackages repository; not created without approval.
 - [ ] **Cassandra / Scylla client** (package).
+  Status: needs a new slangpackages repository; not created without approval.
 - [ ] **memcached client** (stdlib or package).
 - [ ] **etcd and Consul** (package): key/value, watches, service discovery.
+  Status: needs a new slangpackages repository; not created without approval.
 
 ## 7. Distributed systems
 
