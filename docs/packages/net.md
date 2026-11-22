@@ -121,37 +121,45 @@ that is still running; remove a stale one with `os.remove` first. A path
 longer than the platform allows (104 bytes on macOS, 108 on Linux) is an
 error, not truncated.
 
-##### Listener and socket options
+##### UDP
 
-`net.listen_with(host, port, opts)` is `net.listen` with a bind address
-and options. `host` is an IP literal, IPv4 or IPv6, or `""` for any
-IPv4 address. `opts` is a list of words separated by spaces or commas;
-an unknown word is an error, not ignored:
-
-| Option | Effect |
-|---|---|
-| `reuseport` | `SO_REUSEPORT`: several listeners on one port, the kernel spreading connections between them (one per core) |
-| `v6only` | an IPv6 listener that refuses IPv4-mapped connections; without it, `"::"` takes both on every system |
-| `backlog=N` | the accept queue length (default 1024; the kernel may cap it) |
-| `fastopen=N` | TCP Fast Open with a queue of N, where the kernel allows it |
+Datagram sockets use the same fds, reactor and deadlines as TCP. A peer
+address is an opaque `bytes` value: `recv_from` hands back the sender's
+and `send_to` takes it as is, so a reply never resolves a name or
+formats a string. `net.udp_addr` resolves one ahead of time; print one
+with `net.addr_str`.
 
 ```slang
-let lr = net.listen_with("0.0.0.0", 8080, "reuseport backlog=4096");
+import "net";
+import "time";
+
+let br = net.udp_bind("0.0.0.0", 5353);     // "" also means any IPv4 address
+guard let fd = br else let e = err_of(br) { println(e); exit(1); }
+while true {
+    let rr = net.recv_from(fd, 0);            // 0 = up to 65535 bytes
+    guard let dgram = rr else { break; }
+    // dgram[0] is the data, dgram[1] the sender
+    net.send_to(fd, dgram[0], dgram[1]);       // echo it back
+    println(net.addr_str(dgram[1]));           // "203.0.113.7:41000"
+}
 ```
 
-`net.set_opt(fd, name, value)` and `net.get_opt(fd, name)` set and read
-options on any socket by name. Booleans are 0 or 1, and times are in
-seconds:
+- `udp_bind(host, port)`: `host` is an IP literal (IPv4 or IPv6) or `""`.
+  `udp_bind_shared` also sets `SO_REUSEADDR` and `SO_REUSEPORT`, for
+  several sockets on one port: multicast listeners, or one socket per
+  core.
+- `udp_dial(host, port, deadline)`: a connected socket. `net.send` and
+  `net.recv` work on it, and the kernel drops datagrams from anyone else.
+  Use `send` on it, not `send_to`: macOS refuses an address on a connected
+  socket.
+- `send_to` / `send_to_until` send one whole datagram; `recv_from` /
+  `recv_from_until` receive one as `[data, sender]`. A datagram longer
+  than `max` is the error `"truncated"` rather than a silent cut.
+- `udp_join(fd, group, iface)` / `udp_leave` manage multicast membership,
+  IPv4 or IPv6 by the group's form; `iface` `""` lets the kernel choose.
 
-| Name | Option |
-|---|---|
-| `nodelay` | `TCP_NODELAY`: send small writes now, without Nagle's delay |
-| `keepalive`, `keepidle`, `keepintvl`, `keepcnt` | TCP keepalive on/off, idle time before probes, interval between them, probes before giving up |
-| `quickack` | `TCP_QUICKACK` (Linux only; elsewhere the error `"option not supported on this system"`) |
-| `rcvbuf`, `sndbuf` | kernel buffer sizes (Linux reads back double what was set) |
-| `linger` | seconds `close` waits to flush unsent data; `-1` off (the default), `0` resets the connection |
-| `broadcast` | `SO_BROADCAST`, for UDP |
-| `ttl`, `multicast_ttl`, `multicast_loop` | IPv4 or IPv6 by the socket's family |
+An address's bytes are this process's sockaddr, not a wire format: don't
+store them or send them to another machine.
 
 See `examples/httpd/` for a minimal HTTP server on `link` plus the
 `http` stdlib package.
@@ -338,11 +346,27 @@ the session, one OpenSSL call at a time. A link splits once.
 
 ### `net.nonblock(int) -> result[bool,str]`
 
-### `net.listen_with(str, int, str) -> result[i32,str]`
+### `net.udp_bind(str, int) -> result[i32,str]`
 
-### `net.set_opt(int, str, int) -> result[bool,str]`
+### `net.udp_bind_shared(str, int) -> result[i32,str]`
 
-### `net.get_opt(int, str) -> result[int,str]`
+### `net.udp_dial(str, int, until) -> result[i32,str]`
+
+### `net.udp_addr(str, int, until) -> result[bytes,str]`
+
+### `net.addr_str(bytes) -> str`
+
+### `net.send_to(int, bytes, bytes) -> result[i32,str]`
+
+### `net.send_to_until(int, bytes, bytes, until) -> result[i32,str]`
+
+### `net.recv_from(int, int) -> result[[bytes],str]`
+
+### `net.recv_from_until(int, int, until) -> result[[bytes],str]`
+
+### `net.udp_join(int, str, str) -> result[bool,str]`
+
+### `net.udp_leave(int, str, str) -> result[bool,str]`
 
 ### `net.tls_server_ctx(str, str) -> result[rawptr,str]`
 
