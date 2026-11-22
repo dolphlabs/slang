@@ -1,5 +1,12 @@
 # todo
 
+- [x] **Listener and socket options in `net` (2026-11-22,
+  feat/net-sockopts).** `net.listen_with(host, port, opts)` binds one
+  address (IPv4 or IPv6) with `reuseport`, `v6only`, `backlog=N` and
+  `fastopen=N`; `net.set_opt`/`net.get_opt` cover nodelay, keepalive and
+  its timers, quickack, buffer sizes, linger, broadcast and TTLs. Found
+  along the way: `net.dial` resolves IPv4 only, so it cannot reach an
+  IPv6 address; that belongs to the DNS resolver item.
 - [x] **Dialing IPv6 with happy eyeballs (2026-11-22, feat/net-dial-ipv6).**
   `net.dial` resolved IPv4 only (`AF_INET` hints), so it could not reach
   an IPv6 address, and `link_dial` used only the first address and

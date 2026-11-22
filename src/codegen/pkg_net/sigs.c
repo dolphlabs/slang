@@ -38,6 +38,15 @@ const NatSig NET_SIGS[] = {
      * which would call every dead connection alive. */
     {"net", "idle_alive", 1, {NA_INT}, "bool", 0},
     {"net", "nonblock", 1, {NA_INT}, "result[bool,str]", 0},
+    /* A listener on one address with options: "reuseport" (one accept
+     * queue per socket, the kernel spreading connections), "v6only",
+     * "backlog=N", "fastopen=N". host is an IP literal or "" (any IPv4). */
+    {"net", "listen_with", 3, {NA_STR, NA_INT, NA_STR}, "result[i32,str]", 0},
+    /* Socket options by name: nodelay, keepalive, keepidle, keepintvl,
+     * keepcnt, quickack, rcvbuf, sndbuf, linger, broadcast, ttl,
+     * multicast_ttl, multicast_loop. Booleans are 0/1, times seconds. */
+    {"net", "set_opt", 3, {NA_INT, NA_STR, NA_INT}, "result[bool,str]", 0},
+    {"net", "get_opt", 2, {NA_INT, NA_STR}, "result[int,str]", 0},
     /* UDP. An address (udp_addr, recv_from's second element) is an opaque
      * bytes value send_to takes back as is; addr_str prints it. recv_from
      * gives [data, sender]; a datagram over max is the error "truncated".
