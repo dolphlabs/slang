@@ -1,5 +1,12 @@
 # todo
 
+- [x] **`oidc` (2026-11-22, feat/oidc).** OAuth 2.0 / OpenID Connect
+  client: discovery with issuer and HTTPS checks, PKCE (S256),
+  authorization URLs, code exchange, refresh, client credentials, and
+  ID-token verification (RS256/ES256 against cached JWKS with rate-limited
+  refetch on rotation; issuer, audience, azp, expiry and nonce). Comes
+  with a small dynamic JSON reader, as ID-token claims vary in shape.
+
 - [x] **A leaf function could hold a safepoint (found 2026-11-21 when
   math/big's tests crashed after merging dev; fixed in
   fix/leaf-body-no-safepoint).** Callers skip their bracket around a call
