@@ -1,5 +1,12 @@
 # todo
 
+- [x] **Runtime stats (2026-11-22, feat/runtime-stats).** `runtime.stats()`
+  over a new `proc.runtime_stats()`: GC collections and pauses (always
+  counted now, once per collection; a major's start time was only read
+  under SLANG_GC_STAT), live and new heap bytes, current and peak RSS
+  (task_info on macOS, /proc/self/statm on Linux; checked against
+  /usr/bin/time), tasks and workers.
+
 - [x] **A leaf function could hold a safepoint (found 2026-11-21 when
   math/big's tests crashed after merging dev; fixed in
   fix/leaf-body-no-safepoint).** Callers skip their bracket around a call
