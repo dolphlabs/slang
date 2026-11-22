@@ -1,0 +1,7 @@
+whole file: 3145851 bytes, digest ok
+range, short and past-end: ok
+expired: timeout
+send_file: negative offset
+send_file: not a regular file
+tls: 3145844 bytes, digest ok
+done

@@ -19,6 +19,9 @@ const NatSig PROC_SIGS[] = {
        convention net.inherited reads): hand listeners to a new version */
     {"proc", "spawn_fds", 5, {NA_ARR_STR, NA_ARR_STR, NA_STR, NA_INT, NA_ARR_I32},
      "result[int,str]", 0},
+    /* the runtime's counters in a fixed order; the `runtime` package
+       (stdlib/runtime) names them */
+    {"proc", "runtime_stats", 0, {0}, "[int]", 0},
     {"proc", "kill", 2, {NA_INT, NA_INT}, "result[bool,str]", 0},
     {"proc", "wait", 2, {NA_INT, NA_UNTIL}, "result[int,str]", 0},
 };

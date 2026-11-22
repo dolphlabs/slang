@@ -1,0 +1,6 @@
+::1: dialed, refused
+localhost: connected
+link_dial localhost: connected
+127.0.0.1: connected
+expired deadline: timeout
+done
