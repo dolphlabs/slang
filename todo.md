@@ -1,5 +1,13 @@
 # todo
 
+- [x] **Listener and socket options in `net` (2026-11-22,
+  feat/net-sockopts).** `net.listen_with(host, port, opts)` binds one
+  address (IPv4 or IPv6) with `reuseport`, `v6only`, `backlog=N` and
+  `fastopen=N`; `net.set_opt`/`net.get_opt` cover nodelay, keepalive and
+  its timers, quickack, buffer sizes, linger, broadcast and TTLs. Found
+  along the way: `net.dial` resolves IPv4 only, so it cannot reach an
+  IPv6 address; that belongs to the DNS resolver item.
+
 - [x] **A leaf function could hold a safepoint (found 2026-11-21 when
   math/big's tests crashed after merging dev; fixed in
   fix/leaf-body-no-safepoint).** Callers skip their bracket around a call
