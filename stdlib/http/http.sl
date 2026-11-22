@@ -3512,3 +3512,89 @@ pub fn method_not_allowed() -> Response {
     return text_response(405, "Method Not Allowed",
                          "text/plain; charset=utf-8", "method not allowed");
 }
+
+// ---- range requests (RFC 9110 14) ------------------------------------------
+
+// One satisfiable byte range, both ends included.
+pub struct ByteRange {
+    start: int,
+    end: int,
+}
+
+// The ranges a Range header asks for, out of a resource of `size` bytes:
+// "bytes=0-499", "bytes=500-", "bytes=-500" (the last 500), or several
+// separated by commas. Ranges past the end are clipped; ranges that
+// cannot be satisfied are dropped.
+//   ok([])       no Range header worth honouring: send the whole thing (200)
+//   ok(ranges)   send 206 with these
+//   err(...)     every range unsatisfiable: send 416 with
+//                Content-Range: bytes */size
+// A malformed header is treated as absent (ok([])), as RFC 9110 lets a
+// server ignore it. More than 16 ranges are refused as absent too: many
+// small overlapping ranges are a known amplification trick.
+pub fn parse_range(header: str, size: int) -> result[[ByteRange], str] {
+    let none_wanted: [ByteRange] = [];
+    let h = strings.trim(header);
+    if !strings.has_prefix(h, "bytes=") || size < 0 {
+        return ok(none_wanted);
+    }
+    let specs = strings.split(strings.slice(h, 6, len(h)), ",");
+    if len(specs) > 16 {
+        return ok(none_wanted);
+    }
+    let out: [ByteRange] = [];
+    let any_valid = false;
+    for raw in specs {
+        let s = strings.trim(raw);
+        let dash = strings.find(s, "-");
+        if dash < 0 { return ok(none_wanted); }
+        let a = strings.trim(strings.slice(s, 0, dash));
+        let b = strings.trim(strings.slice(s, dash + 1, len(s)));
+        if len(a) == 0 {
+            // suffix: the last b bytes
+            let n = range_num(b);
+            if n < 0 { return ok(none_wanted); }
+            any_valid = true;
+            if n == 0 || size == 0 { continue; }
+            let start = size - n;
+            if start < 0 { start = 0; }
+            push(out, ByteRange { start: start, end: size - 1 });
+            continue;
+        }
+        let first = range_num(a);
+        if first < 0 { return ok(none_wanted); }
+        let last = size - 1;
+        if len(b) > 0 {
+            last = range_num(b);
+            if last < 0 || last < first { return ok(none_wanted); }
+            if last > size - 1 { last = size - 1; }
+        }
+        any_valid = true;
+        if first >= size { continue; }
+        push(out, ByteRange { start: first, end: last });
+    }
+    if any_valid && len(out) == 0 {
+        return err("range not satisfiable");
+    }
+    return ok(out);
+}
+
+// The Content-Range value for one range of a size-byte resource:
+// "bytes 0-499/1234".
+pub fn content_range(r: ByteRange, size: int) -> str {
+    return "bytes " + to_str(r.start) + "-" + to_str(r.end) + "/" + to_str(size);
+}
+
+// A digit string as a non-negative int; -1 if it is not one (or would
+// overflow).
+fn range_num(s: str) -> int {
+    let b = to_bytes(s);
+    if len(b) == 0 || len(b) > 18 { return -1; }
+    let v = 0;
+    for i in 0..len(b) {
+        let c = b[i] as int;
+        if c < 48 || c > 57 { return -1; }
+        v = v * 10 + (c - 48);
+    }
+    return v;
+}

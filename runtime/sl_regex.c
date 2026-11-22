@@ -1126,7 +1126,7 @@ static bool sl_regex_is_match_bytes(void *rev, sl_bytes *b) {
 /* [] on no match, else [start,end, g1s,g1e, ...] as byte offsets. */
 static sl_arr *sl_regex_find_core(sl_rx *re, const unsigned char *s, size_t n,
                                   long long from) {
-    sl_arr *a = sl_arr_new(sizeof(long long), 0);
+    sl_arr *a = sl_arr_new(sizeof(long long), SL_ELEM_NOPTR);
     if (!re || from < 0 || (size_t)from > n) return a;
     int *out = (int *)sl_rx_calloc((size_t)re->nslots, sizeof(int));
     if (!out) return a;
@@ -1141,24 +1141,24 @@ static sl_arr *sl_regex_find_core(sl_rx *re, const unsigned char *s, size_t n,
 }
 
 static sl_arr *sl_regex_find(void *rev, const char *s) {
-    if (!s) return sl_arr_new(sizeof(long long), 0);
+    if (!s) return sl_arr_new(sizeof(long long), SL_ELEM_NOPTR);
     return sl_regex_find_core((sl_rx *)rev, (const unsigned char *)s,
                               strlen(s), 0);
 }
 
 static sl_arr *sl_regex_find_at(void *rev, const char *s, long long from) {
-    if (!s) return sl_arr_new(sizeof(long long), 0);
+    if (!s) return sl_arr_new(sizeof(long long), SL_ELEM_NOPTR);
     return sl_regex_find_core((sl_rx *)rev, (const unsigned char *)s,
                               strlen(s), from);
 }
 
 static sl_arr *sl_regex_find_bytes(void *rev, sl_bytes *b) {
-    if (!b) return sl_arr_new(sizeof(long long), 0);
+    if (!b) return sl_arr_new(sizeof(long long), SL_ELEM_NOPTR);
     return sl_regex_find_core((sl_rx *)rev, b->ptr, (size_t)b->len, 0);
 }
 
 static sl_arr *sl_regex_find_bytes_at(void *rev, sl_bytes *b, long long from) {
-    if (!b) return sl_arr_new(sizeof(long long), 0);
+    if (!b) return sl_arr_new(sizeof(long long), SL_ELEM_NOPTR);
     return sl_regex_find_core((sl_rx *)rev, b->ptr, (size_t)b->len, from);
 }
 
