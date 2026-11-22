@@ -12,6 +12,9 @@ const NatSig PROC_SIGS[] = {
     {"proc", "args", 0, {0}, "[str]", 0},
     {"proc", "cwd", 0, {0}, "result[str,str]", 0},
     {"proc", "spawn", 4, {NA_ARR_STR, NA_ARR_STR, NA_STR, NA_INT}, "result[int,str]", 0},
+    /* the runtime's counters in a fixed order; the `runtime` package
+       (stdlib/runtime) names them */
+    {"proc", "runtime_stats", 0, {0}, "[int]", 0},
     {"proc", "kill", 2, {NA_INT, NA_INT}, "result[bool,str]", 0},
     {"proc", "wait", 2, {NA_INT, NA_UNTIL}, "result[int,str]", 0},
 };

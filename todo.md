@@ -7,6 +7,142 @@
   its timers, quickack, buffer sizes, linger, broadcast and TTLs. Found
   along the way: `net.dial` resolves IPv4 only, so it cannot reach an
   IPv6 address; that belongs to the DNS resolver item.
+- [x] **Dialing IPv6 with happy eyeballs (2026-11-22, feat/net-dial-ipv6).**
+  `net.dial` resolved IPv4 only (`AF_INET` hints), so it could not reach
+  an IPv6 address, and `link_dial` used only the first address and
+  ignored its deadline during the lookup. All dials now resolve both
+  families and race them per RFC 8305 (250 ms attempt delay), and an IP
+  literal skips the resolver thread. A positive IPv6 connection test
+  needs an IPv6 listener, which `net.listen_with` (feat/net-sockopts)
+  adds; tests/net_dial_families covers the rest. Part of the DNS
+  resolver item; the wire-protocol client with a TTL cache follows UDP.
+- [x] **Children inherited every socket and file (found 2026-11-22 while
+  designing listener handoff; fixed in fix/net-cloexec).** No runtime fd
+  was close-on-exec, so a `proc.spawn` child held every listener,
+  connection, Unix socket and `fs` fd the program had open: a port stayed
+  bound and a peer saw no close until the child exited. Sockets now get
+  `FD_CLOEXEC` in `sl_net_set_nonblocking`, which every socket path
+  calls (plus `SOCK_CLOEXEC` at creation where defined), and `fs.open` /
+  `fs.create` use `O_CLOEXEC`. tests/proc_spawn_no_fd_leak: 5 of 5 fds
+  leaked before, none after.
+- [x] **Runtime stats (2026-11-22, feat/runtime-stats).** `runtime.stats()`
+  over a new `proc.runtime_stats()`: GC collections and pauses (always
+  counted now, once per collection; a major's start time was only read
+  under SLANG_GC_STAT), live and new heap bytes, current and peak RSS
+  (task_info on macOS, /proc/self/statm on Linux; checked against
+  /usr/bin/time), tasks and workers.
+- [x] **Number lists the runtime built were scanned as pointers (found
+  2026-11-22 while writing listener handoff; fixed in fix/fs-fstat-noptr).**
+  `fs.fstat` passed 4 as the element flag and the regex match lists and
+  `encoding.json_tape` passed 0 ("unknown"): every major collection
+  offered each int to mark as a candidate pointer, and an int equal to a
+  heap address kept that object alive. All are `SL_ELEM_NOPTR` now, and
+  run_tests.sh refuses any runtime number list without it (the class of
+  the unicode.runes fix). A typed json.decode benchmark showed no
+  difference (it does not use the tape).
+- [x] **`oidc` (2026-11-22, feat/oidc).** OAuth 2.0 / OpenID Connect
+  client: discovery with issuer and HTTPS checks, PKCE (S256),
+  authorization URLs, code exchange, refresh, client credentials, and
+  ID-token verification (RS256/ES256 against cached JWKS with rate-limited
+  refetch on rotation; issuer, audience, azp, expiry and nonce). Comes
+  with a small dynamic JSON reader, as ID-token claims vary in shape.
+- [x] **`acme` (2026-11-22, feat/acme).** An RFC 8555 client: ES256 JWS
+  with replay nonces (badNonce retried), account registration, orders,
+  http-01 challenges served from a store the program's handler answers,
+  finalize with a CSR for a fresh P-256 key, chain download and
+  renew_due. Tested end to end against an in-test CA that verifies the
+  JWS signatures and the key authorization. Carries a copy of oidc's
+  small JSON reader; one shared package is a follow-up.
+- [x] **`lease` (2026-11-22, feat/lease).** Redis leases with
+  token-checked renew/release and fencing tokens, a leader elector, and
+  Postgres session advisory locks. Unit-tested against a fake Redis, run
+  against a real Redis locally, and wired into CI (a Redis container in
+  the Postgres job) through tests/live/lease. Found: CI has no job
+  running tests/live/redis, though that test says it does.
+- [x] **`balance` (2026-11-22, feat/balance).** Client-side load
+  balancing: round robin, random, least loaded, P2C over in-flight and
+  latency EWMA, and rendezvous hashing with fail-over, plus ejection with
+  doubling backoff.
+- [x] **`memcache` (2026-11-22, feat/memcache).** A memcached text
+  protocol client: get/gets/get_multi, set/add/replace/cas,
+  delete/incr/decr/touch, rendezvous hashing over servers, idle
+  connection reuse with errored connections dropped. Tested against an
+  in-test server (no memcached on the machine or in CI).
+- [x] **`envelope` (2026-11-22, feat/envelope).** Envelope encryption over
+  `crypto.seal`: a random data key per value wrapped by a named
+  key-encryption key, aad binding, key rotation with `rewrap` (the value
+  is unchanged) and a versioned layout.
+- [x] **`otp` (2026-11-22, feat/otp).** HOTP and TOTP over SHA-1/256/512
+  with replay-safe verification (the matched step is returned), base32
+  secrets and otpauth URIs. HMAC-SHA1 is built on `crypto.sha1` in slang,
+  as `crypto` has none. Checked against RFC 4226 and RFC 6238 vectors.
+- [x] **`idempotency` and `outbox` (2026-11-22, feat/outbox-idempotency).**
+  Redis idempotency keys (atomic reservation, replay, in-progress and
+  fingerprint-mismatch states, owner-checked complete/abandon) and a
+  Postgres transactional outbox with a SKIP LOCKED relay and backoff.
+  tests/live/outbox runs both against real servers in CI; the Redis
+  half was also run locally.
+- [x] **`msgpack` and `cbor` (2026-11-22, feat/msgpack-cbor).** Streaming
+  writers and readers plus a `Value` tree for each. CBOR writes preferred
+  serialization (shortest heads and shortest exact float, half included)
+  and reads indefinite lengths; both refuse lengths beyond the input
+  before allocating. CBOR is checked against RFC 8949 Appendix A. A typed
+  struct codec, like `json.encode`/`decode`, would need compiler support
+  and is a follow-up.
+- [x] **`crdt` (2026-11-22, feat/crdt).** G-counter, PN-counter, an
+  optimized OR-set (no tombstones; checked to stay bounded through 1000
+  adds and removes) and an LWW-map with tombstone compaction. Merges are
+  checked for order, repetition and convergence of three replicas under
+  400 seeded random operations.
+- [x] **`singleflight` (2026-11-22, feat/singleflight).** A group bound
+  to a loader function: concurrent calls for one key share a single run
+  and its result or error; a panicking call answers every waiter with an
+  error (the run is a spawned task, so `join_wait` catches it).
+- [x] **`resilience` (2026-11-22, feat/resilience).** Circuit breaker
+  (failure ratio over a call window, half-open probes), bulkhead, retry
+  budget (integer milli-tokens: in floats ten deposits of 0.1 made
+  0.999... and refused the retry they earned), `retry` with full jitter,
+  token bucket, keyed GCRA with sweeping of full keys, and `hedge`.
+- [x] **HTTP extras (2026-11-22, feat/http-extras).** `http.parse_range` /
+  `content_range` (RFC 9110, ignoring more than 16 ranges), a streaming
+  `multipart` parser and body builder with header and part limits, and
+  `sse` event formatting with a spec-following client parser.
+- [x] **`smtp` (2026-11-22, feat/smtp).** An SMTP client with STARTTLS
+  (refusing a server without it before any password is sent), implicit
+  TLS and AUTH PLAIN, and a MIME builder. The test caught AUTH PLAIN
+  built as a str: a str stops at its first NUL, so the credential was
+  cut short; it is built as bytes.
+- [x] **`trace` (2026-11-22, feat/trace).** Spans with W3C traceparent
+  parsing and formatting, head sampling, and batched export to an
+  OpenTelemetry collector over OTLP/HTTP with JSON bodies (protobuf
+  bodies can follow the protobuf codec item). The queue is bounded and
+  drops are counted. Automatic propagation inside `http`/`httpc` is a
+  follow-up; programs pass the header themselves for now.
+- [x] **`metrics` (2026-11-22, feat/metrics).** Prometheus counters,
+  gauges and histograms with labels and the text exposition format.
+  Histograms are classic fixed-bucket rather than `math/sketch` (as the
+  plan said): Prometheus scrapes fixed buckets anyway, and a few ints a
+  series is far less memory than an HDR array per label combination.
+- [x] **`proxyproto` (2026-11-22, feat/proxyproto).** PROXY protocol v1
+  and v2: `parse` (with `none` for a partial header), `read_until` over a
+  socket keeping the bytes after the header, and `encode_v1`/`encode_v2`.
+  v2 TLVs, LOCAL health checks, unix addresses and RFC 5952 IPv6 text.
+- [x] **`protobuf` (2026-11-22, feat/protobuf).** The wire format by
+  hand: tag/varint/zigzag/fixed/length-delimited writers and readers,
+  packed repeated fields, skip for unknown fields, checked against the
+  encoding guide's examples. Generating code from .proto files is not
+  part of it.
+- [x] **`pool` (2026-11-22, feat/pool).** A generic connection pool,
+  `pool.Pool[T]` over `dial`/`close`/`probe` functions, with the FIFO
+  hand-off, slot passing, waiter reuse and reaper of `pg`'s pool plus
+  `max_idle`, `max_lifetime` and wait statistics. `pg` and `mysql` keep
+  their own pools for now; moving them onto this one is a follow-up.
+- [x] **`context` (2026-11-22, feat/context).** Cancellation trees with
+  deadlines: `with_cancel`, `with_timeout`, `with_deadline_at`,
+  `cancel`/`release`, `cause`, `deadline` (an `until`), `remaining`,
+  `watch_fd` (cancel closes the fd, waking a parked op) and `done_chan`
+  for `select`. Clients take it through `context.deadline(c)` today;
+  context-taking client APIs (httpc, pg, redis) are follow-ups.
 - [x] **UDP in `net` (2026-11-22, feat/net-udp).** Datagram sockets on the
   reactor: `udp_bind`, `udp_bind_shared`, `udp_dial`, `udp_addr`,
   `send_to`, `recv_from` (with `_until` forms), `addr_str`, and multicast

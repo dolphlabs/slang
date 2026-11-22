@@ -769,7 +769,7 @@ static sl_res__int__str *sl_encoding_json_tape(const char *text) {
         }
     }
 done: {
-        sl_arr *out = sl_arr_new(sizeof(long long), 0);
+        sl_arr *out = sl_arr_new(sizeof(long long), SL_ELEM_NOPTR);
         void *roots[1];
         sl_safepoint sp;
         roots[0] = (void *)out;

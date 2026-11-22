@@ -68,6 +68,24 @@ static long sl_gc_minors_since_major = 0; /* under sl_gc_mu */
  * written by the collector at the end of each minor, read by a worker as
  * a task parks. */
 static _Atomic unsigned long sl_gc_minors_done = 0;
+/* Always kept, unlike the SLANG_GC_STAT counters: proc.runtime_stats
+ * reads them. Updated once per collection (a clock read and a few
+ * relaxed atomics), never per allocation. */
+static _Atomic unsigned long long sl_gc_rt_majors = 0;
+static _Atomic unsigned long long sl_gc_rt_pause_ns_total = 0;
+static _Atomic unsigned long long sl_gc_rt_pause_ns_max = 0;
+static _Atomic unsigned long long sl_gc_rt_live_bytes = 0;
+static void sl_gc_rt_pause(long long ns) {
+    unsigned long long n = (unsigned long long)(ns > 0 ? ns : 0);
+    atomic_fetch_add_explicit(&sl_gc_rt_pause_ns_total, n, memory_order_relaxed);
+    unsigned long long prev =
+        atomic_load_explicit(&sl_gc_rt_pause_ns_max, memory_order_relaxed);
+    while (n > prev &&
+           !atomic_compare_exchange_weak_explicit(&sl_gc_rt_pause_ns_max, &prev, n,
+                                                  memory_order_relaxed,
+                                                  memory_order_relaxed)) {
+    }
+}
 /* Parked tasks minors skipped (SLANG_GC_STAT), under sl_gc_mu. */
 static unsigned long long sl_gc_stat_tasks_skipped = 0;
 /* Generational nursery: bytes allocated since the last MINOR
@@ -3776,6 +3794,7 @@ static void sl_gc_collect_minor_real(void) {
                                   memory_order_relaxed);
         sl_gc_stat_minor_pause(sl_rt_monotonic_ns() - t0, swept, promoted);
     }
+    sl_gc_rt_pause(sl_rt_monotonic_ns() - t0);
     /* Still stopped and under sl_gc_mu: every task this minor scanned
      * now counts it (sl_gc_root_units_build's skip). */
     atomic_fetch_add_explicit(&sl_gc_minors_done, 1, memory_order_relaxed);
@@ -3833,10 +3852,10 @@ static void sl_gc_trim_heap(void) {
  * flags do not leak (no scan needed: the full root walk below already
  * reaches every old object). */
 static void sl_gc_collect(void) {
-    long long t0 = 0;
+    /* Read always: proc.runtime_stats reports every pause (one clock read
+       a collection), not only under SLANG_GC_STAT. */
+    long long t0 = sl_rt_monotonic_ns();
     int stat_on = sl_gc_stat_enabled();
-    if (stat_on)
-        t0 = sl_rt_monotonic_ns();
     sl_gc_thread **snap = NULL;
     int nsnap = 0;
     sl_gc_phase_clock pc = {.on = stat_on, .t0 = t0};
@@ -3920,6 +3939,10 @@ static void sl_gc_collect(void) {
                                   memory_order_relaxed);
         sl_gc_stat_pause(sl_rt_monotonic_ns() - t0, marked, swept);
     }
+    sl_gc_rt_pause(sl_rt_monotonic_ns() - t0);
+    atomic_fetch_add_explicit(&sl_gc_rt_majors, 1, memory_order_relaxed);
+    atomic_store_explicit(&sl_gc_rt_live_bytes, (unsigned long long)live_bytes,
+                          memory_order_relaxed);
     atomic_store_explicit(&sl_gc_collect_pending, 0, memory_order_release);
     atomic_store_explicit(&sl_gc_collect_minor_pending, 0, memory_order_release);
     sl_gc_stw_release();

@@ -1,0 +1,15 @@
+bytes=0-499 -> [bytes 0-499/1000]
+bytes=500- -> [bytes 500-999/1000]
+bytes=-200 -> [bytes 800-999/1000]
+bytes=-5000 -> [bytes 0-999/1000]
+bytes=900-2000 -> [bytes 900-999/1000]
+bytes=0-0, -1 -> [bytes 0-0/1000] [bytes 999-999/1000]
+bytes=1000- -> 416 (range not satisfiable)
+bytes=1000-1200, 5000- -> 416 (range not satisfiable)
+bytes=-0 -> 416 (range not satisfiable)
+bytes=0- -> 416 (range not satisfiable)
+bytes=500-100 -> whole
+bytes=abc -> whole
+items=0-10 -> whole
+ -> whole
+bytes=0-1,2-3,4-5,6-7,8-9,10-11,12-13,14-15,16-17,18-19,20-21,22-23,24-25,26-27,28-29,30-31,32-33 -> whole
