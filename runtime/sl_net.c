@@ -2,14 +2,17 @@
 #include <limits.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <sys/socket.h>
 #if defined(__linux__)
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
+#include <sys/sendfile.h>
 #define SL_REACTOR_EPOLL 1
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
 #include <sys/event.h>
+#include <sys/uio.h>
 #define SL_REACTOR_KQUEUE 1
 #else
 #error "slang net: need kqueue or epoll"
@@ -2298,6 +2301,133 @@ static sl_res_bool_str *sl_net_nonblock(int fd) {
        is what the side-table actually tracks. */
     sl_net_user_nonblock_insert((void *)(intptr_t)fd);
     return sl_net_ok_bool(true);
+}
+
+/* ---- send_file ----------------------------------------------------------
+ *
+ * A file's bytes to a socket without copying them through the program:
+ * sendfile(2) on Linux and macOS moves them from the page cache to the
+ * socket inside the kernel. Elsewhere, and for TLS (which must encrypt
+ * in user space), the bytes go through one pooled 64 KB buffer, never the
+ * slang heap. A page-cache miss still blocks this worker on the disk read,
+ * as fs.pread does. */
+
+#define SL_SENDFILE_CHUNK (64 * 1024)
+
+#if defined(__APPLE__)
+/* <sys/socket.h> declares it only without the POSIX feature macros the
+   generated code sets; this is its documented prototype. */
+struct sf_hdtr;
+int sendfile(int, int, off_t, off_t *, struct sf_hdtr *, int);
+#endif
+
+static sl_res_int_str *sl_sendfile_ok(long long v) {
+    sl_res_int_str *r = (sl_res_int_str *)sl_gc_alloc(
+        sizeof(sl_res_int_str), sl_gc_trace_sl_res_int_str);
+    r->ok = true;
+    r->v = v;
+    return r;
+}
+
+static sl_res_int_str *sl_sendfile_err(const char *msg) {
+    sl_res_int_str *r = (sl_res_int_str *)sl_gc_alloc(
+        sizeof(sl_res_int_str), sl_gc_trace_sl_res_int_str);
+    r->ok = false;
+    r->e = sl_strdup(msg);
+    return r;
+}
+
+/* The byte count to send: count, or (count < 0) the rest of the file
+ * from off. Returns -1 with *msg set for bad arguments. */
+static long long sl_sendfile_span(int file, long long off, long long count,
+                                  const char **msg) {
+    if (off < 0) { *msg = "send_file: negative offset"; return -1; }
+    if (count >= 0) return count;
+    struct stat st;
+    if (fstat(file, &st) != 0) { *msg = strerror(errno); return -1; }
+    if (!S_ISREG(st.st_mode)) { *msg = "send_file: not a regular file"; return -1; }
+    return st.st_size > off ? (long long)st.st_size - off : 0;
+}
+
+static sl_res_int_str *sl_net_send_file_u(int sock, int file, long long off,
+                                          long long count, sl_until u) {
+    const char *msg = NULL;
+    long long want = sl_sendfile_span(file, off, count, &msg);
+    if (want < 0) return sl_sendfile_err(msg);
+    if (want == 0) return sl_sendfile_ok(0);
+    if (u && sl_until_hit(u)) return sl_sendfile_err("timeout");
+    int user_nb = sl_net_user_nonblock_contains((void *)(intptr_t)sock);
+    int epoch = sl_reactor_close_epoch(sock);
+    long long sent = 0;
+    while (sent < want) {
+        long long step = want - sent;
+        if (step > (1LL << 30)) step = 1LL << 30;
+        long long n = 0;
+        int e = 0;
+#if defined(__linux__)
+        off_t o = (off_t)(off + sent);
+        ssize_t r = sendfile(sock, file, &o, (size_t)step);
+        if (r > 0) n = r;
+        else if (r == 0) break;          /* the file ended early */
+        else e = errno;
+#elif defined(__APPLE__)
+        off_t len = (off_t)step;
+        int r = sendfile(file, sock, (off_t)(off + sent), &len, NULL, 0);
+        n = (long long)len;               /* set even on EAGAIN */
+        if (r != 0) e = errno;
+        else if (len == 0) break;         /* the file ended early */
+#else
+        unsigned char *buf = (unsigned char *)sl_recv_buf_get(SL_SENDFILE_CHUNK);
+        ssize_t got = pread(file, buf, (size_t)(step < SL_SENDFILE_CHUNK ? step : SL_SENDFILE_CHUNK),
+                            (off_t)(off + sent));
+        if (got <= 0) {
+            sl_recv_buf_put(buf);
+            if (got == 0) break;
+            return sl_sendfile_err(strerror(errno));
+        }
+        /* a datagram-free stream socket: send all of it, parking as needed */
+        ssize_t done = 0;
+        while (done < got) {
+            ssize_t w = send(sock, buf + done, (size_t)(got - done), 0);
+            if (w >= 0) { done += w; continue; }
+            if (errno == EINTR) continue;
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                int we = errno; sl_recv_buf_put(buf);
+                return sl_sendfile_err(strerror(we));
+            }
+            int wt = sl_reactor_wait_epoch(sock, SL_REACTOR_WRITE, 0, u, epoch);
+            if (wt == -2) { sl_recv_buf_put(buf); return sl_sendfile_err("timeout"); }
+            if (wt == SL_REACTOR_CLOSED) { sl_recv_buf_put(buf); return sl_sendfile_err("closed"); }
+        }
+        sl_recv_buf_put(buf);
+        n = got;
+#endif
+        sent += n;
+        if (e == 0 || e == EINTR) continue;
+        if (e != EAGAIN && e != EWOULDBLOCK)
+            return sl_sendfile_err(strerror(e));
+        if (user_nb) {
+            /* net.nonblock's contract: never park. What went out is
+               reported; nothing is lost. */
+            if (sent > 0) return sl_sendfile_ok(sent);
+            return sl_sendfile_err("would block");
+        }
+        int w = sl_reactor_wait_epoch(sock, SL_REACTOR_WRITE, 0, u, epoch);
+        if (w == -2) return sl_sendfile_err("timeout");
+        if (w == SL_REACTOR_CLOSED) return sl_sendfile_err("closed");
+    }
+    return sl_sendfile_ok(sent);
+}
+
+static sl_res_int_str *sl_net_send_file(int sock, int file, long long off,
+                                        long long count) {
+    return sl_net_send_file_u(sock, file, off, count, 0);
+}
+
+static sl_res_int_str *sl_net_send_file_until(int sock, int file,
+                                              long long off, long long count,
+                                              sl_until u) {
+    return sl_net_send_file_u(sock, file, off, count, u);
 }
 
 static int sl_link_fault_kind(int e) {

@@ -978,6 +978,7 @@ void force_native_result_types(CG *cg) {
          * on the real run" pattern as opts/res/spawns above) */
         if (cg->want_tls)
             res_cname(cg, "rawptr", "str");
+        res_cname(cg, "int", "str"); /* net.send_file */
     }
     if (cg->want_dns)
         res_cname(cg, "[str]", "str");

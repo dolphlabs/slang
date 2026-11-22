@@ -1314,6 +1314,29 @@ that is still running; remove a stale one with `os.remove` first. A path
 longer than the platform allows (104 bytes on macOS, 108 on Linux) is an
 error, not truncated.
 
+##### Sending files
+
+`net.send_file(sock, file, offset, count)` sends `count` bytes of a file
+(an fd from `fs.open`) starting at `offset`, or the rest of the file for
+a negative `count`. On Linux and macOS it is `sendfile(2)`: the kernel
+moves the bytes from the page cache to the socket, never copying them
+through the program or onto the slang heap. It returns the count sent,
+short only if the file ended first.
+
+```slang
+let fr = fs.open("public/app.js");
+guard let file = fr else { return; }
+let sr = net.send_file_until(cfd, file, 0, -1, deadline);  // the whole file
+fs.close(file);
+```
+
+`net.tls_send_file` / `tls_send_file_until` do the same over TLS, which
+has to encrypt in user space: the bytes go through one pooled 64 KB
+buffer, still never the slang heap. A `"timeout"` leaves the stream at
+an unknown offset, as with `send_until`, so close the connection. A page
+that is not in the page cache is read from disk on the calling worker,
+as `fs.pread` does.
+
 See `examples/httpd/` for a minimal HTTP server on `link` plus the
 `http` stdlib package.
 

@@ -1,5 +1,11 @@
 # todo
 
+- [x] **`net.send_file` (2026-11-22, feat/net-sendfile).** A file's bytes
+  to a socket through `sendfile(2)` on Linux and macOS, with offset,
+  count (negative: to the end) and deadline forms; `tls_send_file` for
+  TLS through one pooled 64 KB chunk. tests/net_send_file checks a 3 MB
+  file, ranges, a short read and errors byte for byte, plain and TLS.
+
 - [x] **A leaf function could hold a safepoint (found 2026-11-21 when
   math/big's tests crashed after merging dev; fixed in
   fix/leaf-body-no-safepoint).** Callers skip their bracket around a call
