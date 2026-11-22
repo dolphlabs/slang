@@ -1,5 +1,13 @@
 # todo
 
+- [x] **`msgpack` and `cbor` (2026-11-22, feat/msgpack-cbor).** Streaming
+  writers and readers plus a `Value` tree for each. CBOR writes preferred
+  serialization (shortest heads and shortest exact float, half included)
+  and reads indefinite lengths; both refuse lengths beyond the input
+  before allocating. CBOR is checked against RFC 8949 Appendix A. A typed
+  struct codec, like `json.encode`/`decode`, would need compiler support
+  and is a follow-up.
+
 - [x] **A leaf function could hold a safepoint (found 2026-11-21 when
   math/big's tests crashed after merging dev; fixed in
   fix/leaf-body-no-safepoint).** Callers skip their bracket around a call
