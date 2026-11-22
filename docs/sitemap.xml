@@ -16,6 +16,7 @@
   <url><loc>https://slang.dolphlabs.com/packages/byteutil</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/cache</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/compress</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/context</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/crypto</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/csv</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/decimal</loc></url>
@@ -39,12 +40,16 @@
   <url><loc>https://slang.dolphlabs.com/packages/math/sketch</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/math/stats</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/math/vec</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/metrics</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/mysql</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/nats</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/net</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/os</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/pg</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/pool</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/proc</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/protobuf</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/proxyproto</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/rand</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/redis</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/regex</loc></url>
