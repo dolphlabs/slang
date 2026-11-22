@@ -75,8 +75,8 @@ standalone repo under `slangpackages/`.
   system dependencies or vendored sources?
 - [ ] **MessagePack and CBOR** (stdlib): encode and decode, structs
   included, with size limits.
-- [ ] **Protobuf codec** (stdlib or package): wire-format encode and decode
-  outside gRPC.
+- [x] **Protobuf codec** (stdlib or package): wire-format encode and decode
+  outside gRPC. PR #605 (open).
 - [ ] **HTTP extras** (stdlib, `http`): Server-Sent Events, streaming
   multipart/form-data uploads, and range requests.
 - [ ] **gRPC streaming** (package `slangpackages/grpc`): server, client and
