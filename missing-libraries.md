@@ -60,8 +60,8 @@ standalone repo under `slangpackages/`.
 - [x] **OpenTelemetry export** (stdlib or package): OTLP over HTTP/protobuf
   for traces, metrics and logs, with W3C `traceparent` propagation in
   `http` and `httpc`. PR #608 (open).
-- [ ] **Runtime stats API** (stdlib): GC cycles and pauses, heap and RSS,
-  task count, reactor queue depth.
+- [x] **Runtime stats API** (stdlib): GC cycles and pauses, heap and RSS,
+  task count, reactor queue depth. PR #627 (open).
 - [ ] **Profiler endpoint** (stdlib): sampled CPU profiles, allocation
   sites and task dumps, readable by standard tools.
   Status: not started. Needs a design first: sampling by signal next to
