@@ -2615,6 +2615,43 @@ that case.
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
 
+#### `context`
+
+Cancellation and deadlines that flow from a request through everything
+it starts, so one timeout or one cancel stops all the work under it.
+
+```slang
+import "context";
+import "net";
+
+let req = context.with_timeout(context.background(), 2000000000);  // 2 s
+let db = context.with_cancel(req);          // ends when req ends
+context.watch_fd(db, fd);                   // a cancel closes fd
+let rr = net.recv_until(fd, 4096, context.deadline(db));
+context.cancel(req, "client went away");    // ends req and db
+println(context.cause(db) ?? "live");       // "client went away"
+context.release(db);
+```
+
+- `background()` is the root. `with_cancel(parent)`,
+  `with_timeout(parent, ns)` and `with_deadline_at(parent, mono_ns)` make
+  children; a child's deadline is the earlier of its own and its
+  parent's, and cancelling a context cancels everything made from it.
+- `deadline(c)` is an `until` for any API that waits; `remaining(c)` is
+  the nanoseconds left (-1 without a deadline), for a timeout another
+  protocol carries.
+- `cancel(c, reason)` (the first reason wins) and `release(c)`, for a
+  context whose work is done. Call one of them, as with Go's contexts:
+  until then a child stays in its parent's list.
+- `is_done(c)` and `cause(c)`: the cancel reason, `"deadline exceeded"`,
+  or `none` while live.
+- `watch_fd(c, fd)` closes `fd` on cancel, waking a task parked on it
+  with `"closed"`; `unwatch_fd` before closing it yourself. `done_chan(c)`
+  is closed on cancel, for a `select`.
+
+There are no timers: a deadline passing does not close watched fds. The
+operations given `deadline(c)` end at it on their own.
+
 #### `websocket`
 
 A WebSocket client (RFC 6455) over `ws://` and `wss://`, with
@@ -4193,6 +4230,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [byteutil](packages/byteutil.md) -- source package, 6 public items
 - [cache](packages/cache.md) -- source package, 14 public items
 - [compress](packages/compress.md) -- compiler-provided, 10 public items
+- [context](packages/context.md) -- source package, 14 public items
 - [crypto](packages/crypto.md) -- compiler-provided, 54 public items
 - [csv](packages/csv.md) -- source package, 18 public items
 - [decimal](packages/decimal.md) -- source package, 37 public items
