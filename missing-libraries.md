@@ -24,9 +24,9 @@ standalone repo under `slangpackages/`.
 - [x] **Socket options** (stdlib, `net`): `SO_REUSEPORT` listeners (one
   accept queue per core), `TCP_NODELAY`, keepalive idle/interval/count,
   listen backlog, and `TCP_FASTOPEN` where the OS has it. PR #601 (open).
-- [ ] **Zero-copy file sends** (stdlib, `net`/`fs`): `sendfile` (and
+- [x] **Zero-copy file sends** (stdlib, `net`/`fs`): `sendfile` (and
   `splice` on Linux) from a file to a socket, used by `http` for static
-  files.
+  files. PR #602 (open).
 - [ ] **PROXY protocol v1/v2** (stdlib): parse the header HAProxy and AWS
   NLB put in front of a connection, so servers see the real client address.
 - [ ] **DNS resolver** (stdlib): A/AAAA/CNAME lookups over UDP with TCP
