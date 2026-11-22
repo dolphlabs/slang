@@ -6,6 +6,148 @@
     "url": "https://dolphlabs.com"
   },
   "packages": {
+    "balance": {
+      "name": "balance",
+      "kind": "source",
+      "items": [
+        {
+          "name": "ROUND_ROBIN",
+          "decl": "let",
+          "sig": "let ROUND_ROBIN = 0;",
+          "doc": "",
+          "file": "stdlib/balance/balance.sl",
+          "line": 36
+        },
+        {
+          "name": "RANDOM",
+          "decl": "let",
+          "sig": "let RANDOM = 1;",
+          "doc": "",
+          "file": "stdlib/balance/balance.sl",
+          "line": 37
+        },
+        {
+          "name": "LEAST",
+          "decl": "let",
+          "sig": "let LEAST = 2;",
+          "doc": "",
+          "file": "stdlib/balance/balance.sl",
+          "line": 38
+        },
+        {
+          "name": "P2C",
+          "decl": "let",
+          "sig": "let P2C = 3;",
+          "doc": "",
+          "file": "stdlib/balance/balance.sl",
+          "line": 39
+        },
+        {
+          "name": "HASH",
+          "decl": "let",
+          "sig": "let HASH = 4;",
+          "doc": "",
+          "file": "stdlib/balance/balance.sl",
+          "line": 40
+        },
+        {
+          "name": "Options",
+          "decl": "struct",
+          "sig": "struct Options",
+          "doc": "",
+          "file": "stdlib/balance/balance.sl",
+          "line": 42
+        },
+        {
+          "name": "options",
+          "decl": "fn",
+          "sig": "fn options(strategy: int) -> Options",
+          "doc": "",
+          "file": "stdlib/balance/balance.sl",
+          "line": 51
+        },
+        {
+          "name": "Backend",
+          "decl": "struct",
+          "sig": "gc struct Backend",
+          "doc": "",
+          "file": "stdlib/balance/balance.sl",
+          "line": 56
+        },
+        {
+          "name": "Pick",
+          "decl": "struct",
+          "sig": "struct Pick",
+          "doc": "",
+          "file": "stdlib/balance/balance.sl",
+          "line": 66
+        },
+        {
+          "name": "Balancer",
+          "decl": "struct",
+          "sig": "gc struct Balancer",
+          "doc": "",
+          "file": "stdlib/balance/balance.sl",
+          "line": 71
+        },
+        {
+          "name": "new",
+          "decl": "fn",
+          "sig": "fn new(addrs: [str], strategy: int) -> Balancer",
+          "doc": "",
+          "file": "stdlib/balance/balance.sl",
+          "line": 80
+        },
+        {
+          "name": "with_options",
+          "decl": "fn",
+          "sig": "fn with_options(addrs: [str], o: Options) -> Balancer",
+          "doc": "",
+          "file": "stdlib/balance/balance.sl",
+          "line": 84
+        },
+        {
+          "name": "set_backends",
+          "decl": "fn",
+          "sig": "fn set_backends(lb: Balancer, addrs: [str])",
+          "doc": "Replaces the backend list (from service discovery, say). Backends that stay keep their state.",
+          "file": "stdlib/balance/balance.sl",
+          "line": 95
+        },
+        {
+          "name": "pick",
+          "decl": "fn",
+          "sig": "fn pick(lb: Balancer, key: str) -> result[Pick, str]",
+          "doc": "A backend for one request (key is used by HASH only). Report how it went with done. An error when every backend is ejected.",
+          "file": "stdlib/balance/balance.sl",
+          "line": 116
+        },
+        {
+          "name": "done",
+          "decl": "fn",
+          "sig": "fn done(lb: Balancer, p: Pick, ok: bool, latency_ns: int)",
+          "doc": "Reports a pick's outcome and how long it took.",
+          "file": "stdlib/balance/balance.sl",
+          "line": 159
+        },
+        {
+          "name": "Status",
+          "decl": "struct",
+          "sig": "struct Status",
+          "doc": "",
+          "file": "stdlib/balance/balance.sl",
+          "line": 198
+        },
+        {
+          "name": "status",
+          "decl": "fn",
+          "sig": "fn status(lb: Balancer) -> [Status]",
+          "doc": "",
+          "file": "stdlib/balance/balance.sl",
+          "line": 206
+        }
+      ]
+    },
     "builder": {
       "name": "builder",
       "kind": "source",

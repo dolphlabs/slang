@@ -1,5 +1,9 @@
 # todo
 
+- [x] **`balance` (2026-11-22, feat/balance).** Client-side load
+  balancing: round robin, random, least loaded, P2C over in-flight and
+  latency EWMA, and rendezvous hashing with fail-over, plus ejection with
+  doubling backoff.
 - [x] **`memcache` (2026-11-22, feat/memcache).** A memcached text
   protocol client: get/gets/get_multi, set/add/replace/cas,
   delete/incr/decr/touch, rendezvous hashing over servers, idle
