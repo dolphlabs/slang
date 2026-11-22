@@ -41,9 +41,9 @@ standalone repo under `slangpackages/`.
 
 ## 2. Resilience
 
-- [ ] **Cancellation contexts** (stdlib): a deadline and cancel signal that
+- [x] **Cancellation contexts** (stdlib): a deadline and cancel signal that
   flows from a request through `httpc`, `pg`, `redis` and the other
-  clients, so one timeout stops everything under it.
+  clients, so one timeout stops everything under it. PR #603 (open).
 - [ ] **Generic connection pool** (stdlib): health checks, max idle/open,
   idle and lifetime limits, fair FIFO waiting, wait-time metrics. The
   speed audit found Slang's pool-acquisition p99 above Go's on every route.
