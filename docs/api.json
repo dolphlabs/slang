@@ -563,6 +563,220 @@
         }
       ]
     },
+    "crdt": {
+      "name": "crdt",
+      "kind": "source",
+      "items": [
+        {
+          "name": "GCounter",
+          "decl": "struct",
+          "sig": "gc struct GCounter",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 25
+        },
+        {
+          "name": "gcounter",
+          "decl": "fn",
+          "sig": "fn gcounter() -> GCounter",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 29
+        },
+        {
+          "name": "gc_inc",
+          "decl": "fn",
+          "sig": "fn gc_inc(c: GCounter, node: str, n: int)",
+          "doc": "Adds n (n >= 0) to node's count.",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 35
+        },
+        {
+          "name": "gc_value",
+          "decl": "fn",
+          "sig": "fn gc_value(c: GCounter) -> int",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 42
+        },
+        {
+          "name": "gc_merge",
+          "decl": "fn",
+          "sig": "fn gc_merge(c: GCounter, other: GCounter)",
+          "doc": "c takes in everything other has seen.",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 49
+        },
+        {
+          "name": "PNCounter",
+          "decl": "struct",
+          "sig": "gc struct PNCounter",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 57
+        },
+        {
+          "name": "pncounter",
+          "decl": "fn",
+          "sig": "fn pncounter() -> PNCounter",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 62
+        },
+        {
+          "name": "pn_add",
+          "decl": "fn",
+          "sig": "fn pn_add(c: PNCounter, node: str, delta: int)",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 66
+        },
+        {
+          "name": "pn_value",
+          "decl": "fn",
+          "sig": "fn pn_value(c: PNCounter) -> int",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 70
+        },
+        {
+          "name": "pn_merge",
+          "decl": "fn",
+          "sig": "fn pn_merge(c: PNCounter, other: PNCounter)",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 74
+        },
+        {
+          "name": "ORSet",
+          "decl": "struct",
+          "sig": "gc struct ORSet",
+          "doc": "Each element carries the dots (\"node:n\") of the adds that are still live; clock holds the highest n seen from each node. A dot the clock has seen but the element lacks was removed.",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 84
+        },
+        {
+          "name": "orset",
+          "decl": "fn",
+          "sig": "fn orset() -> ORSet",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 89
+        },
+        {
+          "name": "set_add",
+          "decl": "fn",
+          "sig": "fn set_add(s: ORSet, node: str, elem: str)",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 95
+        },
+        {
+          "name": "set_remove",
+          "decl": "fn",
+          "sig": "fn set_remove(s: ORSet, elem: str)",
+          "doc": "Removes elem as this replica sees it; an add elsewhere that this replica has not seen survives the merge (add wins).",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 106
+        },
+        {
+          "name": "set_has",
+          "decl": "fn",
+          "sig": "fn set_has(s: ORSet, elem: str) -> bool",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 110
+        },
+        {
+          "name": "set_items",
+          "decl": "fn",
+          "sig": "fn set_items(s: ORSet) -> [str]",
+          "doc": "The elements, sorted.",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 115
+        },
+        {
+          "name": "set_merge",
+          "decl": "fn",
+          "sig": "fn set_merge(s: ORSet, other: ORSet)",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 122
+        },
+        {
+          "name": "Entry",
+          "decl": "struct",
+          "sig": "struct Entry",
+          "doc": "A value with the time it was written and by whom. A delete is a tombstone, so a merge cannot bring the value back.",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 164
+        },
+        {
+          "name": "LWWMap",
+          "decl": "struct",
+          "sig": "gc struct LWWMap",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 171
+        },
+        {
+          "name": "lwwmap",
+          "decl": "fn",
+          "sig": "fn lwwmap() -> LWWMap",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 175
+        },
+        {
+          "name": "map_set",
+          "decl": "fn",
+          "sig": "fn map_set(m: LWWMap, node: str, key: str, value: str, ts: int)",
+          "doc": "Sets key at time ts (any clock that only moves forward on each node, such as time.wall()); ties go to the larger node id, so every replica picks the same winner.",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 183
+        },
+        {
+          "name": "map_delete",
+          "decl": "fn",
+          "sig": "fn map_delete(m: LWWMap, node: str, key: str, ts: int)",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 187
+        },
+        {
+          "name": "map_get",
+          "decl": "fn",
+          "sig": "fn map_get(m: LWWMap, key: str) -> opt[str]",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 191
+        },
+        {
+          "name": "map_keys",
+          "decl": "fn",
+          "sig": "fn map_keys(m: LWWMap) -> [str]",
+          "doc": "The live keys, sorted.",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 199
+        },
+        {
+          "name": "map_merge",
+          "decl": "fn",
+          "sig": "fn map_merge(m: LWWMap, other: LWWMap)",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 208
+        },
+        {
+          "name": "map_compact",
+          "decl": "fn",
+          "sig": "fn map_compact(m: LWWMap, before_ts: int)",
+          "doc": "Drops tombstones older than before_ts, once every replica has merged past it (a caller's knowledge: merging an older replica afterwards could bring a deleted value back).",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 215
+        }
+      ]
+    },
     "crypto": {
       "name": "crypto",
       "kind": "native",
