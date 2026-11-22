@@ -12,22 +12,28 @@
   <url><loc>https://slang.dolphlabs.com/interop/</loc></url>
   <url><loc>https://slang.dolphlabs.com/internals/</loc></url>
   <url><loc>https://slang.dolphlabs.com/limitations/</loc></url>
-  <url><loc>https://slang.dolphlabs.com/packages/acme</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/balance</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/builder</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/byteutil</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/cache</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/cbor</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/compress</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/context</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/crdt</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/crypto</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/csv</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/decimal</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/encoding</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/envelope</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/flags</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/fs</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/http</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/http2</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/httpc</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/idempotency</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/io</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/json</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/lease</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/log</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/math</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/math/big</loc></url>
@@ -40,25 +46,39 @@
   <url><loc>https://slang.dolphlabs.com/packages/math/sketch</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/math/stats</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/math/vec</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/memcache</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/metrics</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/msgpack</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/multipart</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/mysql</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/nats</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/net</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/os</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/otp</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/outbox</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/pg</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/pool</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/proc</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/protobuf</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/proxyproto</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/rand</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/redis</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/regex</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/resilience</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/s3</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/sigv4</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/singleflight</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/smtp</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/sort</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/sql</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/sse</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/strings</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/tar</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/template</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/time</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/timez</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/toml</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/trace</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/unicode</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/uuid</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/websocket</loc></url>
