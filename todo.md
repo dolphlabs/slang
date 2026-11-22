@@ -1,5 +1,12 @@
 # todo
 
+- [x] **`trace` (2026-11-22, feat/trace).** Spans with W3C traceparent
+  parsing and formatting, head sampling, and batched export to an
+  OpenTelemetry collector over OTLP/HTTP with JSON bodies (protobuf
+  bodies can follow the protobuf codec item). The queue is bounded and
+  drops are counted. Automatic propagation inside `http`/`httpc` is a
+  follow-up; programs pass the header themselves for now.
+
 - [x] **A leaf function could hold a safepoint (found 2026-11-21 when
   math/big's tests crashed after merging dev; fixed in
   fix/leaf-body-no-safepoint).** Callers skip their bracket around a call
