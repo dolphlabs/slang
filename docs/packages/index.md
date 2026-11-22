@@ -3398,6 +3398,60 @@ pool.release(p, lease);        // pool.discard(p, lease) if it broke
   and longest wait, and timeouts.
 - `close(p)` closes idle connections and fails waiters; leased ones close
   as they come back. Releasing a lease twice panics.
+#### `webauthn`
+
+Passkeys and security keys for a relying party: WebAuthn registration
+and login, checked on the server.
+
+```slang
+import "webauthn";
+
+let rp = webauthn.relying_party("example.com", "Example", ["https://example.com"]);
+
+// Registration: send ch.options to the page, keep ch.value in the session.
+let cr = webauthn.begin_registration(rp, user, existing_credentials);
+guard let ch = cr else let e = err_of(cr) { return fail(e); }
+// page: navigator.credentials.create({ publicKey:
+//         PublicKeyCredential.parseCreationOptionsFromJSON(options) }),
+//       then POST JSON.stringify(credential)
+let fr = webauthn.finish_registration(rp, ch.value, posted_json);
+guard let cred = fr else let e = err_of(fr) { return fail(e); }   // store cred
+
+// Login: the same shape.
+let lc = webauthn.begin_login(rp, []);          // [] lets the user pick any passkey
+let id = webauthn.login_credential_id(posted_json) ?? b"";   // look up the stored credential
+let lr = webauthn.finish_login(rp, challenge, stored, posted_json);
+guard let login = lr else let e = err_of(lr) { return fail(e); }
+stored.sign_count = login.sign_count;           // and store it back
+```
+
+What `finish_registration` and `finish_login` check:
+
+- **Client data:** the type, the challenge, and that the origin is one of
+  `rp.origins`. Cross-origin iframe requests are refused.
+- **Authenticator data:** the RP ID hash and the user-present flag, and the
+  user-verified flag when `rp.user_verification` is `"required"`.
+  Trailing or malformed data is refused.
+- **Signature:** ES256 (P-256, from DER), EdDSA (Ed25519) or RS256, with
+  RSA keys at least 2048 bits. The options offer these three.
+- **Counter:** for an authenticator that keeps one, the signature counter
+  must have gone up. A counter that did not is reported as a possible
+  cloned authenticator.
+
+A `Credential` holds the id, the COSE public key, the algorithm, the
+counter, the AAGUID, and the backup flags (`backup_eligible`, set on a
+syncable passkey).
+
+`Login.user_handle` is the `User.id` a passkey keeps. When it is not
+empty, the caller must check that it names the account the credential
+belongs to. Challenges are 32 random bytes; keep each per session and use
+it once.
+
+**Not done, deliberately:** attestation is not verified. The options ask
+for `"none"`, and whatever format arrives is recorded in
+`Credential.format` and trusted no further. There is no metadata-service
+lookup by AAGUID.
+
 #### `context`
 
 Cancellation and deadlines that flow from a request through everything
@@ -5081,6 +5135,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [trace](packages/trace.md) -- source package, 30 public items
 - [unicode](packages/unicode.md) -- compiler-provided, 11 public items
 - [uuid](packages/uuid.md) -- source package, 11 public items
+- [webauthn](packages/webauthn.md) -- source package, 17 public items
 - [websocket](packages/websocket.md) -- source package, 16 public items
 - [x509](packages/x509.md) -- source package, 11 public items
 - [xml](packages/xml.md) -- source package, 25 public items
