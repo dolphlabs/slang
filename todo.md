@@ -1,5 +1,10 @@
 # todo
 
+- [x] **`balance` (2026-11-22, feat/balance).** Client-side load
+  balancing: round robin, random, least loaded, P2C over in-flight and
+  latency EWMA, and rendezvous hashing with fail-over, plus ejection with
+  doubling backoff.
+
 - [x] **A leaf function could hold a safepoint (found 2026-11-21 when
   math/big's tests crashed after merging dev; fixed in
   fix/leaf-body-no-safepoint).** Callers skip their bracket around a call

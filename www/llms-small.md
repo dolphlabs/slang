@@ -268,7 +268,7 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg mysql redis regex
 strings unicode encoding compress math math/vec decimal rand builder byteutil flags sort
-uuid http http2 httpc websocket template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
+uuid http http2 httpc websocket balance template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 `xml.parse(text)` gives the root `xml.Node` (`name`, `local`, `ns`, `attrs`, `children`);
 `n.find("a/b")`, `n.find_all(path)`, `n.child_text("link")`, `n.attr("id")`; DOCTYPE refused.
 `xml.element("a").set_attr("k", "v").add_text("t")` and `xml.write(n)` build one.
