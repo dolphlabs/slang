@@ -1,5 +1,10 @@
 # todo
 
+- [x] **`resilience` (2026-11-22, feat/resilience).** Circuit breaker
+  (failure ratio over a call window, half-open probes), bulkhead, retry
+  budget (integer milli-tokens: in floats ten deposits of 0.1 made
+  0.999... and refused the retry they earned), `retry` with full jitter,
+  token bucket, keyed GCRA with sweeping of full keys, and `hedge`.
 - [x] **HTTP extras (2026-11-22, feat/http-extras).** `http.parse_range` /
   `content_range` (RFC 9110, ignoring more than 16 ranges), a streaming
   `multipart` parser and body builder with header and part limits, and

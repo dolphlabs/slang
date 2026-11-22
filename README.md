@@ -3685,6 +3685,50 @@ that case.
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
 
+#### `resilience`
+
+Ways to fail well under load, each safe to share between tasks.
+
+```slang
+import "resilience";
+
+let b = resilience.breaker(resilience.breaker_options());
+if resilience.allow(b) {
+    let r = call_upstream();
+    let worked = false;
+    if let _v = r { worked = true; }
+    resilience.record(b, worked);
+}
+
+let per_ip = resilience.gcra(100.0, 20);        // 100/s per key, bursts of 20
+let d = resilience.gcra_allow(per_ip, client_ip);
+if !d.allowed { /* 429 with Retry-After from d.retry_after_ns */ }
+```
+
+- **Circuit breaker:** `breaker(o)`, `allow`, `record`. It opens when
+  failures reach `failure_ratio` of the last `window` calls (once
+  `min_calls` have been seen), refuses calls for `open_ns`, then lets
+  `probes` trial calls through: that many successes close it, one failure
+  opens it again. `breaker_state` and `trips` report it.
+- **Bulkhead:** `bulkhead(limit)`, `try_enter`, `leave`. At most `limit`
+  calls at once; the rest are turned away at once rather than queued.
+- **Retry budget:** `retry_budget(ratio, min_per_sec)`. Each request
+  `deposit`s `ratio` of a retry and each retry (`can_retry`) takes one,
+  so retries cannot multiply the load in an outage.
+- **Retry:** `retry(f, arg, options, budget, rng, deadline)` calls
+  `f(arg, deadline)` with full-jitter backoff until it succeeds, the
+  attempts run out, the budget refuses, or the deadline passes. An error
+  starting with `"permanent:"` is not retried.
+- **Token bucket:** `token_bucket(rate, burst)`, `take`, `take_n`,
+  `wait_ns`.
+- **Keyed GCRA:** `gcra(rate, burst)` and `gcra_allow(g, key)` give a
+  `Decision` with `allowed`, `retry_after_ns` and `remaining`. State is
+  one int per key; keys whose bucket is full again are dropped as the map
+  grows, so memory follows the keys active within one burst period.
+- **Hedging:** `hedge(f, arg, delay_ns, deadline)` calls `f` and, if it
+  has not answered within `delay_ns`, calls it again and returns the
+  first success. Use it for idempotent reads only. The slower call runs
+  to its end in the background.
 #### `multipart`
 
 `multipart/form-data` (RFC 7578), the body of HTML file uploads, read as a

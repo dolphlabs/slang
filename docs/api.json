@@ -13201,6 +13201,268 @@
         }
       ]
     },
+    "resilience": {
+      "name": "resilience",
+      "kind": "source",
+      "items": [
+        {
+          "name": "BreakerOptions",
+          "decl": "struct",
+          "sig": "struct BreakerOptions",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 27
+        },
+        {
+          "name": "breaker_options",
+          "decl": "fn",
+          "sig": "fn breaker_options() -> BreakerOptions",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 41
+        },
+        {
+          "name": "Breaker",
+          "decl": "struct",
+          "sig": "gc struct Breaker",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 46
+        },
+        {
+          "name": "breaker",
+          "decl": "fn",
+          "sig": "fn breaker(o: BreakerOptions) -> Breaker",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 64
+        },
+        {
+          "name": "allow",
+          "decl": "fn",
+          "sig": "fn allow(b: Breaker) -> bool",
+          "doc": "Whether a call may go ahead. Every allowed call must be followed by record(b, ok) once it finishes.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 78
+        },
+        {
+          "name": "record",
+          "decl": "fn",
+          "sig": "fn record(b: Breaker, ok: bool)",
+          "doc": "The outcome of a call allow let through.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 101
+        },
+        {
+          "name": "breaker_state",
+          "decl": "fn",
+          "sig": "fn breaker_state(b: Breaker) -> str",
+          "doc": "\"closed\", \"open\" or \"half-open\".",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 135
+        },
+        {
+          "name": "trips",
+          "decl": "fn",
+          "sig": "fn trips(b: Breaker) -> int",
+          "doc": "How many times the breaker has opened.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 146
+        },
+        {
+          "name": "Bulkhead",
+          "decl": "struct",
+          "sig": "gc struct Bulkhead",
+          "doc": "At most `limit` calls at once; the rest are turned away at once rather than queued, so one slow dependency cannot take every task with it.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 171
+        },
+        {
+          "name": "bulkhead",
+          "decl": "fn",
+          "sig": "fn bulkhead(limit: int) -> Bulkhead",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 178
+        },
+        {
+          "name": "try_enter",
+          "decl": "fn",
+          "sig": "fn try_enter(b: Bulkhead) -> bool",
+          "doc": "Takes a place if there is one. Every true must be followed by leave.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 185
+        },
+        {
+          "name": "leave",
+          "decl": "fn",
+          "sig": "fn leave(b: Bulkhead)",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 197
+        },
+        {
+          "name": "bulkhead_active",
+          "decl": "fn",
+          "sig": "fn bulkhead_active(b: Bulkhead) -> int",
+          "doc": "Calls in progress, and calls turned away so far.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 204
+        },
+        {
+          "name": "bulkhead_rejected",
+          "decl": "fn",
+          "sig": "fn bulkhead_rejected(b: Bulkhead) -> int",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 211
+        },
+        {
+          "name": "RetryBudget",
+          "decl": "struct",
+          "sig": "gc struct RetryBudget",
+          "doc": "Retries as a share of requests (Finagle's and gRPC's budget): each request deposits `ratio` of a retry, each retry withdraws one, and `min_per_sec` retries a second are always allowed. During an outage retries cannot multiply the load beyond 1 + ratio.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 224
+        },
+        {
+          "name": "retry_budget",
+          "decl": "fn",
+          "sig": "fn retry_budget(ratio: float, min_per_sec: int) -> RetryBudget",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 236
+        },
+        {
+          "name": "deposit",
+          "decl": "fn",
+          "sig": "fn deposit(b: RetryBudget)",
+          "doc": "An original request (not a retry) was made.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 247
+        },
+        {
+          "name": "can_retry",
+          "decl": "fn",
+          "sig": "fn can_retry(b: RetryBudget) -> bool",
+          "doc": "Whether a retry may go ahead; takes one from the budget if so.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 255
+        },
+        {
+          "name": "RetryOptions",
+          "decl": "struct",
+          "sig": "struct RetryOptions",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 281
+        },
+        {
+          "name": "retry_options",
+          "decl": "fn",
+          "sig": "fn retry_options() -> RetryOptions",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 290
+        },
+        {
+          "name": "retry",
+          "decl": "fn",
+          "sig": "fn retry[A, T](f: fn(A, until) -> result[T, str], a: A, o: RetryOptions, budget: RetryBudget, r: rand.Rng, deadline: until) -> result[T, str]",
+          "doc": "Calls f(a, deadline) until it succeeds, the attempts run out, the budget refuses a retry, or the deadline passes. The last error is returned. budget may be shared by every caller of one dependency. Errors reported as \"permanent: ...\" by f are not retried.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 299
+        },
+        {
+          "name": "TokenBucket",
+          "decl": "struct",
+          "sig": "gc struct TokenBucket",
+          "doc": "rate tokens a second, holding at most burst: allow takes one.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 335
+        },
+        {
+          "name": "token_bucket",
+          "decl": "fn",
+          "sig": "fn token_bucket(rate_per_sec: float, burst: int) -> TokenBucket",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 343
+        },
+        {
+          "name": "take",
+          "decl": "fn",
+          "sig": "fn take(tb: TokenBucket) -> bool",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 350
+        },
+        {
+          "name": "take_n",
+          "decl": "fn",
+          "sig": "fn take_n(tb: TokenBucket, n: int) -> bool",
+          "doc": "Takes n tokens if there are that many; none otherwise.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 355
+        },
+        {
+          "name": "wait_ns",
+          "decl": "fn",
+          "sig": "fn wait_ns(tb: TokenBucket, n: int) -> int",
+          "doc": "Nanoseconds until n tokens are there (0 if they are now; -1 if n is more than the bucket holds).",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 370
+        },
+        {
+          "name": "Gcra",
+          "decl": "struct",
+          "sig": "gc struct Gcra",
+          "doc": "The generic cell rate algorithm, per key: `rate` a second per key with bursts of `burst`, one int of state per key (its theoretical arrival time) -- the limiter Redis's redis-cell and many gateways use. Keys idle long enough to be full again are dropped as the map grows, so memory follows the keys active within one burst period.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 398
+        },
+        {
+          "name": "Decision",
+          "decl": "struct",
+          "sig": "struct Decision",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 406
+        },
+        {
+          "name": "gcra",
+          "decl": "fn",
+          "sig": "fn gcra(rate_per_sec: float, burst: int) -> Gcra",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 414
+        },
+        {
+          "name": "gcra_allow",
+          "decl": "fn",
+          "sig": "fn gcra_allow(g: Gcra, key: str) -> Decision",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 426
+        },
+        {
+          "name": "gcra_keys",
+          "decl": "fn",
+          "sig": "fn gcra_keys(g: Gcra) -> int",
+          "doc": "Keys tracked now.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 450
+        },
+        {
+          "name": "hedge",
+          "decl": "fn",
+          "sig": "fn hedge[A, T](f: fn(A, until) -> result[T, str], a: A, delay_ns: int, deadline: until) -> result[T, str]",
+          "doc": "Calls f(a, deadline); if it has not answered within delay_ns, calls it again and takes whichever answers first with a success. Cuts tail latency for idempotent reads at the cost of at most one extra call. The slower call is not stopped: it runs to its end in the background and its answer is dropped.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 504
+        }
+      ]
+    },
     "s3": {
       "name": "s3",
       "kind": "source",
