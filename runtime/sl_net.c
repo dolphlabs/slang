@@ -2,15 +2,18 @@
 #include <limits.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <poll.h>
 #include <time.h>
 #include <sys/socket.h>
 #if defined(__linux__)
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
+#include <sys/sendfile.h>
 #define SL_REACTOR_EPOLL 1
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
 #include <sys/event.h>
+#include <sys/uio.h>
 #define SL_REACTOR_KQUEUE 1
 #else
 #error "slang net: need kqueue or epoll"
