@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pool — slang</title>
+<meta name="description" content="Package pool.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<meta name="theme-color" content="#07080a" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f7f5ef" media="(prefers-color-scheme: light)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="pool">
+<meta property="og:description" content="Package pool.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://slang.dolphlabs.com/packages/pool">
+<meta property="og:image" content="https://slang.dolphlabs.com/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The slang rabbit mark beside the slang wordmark">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://slang.dolphlabs.com/packages/pool">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/pool.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preload" href="../fonts/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<script>
+/* Before first paint, so a saved light theme never flashes dark. */
+try { var t = localStorage.getItem("slang-theme");
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="nav" data-nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="../" aria-label="slang home">
+      <img class="logo-on-dark" src="../brand/slang-logo-light.svg" alt="" width="77" height="32">
+      <img class="logo-on-light" src="../brand/slang-logo-dark.svg" alt="" width="77" height="32">
+    </a>
+    <nav class="nav-links" aria-label="Primary"><a href="../guide/">Guide</a><a href="../concurrency/">Concurrency</a><a class="active" href="../packages/">Packages</a><a href="../bench/">Benchmarks</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a></nav>
+    <div class="nav-actions">
+      <button class="search-btn" type="button" data-search aria-label="Search the docs" aria-keyshortcuts="Control+K Meta+K /">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <span class="search-label">Search</span>
+        <kbd class="search-kbd">/</kbd>
+      </button>
+      <button class="icon-btn" type="button" data-theme-toggle aria-label="Switch to light theme" title="Switch theme">
+        <svg class="i-sun" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <svg class="i-moon" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.6A8 8 0 1 1 9.4 4a6.4 6.4 0 0 0 10.6 10.6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      </button>
+      <a class="btn btn-ghost btn-sm nav-gh" href="https://github.com/dolphlabs/slang">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span>GitHub</span>
+      </a>
+      <a class="btn btn-light btn-sm nav-start" href="../#install">Get started</a>
+      <button class="nav-menu" type="button" aria-expanded="false" aria-controls="nav-sheet" aria-label="Menu" data-menu>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6h14M3 10h14M3 14h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </div>
+  <nav class="nav-sheet" id="nav-sheet" aria-label="Menu" hidden><a href="../guide/">Guide</a><a href="../concurrency/">Concurrency</a><a class="active" href="../packages/">Packages</a><a href="../bench/">Benchmarks</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="https://github.com/dolphlabs/slang">GitHub</a></nav>
+</header>
+
+<div class="docbar">
+  <button class="docbar-btn" type="button" aria-expanded="false" aria-controls="sidebar" data-drawer>
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    <span>Docs</span>
+  </button>
+  <span class="docbar-here">pool</span>
+</div>
+
+<div class="docs">
+  <aside class="sidebar" id="sidebar" aria-label="Documentation">
+    <div class="sidebar-inner"><div class="side-group"><p class="side-title">Start</p><ul class="side-list"><li><a href="../">Overview</a></li><li><a href="../guide/">Guide</a></li><li><a href="../guide/data">Data types</a></li><li><a href="../guide/errors">Errors</a></li><li><a href="../guide/functions">Functions</a></li></ul></div><div class="side-group"><p class="side-title">Build</p><ul class="side-list"><li><a href="../concurrency/">Concurrency</a></li><li><a href="../testing/">Testing</a></li><li><a href="../packages/">Packages</a></li><li><a href="../interop/">C interop</a></li></ul></div><div class="side-group"><p class="side-title">Under the hood</p><ul class="side-list"><li><a href="../internals/">Internals</a></li><li><a href="../bench/">Benchmarks</a></li><li><a href="../limitations/">Limitations</a></li></ul></div><details class="side-group side-pkgs" open><summary>Packages<span class="side-count">67</span></summary><ul class="side-list"><li><a href="../packages/builder">builder</a></li><li><a href="../packages/byteutil">byteutil</a></li><li><a href="../packages/cache">cache</a></li><li><a href="../packages/cbor">cbor</a></li><li><a href="../packages/compress">compress</a></li><li><a href="../packages/context">context</a></li><li><a href="../packages/crdt">crdt</a></li><li><a href="../packages/crypto">crypto</a></li><li><a href="../packages/csv">csv</a></li><li><a href="../packages/decimal">decimal</a></li><li><a href="../packages/encoding">encoding</a></li><li><a href="../packages/flags">flags</a></li><li><a href="../packages/fs">fs</a></li><li><a href="../packages/http">http</a></li><li><a href="../packages/http2">http2</a></li><li><a href="../packages/httpc">httpc</a></li><li><a href="../packages/io">io</a></li><li><a href="../packages/json">json</a></li><li><a href="../packages/log">log</a></li><li><a href="../packages/math">math</a></li><li><a href="../packages/math/big">math/big</a></li><li><a href="../packages/math/finance">math/finance</a></li><li><a href="../packages/math/geo">math/geo</a></li><li><a href="../packages/math/interp">math/interp</a></li><li><a href="../packages/math/numtheory">math/numtheory</a></li><li><a href="../packages/math/optimize">math/optimize</a></li><li><a href="../packages/math/shard">math/shard</a></li><li><a href="../packages/math/sketch">math/sketch</a></li><li><a href="../packages/math/stats">math/stats</a></li><li><a href="../packages/math/vec">math/vec</a></li><li><a href="../packages/metrics">metrics</a></li><li><a href="../packages/msgpack">msgpack</a></li><li><a href="../packages/multipart">multipart</a></li><li><a href="../packages/mysql">mysql</a></li><li><a href="../packages/nats">nats</a></li><li><a href="../packages/net">net</a></li><li><a href="../packages/os">os</a></li><li><a href="../packages/pg">pg</a></li><li><a href="../packages/pool" aria-current="page">pool</a></li><li><a href="../packages/proc">proc</a></li><li><a href="../packages/protobuf">protobuf</a></li><li><a href="../packages/proxyproto">proxyproto</a></li><li><a href="../packages/rand">rand</a></li><li><a href="../packages/redis">redis</a></li><li><a href="../packages/regex">regex</a></li><li><a href="../packages/resilience">resilience</a></li><li><a href="../packages/s3">s3</a></li><li><a href="../packages/sigv4">sigv4</a></li><li><a href="../packages/singleflight">singleflight</a></li><li><a href="../packages/smtp">smtp</a></li><li><a href="../packages/sort">sort</a></li><li><a href="../packages/sql">sql</a></li><li><a href="../packages/sse">sse</a></li><li><a href="../packages/strings">strings</a></li><li><a href="../packages/tar">tar</a></li><li><a href="../packages/template">template</a></li><li><a href="../packages/time">time</a></li><li><a href="../packages/timez">timez</a></li><li><a href="../packages/toml">toml</a></li><li><a href="../packages/trace">trace</a></li><li><a href="../packages/unicode">unicode</a></li><li><a href="../packages/uuid">uuid</a></li><li><a href="../packages/websocket">websocket</a></li><li><a href="../packages/x509">x509</a></li><li><a href="../packages/xml">xml</a></li><li><a href="../packages/yaml">yaml</a></li><li><a href="../packages/zip">zip</a></li></ul></details></div>
+  </aside>
+  <div class="drawer-scrim" data-scrim hidden></div>
+
+  <main id="main" class="doc-main">
+
+    <article class="content">
+      <nav class="crumbs" aria-label="Breadcrumb"><a href="../">Docs</a><span class="sep" aria-hidden="true">/</span><a href="../packages/">Packages</a><span class="sep" aria-hidden="true">/</span><span aria-current="page">pool</span></nav>
+      <header class="page-head">
+        <h1>pool</h1>
+        <p class="tagline">Package pool.</p>
+        <p class="agentline">
+          <a href="../packages/pool.md">Markdown</a><span aria-hidden="true">·</span><a href="../llms.txt">llms.txt</a><span aria-hidden="true">·</span><a href="../api.json">api.json</a>
+        </p>
+      </header>
+<p>A bounded pool of connections (or any costly resource) shared by many tasks, for clients that have no pool of their own. It is the design of <code>pg</code>&#x27;s and <code>mysql</code>&#x27;s pools, made generic over the connection type.</p>
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;net&quot;</span>;
+<span class="k">import</span> <span class="s">&quot;pool&quot;</span>;
+
+<span class="k">fn</span> <span class="f">dial_cache</span>(deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">i32</span>, <span class="t">str</span>] {
+    <span class="k">return</span> net.<span class="f">dial_until</span>(<span class="s">&quot;cache.internal&quot;</span>, <span class="n">11211</span>, deadline);
+}
+<span class="k">fn</span> <span class="f">close_cache</span>(fd: <span class="t">i32</span>) { net.<span class="f">close</span>(fd); }
+<span class="k">fn</span> <span class="f">alive</span>(fd: <span class="t">i32</span>) -&gt; <span class="t">bool</span> { <span class="k">return</span> net.<span class="f">idle_alive</span>(fd); }
+
+<span class="k">let</span> p = pool.<span class="f">new</span>(pool.<span class="f">options</span>(<span class="n">64</span>), dial_cache, close_cache, alive);
+<span class="k">let</span> lr = pool.<span class="f">acquire</span>(p, deadline);
+<span class="k">guard</span> <span class="k">let</span> lease = lr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(lr) { <span class="k">return</span>; }   <span class="c">// &quot;timeout&quot;</span>
+<span class="k">let</span> _s = net.<span class="f">send</span>(lease.v, b<span class="s">&quot;version\r\n&quot;</span>);
+pool.<span class="f">release</span>(p, lease);        <span class="c">// pool.discard(p, lease) if it broke</span></code></pre></div>
+<ul><li><code>acquire</code> hands out an idle connection, dials one while fewer than <code>max_open</code> are open, or waits. Waiting is first come, first served: a release goes straight to the task that has waited longest, which wakes once, so the slowest waiter&#x27;s latency is its place in the queue.</li><li>An idle connection is probed (the <code>probe</code> function) before reuse only after <code>probe_after</code> idle, 1 s by default; one released moments ago is handed out as is.</li><li><code>options(max_open)</code> also sets <code>max_idle</code> (default <code>max_open</code>), <code>idle_timeout</code> (5 minutes), <code>max_lifetime</code> (none; set it behind a balancer so new connections reach new backends) and <code>probe_after</code>.</li><li><code>stats(p)</code>: open, idle and waiting now; dials, reuses, waits, total and longest wait, and timeouts.</li><li><code>close(p)</code> closes idle connections and fails waiters; leased ones close as they come back. Releasing a lease twice panics.</li></ul>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="options"><div class="api-sig"><code><span class="k">struct</span> Options</code> <span class="src">stdlib/pool/pool.sl:28</span><a class="anchor" href="#options">#</a></div></div><div class="api-item" id="options"><div class="api-sig"><code><span class="k">fn</span> <span class="f">options</span>(max_open: <span class="t">int</span>) -&gt; Options</code> <span class="src">stdlib/pool/pool.sl:46</span><a class="anchor" href="#options">#</a></div><p class="api-doc">Options with the defaults above for a pool of max_open connections.</p></div><div class="api-item" id="lease"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Lease[T]</code> <span class="src">stdlib/pool/pool.sl:53</span><a class="anchor" href="#lease">#</a></div><p class="api-doc">One connection, on loan from acquire until release or discard.</p></div><div class="api-item" id="stats"><div class="api-sig"><code><span class="k">struct</span> Stats</code> <span class="src">stdlib/pool/pool.sl:60</span><a class="anchor" href="#stats">#</a></div></div><div class="api-item" id="pool"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Pool[T]</code> <span class="src">stdlib/pool/pool.sl:80</span><a class="anchor" href="#pool">#</a></div></div><div class="api-item" id="new"><div class="api-sig"><code><span class="k">fn</span> new[T](o: Options, dial: <span class="k">fn</span>(<span class="t">until</span>) -&gt; <span class="t">result</span>[T, <span class="t">str</span>], close: <span class="k">fn</span>(T), probe: <span class="k">fn</span>(T) -&gt; <span class="t">bool</span>) -&gt; Pool[T]</code> <span class="src">stdlib/pool/pool.sl:102</span><a class="anchor" href="#new">#</a></div><p class="api-doc">A pool that opens nothing until the first acquire. dial makes a connection by a deadline, close ends one, probe says whether an idle one still works (one cheap check, such as net.idle_alive).</p></div><div class="api-item" id="acquire"><div class="api-sig"><code><span class="k">fn</span> acquire[T](p: Pool[T], deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[Lease[T], <span class="t">str</span>]</code> <span class="src">stdlib/pool/pool.sl:123</span><a class="anchor" href="#acquire">#</a></div><p class="api-doc">A connection for the caller&#x27;s use until release or discard: an idle one, a new one if fewer than max_open are open, or else the next one released, in arrival order. &quot;timeout&quot; if deadline passes first, &quot;pool is closed&quot; after close.</p></div><div class="api-item" id="release"><div class="api-sig"><code><span class="k">fn</span> release[T](p: Pool[T], l: Lease[T])</code> <span class="src">stdlib/pool/pool.sl:200</span><a class="anchor" href="#release">#</a></div><p class="api-doc">Gives a connection back: to the task that has waited longest, else to the idle list. Closed instead once past max_lifetime, beyond max_idle, or after close. Releasing a lease twice panics: two tasks would then share one connection.</p></div><div class="api-item" id="discard"><div class="api-sig"><code><span class="k">fn</span> discard[T](p: Pool[T], l: Lease[T])</code> <span class="src">stdlib/pool/pool.sl:234</span><a class="anchor" href="#discard">#</a></div><p class="api-doc">Closes a connection the caller found broken, freeing its slot for the next waiter to dial.</p></div><div class="api-item" id="close"><div class="api-sig"><code><span class="k">fn</span> close[T](p: Pool[T])</code> <span class="src">stdlib/pool/pool.sl:251</span><a class="anchor" href="#close">#</a></div><p class="api-doc">Closes every idle connection and fails every waiting acquire; connections in use are closed as they come back. acquire fails from now on.</p></div><div class="api-item" id="stats"><div class="api-sig"><code><span class="k">fn</span> stats[T](p: Pool[T]) -&gt; Stats</code> <span class="src">stdlib/pool/pool.sl:268</span><a class="anchor" href="#stats">#</a></div><p class="api-doc">A snapshot of the counters.</p></div></div>
+<nav class="pager" aria-label="Previous and next"><a class="prev" href="../packages/pg"><span class="dir">Previous</span><span class="name">pg</span></a><a class="next" href="../packages/proc"><span class="dir">Next</span><span class="name">proc</span></a></nav>
+    </article>
+  </main>
+
+  <aside class="toc" aria-label="On this page">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+
+<footer class="foot">
+  <div class="foot-inner">
+    <a class="foot-logo" href="../" aria-label="slang home">
+      <img class="logo-on-dark" src="../brand/slang-icon-light.svg" alt="" width="28" height="28">
+      <img class="logo-on-light" src="../brand/slang-icon-dark.svg" alt="" width="28" height="28">
+    </a>
+    <p class="foot-by">Built and maintained by
+      <a href="https://dolphlabs.com" rel="noopener">Dolphlabs</a> · Dolph Tech Limited</p>
+    <p class="foot-note">Generated from the repository by <code>www/build.py</code>:
+      the guide from <code>README.md</code>, the API from the compiler's own
+      signature tables and the <code>pub</code> declarations in
+      <code>stdlib/</code>. Nothing here is written twice.</p>
+  </div>
+</footer>
+
+<div class="palette" id="palette" role="dialog" aria-modal="true" aria-label="Search the docs" hidden>
+  <div class="palette-box">
+    <div class="palette-field">
+      <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <input id="palette-input" type="search" placeholder="Search pages, packages and functions" autocomplete="off" spellcheck="false"
+             role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list">
+      <kbd>esc</kbd>
+    </div>
+    <div class="palette-list" id="palette-list" role="listbox" aria-label="Results"></div>
+    <div class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

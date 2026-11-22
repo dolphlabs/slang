@@ -269,6 +269,18 @@ The answer to a HEAD request: the head `write` would send for `r0` -- Content-Le
 
 ### `fn method_not_allowed() -> Response`
 
+### `struct ByteRange`
+
+One satisfiable byte range, both ends included.
+
+### `fn parse_range(header: str, size: int) -> result[[ByteRange], str]`
+
+The ranges a Range header asks for, out of a resource of `size` bytes: "bytes=0-499", "bytes=500-", "bytes=-500" (the last 500), or several separated by commas. Ranges past the end are clipped; ranges that cannot be satisfied are dropped. ok([])       no Range header worth honouring: send the whole thing (200) ok(ranges)   send 206 with these err(...)     every range unsatisfiable: send 416 with Content-Range: bytes */size A malformed header is treated as absent (ok([])), as RFC 9110 lets a server ignore it. More than 16 ranges are refused as absent too: many small overlapping ranges are a known amplification trick.
+
+### `fn content_range(r: ByteRange, size: int) -> str`
+
+The Content-Range value for one range of a size-byte resource: "bytes 0-499/1234".
+
 ---
 
 slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
