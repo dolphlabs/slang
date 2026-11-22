@@ -44,9 +44,9 @@ standalone repo under `slangpackages/`.
 - [x] **Cancellation contexts** (stdlib): a deadline and cancel signal that
   flows from a request through `httpc`, `pg`, `redis` and the other
   clients, so one timeout stops everything under it. PR #603 (open).
-- [ ] **Generic connection pool** (stdlib): health checks, max idle/open,
+- [x] **Generic connection pool** (stdlib): health checks, max idle/open,
   idle and lifetime limits, fair FIFO waiting, wait-time metrics. The
-  speed audit found Slang's pool-acquisition p99 above Go's on every route.
+  speed audit found Slang's pool-acquisition p99 above Go's on every route. PR #604 (open).
 - [ ] **Failure handling** (stdlib): circuit breaker, bulkhead, retry with a
   retry budget (over `rand.backoff`), token-bucket and GCRA rate limiters,
   and request hedging.
