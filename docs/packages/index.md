@@ -2615,6 +2615,35 @@ that case.
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
 
+#### `smtp`
+
+Sending mail: an SMTP client (RFC 5321) with STARTTLS or implicit TLS and
+AUTH PLAIN, and a MIME builder for text, HTML and attachments.
+
+```slang
+import "proc";
+import "smtp";
+
+let cfg = smtp.config("smtp.example.com", 587);      // STARTTLS on 587
+cfg.username = "app@example.com";
+cfg.password = proc.getenv("SMTP_PASSWORD") ?? "";
+let m = smtp.message("App <app@example.com>", ["ada@example.com"], "Welcome");
+m.text = "Hello Ada";
+m.html = "<p>Hello <b>Ada</b></p>";
+let r = smtp.send(cfg, m, deadline);
+```
+
+- `config(host, port)` uses STARTTLS, or implicit TLS on port 465. A
+  server that does not offer STARTTLS is refused before any password is
+  sent; `security: "none"` is for a local relay only.
+- A `Message` has `from`, `to`, `cc`, `bcc` (sent to, never shown),
+  `reply_to`, `subject`, `text`, `html`, `attachments` and extra
+  `headers`. Text and HTML go in `multipart/alternative`, and
+  attachments make it `multipart/mixed`. Parts are base64 in 76-column
+  lines, and non-ASCII names and subjects use RFC 2047 encoded words.
+- `build(m)` gives the message bytes, and `send_raw` sends prepared
+  ones. Lines starting with `.` are dot-stuffed. A CR or LF in a header
+  value is replaced, so a subject cannot add headers.
 #### `trace`
 
 Distributed tracing: spans with W3C trace context propagation
@@ -4447,6 +4476,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
 - [s3](packages/s3.md) -- source package, 23 public items
 - [sigv4](packages/sigv4.md) -- source package, 14 public items
+- [smtp](packages/smtp.md) -- source package, 9 public items
 - [sort](packages/sort.md) -- source package, 9 public items
 - [sql](packages/sql.md) -- compiler-provided, 20 public items
 - [strings](packages/strings.md) -- compiler-provided, 28 public items
