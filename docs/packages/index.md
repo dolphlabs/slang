@@ -255,6 +255,37 @@ that is still running; remove a stale one with `os.remove` first. A path
 longer than the platform allows (104 bytes on macOS, 108 on Linux) is an
 error, not truncated.
 
+##### Listener and socket options
+
+`net.listen_with(host, port, opts)` is `net.listen` with a bind address
+and options. `host` is an IP literal, IPv4 or IPv6, or `""` for any
+IPv4 address. `opts` is a list of words separated by spaces or commas;
+an unknown word is an error, not ignored:
+
+| Option | Effect |
+|---|---|
+| `reuseport` | `SO_REUSEPORT`: several listeners on one port, the kernel spreading connections between them (one per core) |
+| `v6only` | an IPv6 listener that refuses IPv4-mapped connections; without it, `"::"` takes both on every system |
+| `backlog=N` | the accept queue length (default 1024; the kernel may cap it) |
+| `fastopen=N` | TCP Fast Open with a queue of N, where the kernel allows it |
+
+```slang
+let lr = net.listen_with("0.0.0.0", 8080, "reuseport backlog=4096");
+```
+
+`net.set_opt(fd, name, value)` and `net.get_opt(fd, name)` set and read
+options on any socket by name. Booleans are 0 or 1, and times are in
+seconds:
+
+| Name | Option |
+|---|---|
+| `nodelay` | `TCP_NODELAY`: send small writes now, without Nagle's delay |
+| `keepalive`, `keepidle`, `keepintvl`, `keepcnt` | TCP keepalive on/off, idle time before probes, interval between them, probes before giving up |
+| `quickack` | `TCP_QUICKACK` (Linux only; elsewhere the error `"option not supported on this system"`) |
+| `rcvbuf`, `sndbuf` | kernel buffer sizes (Linux reads back double what was set) |
+| `linger` | seconds `close` waits to flush unsent data; `-1` off (the default), `0` resets the connection |
+| `broadcast` | `SO_BROADCAST`, for UDP |
+| `ttl`, `multicast_ttl`, `multicast_loop` | IPv4 or IPv6 by the socket's family |
 ##### UDP
 
 Datagram sockets use the same fds, reactor and deadlines as TCP. A peer
@@ -4218,7 +4249,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [math/vec](packages/math/vec.md) -- compiler-provided, 23 public items
 - [mysql](packages/mysql.md) -- source package, 49 public items
 - [nats](packages/nats.md) -- source package, 31 public items
-- [net](packages/net.md) -- compiler-provided, 46 public items
+- [net](packages/net.md) -- compiler-provided, 49 public items
 - [os](packages/os.md) -- compiler-provided, 18 public items
 - [pg](packages/pg.md) -- source package, 58 public items
 - [proc](packages/proc.md) -- compiler-provided, 9 public items

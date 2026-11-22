@@ -9724,6 +9724,38 @@
           "sig": "net.nonblock(int) -> result[bool,str]"
         },
         {
+          "name": "listen_with",
+          "params": [
+            "str",
+            "int",
+            "str"
+          ],
+          "ret": "result[i32,str]",
+          "tls": false,
+          "sig": "net.listen_with(str, int, str) -> result[i32,str]"
+        },
+        {
+          "name": "set_opt",
+          "params": [
+            "int",
+            "str",
+            "int"
+          ],
+          "ret": "result[bool,str]",
+          "tls": false,
+          "sig": "net.set_opt(int, str, int) -> result[bool,str]"
+        },
+        {
+          "name": "get_opt",
+          "params": [
+            "int",
+            "str"
+          ],
+          "ret": "result[int,str]",
+          "tls": false,
+          "sig": "net.get_opt(int, str) -> result[int,str]"
+        },
+        {
           "name": "udp_bind",
           "params": [
             "str",
