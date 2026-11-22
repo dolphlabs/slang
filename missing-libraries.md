@@ -77,8 +77,8 @@ standalone repo under `slangpackages/`.
   included, with size limits.
 - [x] **Protobuf codec** (stdlib or package): wire-format encode and decode
   outside gRPC. PR #605 (open).
-- [ ] **HTTP extras** (stdlib, `http`): Server-Sent Events, streaming
-  multipart/form-data uploads, and range requests.
+- [x] **HTTP extras** (stdlib, `http`): Server-Sent Events, streaming
+  multipart/form-data uploads, and range requests. PR #610 (open).
 - [ ] **gRPC streaming** (package `slangpackages/grpc`): server, client and
   bidirectional streams; the package is unary only.
   Status: in progress on feat/grpc-streaming in the grpc repo; left alone here.
