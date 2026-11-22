@@ -1,5 +1,10 @@
 # todo
 
+- [x] **`smtp` (2026-11-22, feat/smtp).** An SMTP client with STARTTLS
+  (refusing a server without it before any password is sent), implicit
+  TLS and AUTH PLAIN, and a MIME builder. The test caught AUTH PLAIN
+  built as a str: a str stops at its first NUL, so the credential was
+  cut short; it is built as bytes.
 - [x] **`trace` (2026-11-22, feat/trace).** Spans with W3C traceparent
   parsing and formatting, head sampling, and batched export to an
   OpenTelemetry collector over OTLP/HTTP with JSON bodies (protobuf
