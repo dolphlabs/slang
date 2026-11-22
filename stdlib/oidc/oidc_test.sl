@@ -244,3 +244,14 @@ fn test_should_refetch_keys_when_the_provider_rotates() {
     if let _x = verify_id_token(o, jwt(k2, "RS256", "nope", claims(f.issuer, aud, "n", 300)), "n", soon()) { panic("unknown kid"); }
     assert(f.jwks_fetches == 2, "refetched within the minute");
 }
+
+fn test_should_refuse_a_nul_in_a_json_string() {
+    // A str ends at its first NUL: "https://good.example\u0000.evil" must
+    // not read as "https://good.example".
+    if let _v = jparse(to_bytes("{\"iss\":\"https://good.example\\u0000.evil\"}")) {
+        assert(false, "a NUL in a JSON string was accepted");
+    }
+    let ok1 = jparse(to_bytes("{\"iss\":\"a\\u0041\"}"));
+    guard let v = ok1 else let e = err_of(ok1) { panic(e); }
+    assert(jstr(v, "iss") == "aA");
+}

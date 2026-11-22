@@ -221,3 +221,14 @@ fn test_should_refuse_unsafe_tokens() {
     assert(!token_ok("short"), "short token");
     assert(token_ok("tok_0123456789abcdefABCDEF-_"), "valid token");
 }
+
+fn test_should_refuse_a_nul_in_a_json_string() {
+    // A str ends at its first NUL: "https://good.example\u0000.evil" must
+    // not read as "https://good.example".
+    if let _v = jparse(to_bytes("{\"iss\":\"https://good.example\\u0000.evil\"}")) {
+        assert(false, "a NUL in a JSON string was accepted");
+    }
+    let ok1 = jparse(to_bytes("{\"iss\":\"a\\u0041\"}"));
+    guard let v = ok1 else let e = err_of(ok1) { panic(e); }
+    assert(jstr(v, "iss") == "aA");
+}
