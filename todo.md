@@ -1,5 +1,10 @@
 # todo
 
+- [x] **`proxyproto` (2026-11-22, feat/proxyproto).** PROXY protocol v1
+  and v2: `parse` (with `none` for a partial header), `read_until` over a
+  socket keeping the bytes after the header, and `encode_v1`/`encode_v2`.
+  v2 TLVs, LOCAL health checks, unix addresses and RFC 5952 IPv6 text.
+
 - [x] **A leaf function could hold a safepoint (found 2026-11-21 when
   math/big's tests crashed after merging dev; fixed in
   fix/leaf-body-no-safepoint).** Callers skip their bracket around a call
