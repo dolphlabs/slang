@@ -245,6 +245,7 @@ PACKAGE_SECTIONS = {
     "protobuf": ["`protobuf`"],
     "pool": ["`pool`"],
     "context": ["`context`"],
+    "dns": ["`dns`"],
     "pg": ["`pg`"],
     "mysql": ["`mysql`"],
     "redis": ["`redis`"],

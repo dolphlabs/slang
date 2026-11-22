@@ -4470,6 +4470,56 @@ pool.release(p, lease);        // pool.discard(p, lease) if it broke
   and longest wait, and timeouts.
 - `close(p)` closes idle connections and fails waiters; leased ones close
   as they come back. Releasing a lease twice panics.
+#### `dns`
+
+A DNS client over the wire: A, AAAA, CNAME, MX, TXT, SRV, NS and PTR
+lookups, with `/etc/resolv.conf`, `/etc/hosts`, search domains, a TTL
+cache and a deadline on every call.
+
+```slang
+import "dns";
+
+let r = dns.system_resolver();                     // resolv.conf + hosts, read once
+let ips = dns.lookup_ip(r, "api.example.com", deadline);   // IPv4 first, then IPv6
+let mx = dns.lookup_mx(r, "example.com", deadline);        // by preference
+let srv = dns.lookup_srv(r, "_imap._tcp.example.com", deadline);
+guard let found = ips else let e = err_of(ips) {
+    if e == "no such host" { /* NXDOMAIN, after every search domain */ }
+    return;
+}
+```
+
+A lookup parks its task on the reactor and holds no thread, unlike
+`net.dial`'s `getaddrinfo`, which runs on a resolver thread. A and AAAA
+go out at once. Each try gets the configured per-try timeout or what is
+left of the caller's deadline, whichever is sooner, so a silent server
+costs one try and the next server answers.
+
+- **Transport.** UDP with EDNS0 (1232-byte answers), and TCP when an answer
+  comes back truncated.
+- **Spoofing.** Each query has a random id and a fresh socket, so a random
+  source port. A reply counts only if it comes from the server asked and
+  carries the id and question that were sent; anything else is ignored.
+- **Failures.** SERVFAIL, REFUSED and errors move on to the next server;
+  `options rotate` spreads queries over them.
+- **Cache.** Answers are kept for their TTL, at most `max_ttl` (an hour).
+  NXDOMAIN and empty answers are kept for the zone's negative TTL (the
+  SOA's, RFC 2308), and not at all without one. The cache holds at most
+  `max_entries` (10,000).
+- **Names.** Search domains and `ndots` work as in glibc. CNAME chains are
+  followed, inside an answer or with a new query, up to 8 hops.
+  `localhost` is the loopback addresses (RFC 6761), and an IP literal is
+  itself.
+
+`dns.exchange(server, name, type, deadline)` sends one query, and
+`dns.encode` / `dns.decode` build and read messages, for a server or a
+test's fake one. `parse_ip`, `format_ip` (RFC 5952) and `reverse_name`
+handle addresses.
+
+**Not done, deliberately:** no DNSSEC validation, no DNS over TLS or
+HTTPS, no single-flight for identical lookups in flight, and `net.dial`
+still resolves with `getaddrinfo`.
+
 #### `context`
 
 Cancellation and deadlines that flow from a request through everything
