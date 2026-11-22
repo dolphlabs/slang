@@ -54,6 +54,7 @@ Start with /llms-small.txt: the whole language on one page, about 3k tokens, eno
 - [pool](packages/pool.md): Package pool.
 - [proc](packages/proc.md): Package proc.
 - [protobuf](packages/protobuf.md): Package protobuf.
+- [proxyproto](packages/proxyproto.md): Package proxyproto.
 - [rand](packages/rand.md): Package rand.
 - [redis](packages/redis.md): Package redis.
 - [regex](packages/regex.md): Package regex.
