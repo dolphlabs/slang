@@ -1,5 +1,10 @@
 # todo
 
+- [x] **`otp` (2026-11-22, feat/otp).** HOTP and TOTP over SHA-1/256/512
+  with replay-safe verification (the matched step is returned), base32
+  secrets and otpauth URIs. HMAC-SHA1 is built on `crypto.sha1` in slang,
+  as `crypto` has none. Checked against RFC 4226 and RFC 6238 vectors.
+
 - [x] **A leaf function could hold a safepoint (found 2026-11-21 when
   math/big's tests crashed after merging dev; fixed in
   fix/leaf-body-no-safepoint).** Callers skip their bracket around a call
