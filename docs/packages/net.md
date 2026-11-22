@@ -306,6 +306,8 @@ the session, one OpenSSL call at a time. A link splits once.
 
 ### `net.nonblock(int) -> result[bool,str]`
 
+### `net.inherited() -> [i32]`
+
 ### `net.tls_server_ctx(str, str) -> result[rawptr,str]`
 
 ### `net.tls_client_ctx(str) -> result[rawptr,str]`
