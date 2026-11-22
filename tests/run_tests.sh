@@ -1316,6 +1316,19 @@ else
     fail=1
 fi
 
+# Lists of numbers the runtime builds are pointer-free: a flag of 0
+# ("unknown") or anything but SL_ELEM_NOPTR makes every major collection
+# offer each element to mark as a candidate pointer (unicode.runes,
+# fs.fstat, regex matches, the json tape all did).
+noptr_bad=$(grep -nE 'sl_arr_new\(sizeof\((long long|int64_t|double|int32_t|uint32_t|float|int)\), [^S]' runtime/*.c)
+if [ -z "$noptr_bad" ]; then
+    echo "PASS runtime number lists are pointer-free"
+else
+    echo "FAIL runtime number lists not marked SL_ELEM_NOPTR:"
+    printf '%s\n' "$noptr_bad" | sed 's/^/  /'
+    fail=1
+fi
+
 lnc_c="/tmp/sl_leaf_native_calls"
 if ./slangc tests/leaf_native_calls/main.sl --keep-c -o "$lnc_c" >/dev/null 2>&1; then
     lnc_leaf=$(grep -oE 'sl_rt_safepoint_enter_s\(SL_SELF\(\), [^)]*\); [^;]*sl_strings_(has_prefix|has_suffix|contains|count|find|rfind|find_field|hash)\(' "$lnc_c.gen.c" | wc -l | tr -d ' ')

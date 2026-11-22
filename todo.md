@@ -1,5 +1,14 @@
 # todo
 
+- [x] **Number lists the runtime built were scanned as pointers (found
+  2026-11-22 while writing listener handoff; fixed in fix/fs-fstat-noptr).**
+  `fs.fstat` passed 4 as the element flag and the regex match lists and
+  `encoding.json_tape` passed 0 ("unknown"): every major collection
+  offered each int to mark as a candidate pointer, and an int equal to a
+  heap address kept that object alive. All are `SL_ELEM_NOPTR` now, and
+  run_tests.sh refuses any runtime number list without it (the class of
+  the unicode.runes fix). A typed json.decode benchmark showed no
+  difference (it does not use the tape).
 - [x] **`oidc` (2026-11-22, feat/oidc).** OAuth 2.0 / OpenID Connect
   client: discovery with issuer and HTTPS checks, PKCE (S256),
   authorization URLs, code exchange, refresh, client credentials, and
