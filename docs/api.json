@@ -344,6 +344,556 @@
         }
       ]
     },
+    "cbor": {
+      "name": "cbor",
+      "kind": "source",
+      "items": [
+        {
+          "name": "MAX_DEPTH",
+          "decl": "let",
+          "sig": "let MAX_DEPTH = 512;",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 23
+        },
+        {
+          "name": "M_UINT",
+          "decl": "let",
+          "sig": "let M_UINT = 0;",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 25
+        },
+        {
+          "name": "M_NEG",
+          "decl": "let",
+          "sig": "let M_NEG = 1;",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 26
+        },
+        {
+          "name": "M_BYTES",
+          "decl": "let",
+          "sig": "let M_BYTES = 2;",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 27
+        },
+        {
+          "name": "M_TEXT",
+          "decl": "let",
+          "sig": "let M_TEXT = 3;",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 28
+        },
+        {
+          "name": "M_ARRAY",
+          "decl": "let",
+          "sig": "let M_ARRAY = 4;",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 29
+        },
+        {
+          "name": "M_MAP",
+          "decl": "let",
+          "sig": "let M_MAP = 5;",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 30
+        },
+        {
+          "name": "M_TAG",
+          "decl": "let",
+          "sig": "let M_TAG = 6;",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 31
+        },
+        {
+          "name": "M_SIMPLE",
+          "decl": "let",
+          "sig": "let M_SIMPLE = 7; // false, true, null, undefined, floats, break",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 32
+        },
+        {
+          "name": "Writer",
+          "decl": "struct",
+          "sig": "gc struct Writer",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 36
+        },
+        {
+          "name": "writer",
+          "decl": "fn",
+          "sig": "fn writer() -> Writer",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 40
+        },
+        {
+          "name": "finish",
+          "decl": "fn",
+          "sig": "fn finish(w: Writer) -> bytes",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 44
+        },
+        {
+          "name": "write_uint",
+          "decl": "fn",
+          "sig": "fn write_uint(w: Writer, v: u64)",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 76
+        },
+        {
+          "name": "write_int",
+          "decl": "fn",
+          "sig": "fn write_int(w: Writer, v: int)",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 78
+        },
+        {
+          "name": "write_bytes",
+          "decl": "fn",
+          "sig": "fn write_bytes(w: Writer, b: bytes)",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 87
+        },
+        {
+          "name": "write_text",
+          "decl": "fn",
+          "sig": "fn write_text(w: Writer, s: str)",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 92
+        },
+        {
+          "name": "write_array",
+          "decl": "fn",
+          "sig": "fn write_array(w: Writer, n: int)",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 98
+        },
+        {
+          "name": "write_map",
+          "decl": "fn",
+          "sig": "fn write_map(w: Writer, n: int)",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 99
+        },
+        {
+          "name": "write_tag",
+          "decl": "fn",
+          "sig": "fn write_tag(w: Writer, tag: u64)",
+          "doc": "A tag on the next item (1: epoch time, 2/3: bignums, 32: URI, ...).",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 102
+        },
+        {
+          "name": "write_bool",
+          "decl": "fn",
+          "sig": "fn write_bool(w: Writer, v: bool)",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 104
+        },
+        {
+          "name": "write_null",
+          "decl": "fn",
+          "sig": "fn write_null(w: Writer)",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 108
+        },
+        {
+          "name": "write_undefined",
+          "decl": "fn",
+          "sig": "fn write_undefined(w: Writer)",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 109
+        },
+        {
+          "name": "write_float",
+          "decl": "fn",
+          "sig": "fn write_float(w: Writer, v: float)",
+          "doc": "The smallest of half, single and double precision that holds v exactly.",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 112
+        },
+        {
+          "name": "Reader",
+          "decl": "struct",
+          "sig": "gc struct Reader",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 172
+        },
+        {
+          "name": "reader",
+          "decl": "fn",
+          "sig": "fn reader(b: bytes) -> Reader",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 177
+        },
+        {
+          "name": "remaining",
+          "decl": "fn",
+          "sig": "fn remaining(r: Reader) -> int",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 181
+        },
+        {
+          "name": "peek_major",
+          "decl": "fn",
+          "sig": "fn peek_major(r: Reader) -> int",
+          "doc": "The major type of the next item, -1 at the end of the input.",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 184
+        },
+        {
+          "name": "at_break",
+          "decl": "fn",
+          "sig": "fn at_break(r: Reader) -> bool",
+          "doc": "Whether the next byte is the break that ends an indefinite-length item.",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 190
+        },
+        {
+          "name": "read_break",
+          "decl": "fn",
+          "sig": "fn read_break(r: Reader) -> result[bool, str]",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 194
+        },
+        {
+          "name": "read_uint",
+          "decl": "fn",
+          "sig": "fn read_uint(r: Reader) -> result[u64, str]",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 234
+        },
+        {
+          "name": "read_int",
+          "decl": "fn",
+          "sig": "fn read_int(r: Reader) -> result[int, str]",
+          "doc": "An unsigned or negative integer that fits int.",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 241
+        },
+        {
+          "name": "read_bytes",
+          "decl": "fn",
+          "sig": "fn read_bytes(r: Reader) -> result[bytes, str]",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 255
+        },
+        {
+          "name": "read_text",
+          "decl": "fn",
+          "sig": "fn read_text(r: Reader) -> result[str, str]",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 259
+        },
+        {
+          "name": "read_array",
+          "decl": "fn",
+          "sig": "fn read_array(r: Reader) -> result[int, str]",
+          "doc": "An array header: its count, or -1 for an indefinite array (read items until at_break, then read_break).",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 294
+        },
+        {
+          "name": "read_map",
+          "decl": "fn",
+          "sig": "fn read_map(r: Reader) -> result[int, str]",
+          "doc": "A map header: its pair count, or -1 for an indefinite map.",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 299
+        },
+        {
+          "name": "read_tag",
+          "decl": "fn",
+          "sig": "fn read_tag(r: Reader) -> result[u64, str]",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 314
+        },
+        {
+          "name": "read_bool",
+          "decl": "fn",
+          "sig": "fn read_bool(r: Reader) -> result[bool, str]",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 320
+        },
+        {
+          "name": "read_null",
+          "decl": "fn",
+          "sig": "fn read_null(r: Reader) -> result[bool, str]",
+          "doc": "null or undefined.",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 329
+        },
+        {
+          "name": "read_float",
+          "decl": "fn",
+          "sig": "fn read_float(r: Reader) -> result[float, str]",
+          "doc": "A half, single or double float; an integer is read as its float too.",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 338
+        },
+        {
+          "name": "skip",
+          "decl": "fn",
+          "sig": "fn skip(r: Reader) -> result[bool, str]",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 357
+        },
+        {
+          "name": "K_UINT",
+          "decl": "let",
+          "sig": "let K_UINT = 0;",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 396
+        },
+        {
+          "name": "K_NEG",
+          "decl": "let",
+          "sig": "let K_NEG = 1; // n is -1 - u (beyond int's range: read u)",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 397
+        },
+        {
+          "name": "K_BYTES",
+          "decl": "let",
+          "sig": "let K_BYTES = 2;",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 398
+        },
+        {
+          "name": "K_TEXT",
+          "decl": "let",
+          "sig": "let K_TEXT = 3;",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 399
+        },
+        {
+          "name": "K_ARRAY",
+          "decl": "let",
+          "sig": "let K_ARRAY = 4;",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 400
+        },
+        {
+          "name": "K_MAP",
+          "decl": "let",
+          "sig": "let K_MAP = 5;",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 401
+        },
+        {
+          "name": "K_TAG",
+          "decl": "let",
+          "sig": "let K_TAG = 6; // tag, with the tagged item as items[0]",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 402
+        },
+        {
+          "name": "K_BOOL",
+          "decl": "let",
+          "sig": "let K_BOOL = 7;",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 403
+        },
+        {
+          "name": "K_NULL",
+          "decl": "let",
+          "sig": "let K_NULL = 8;",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 404
+        },
+        {
+          "name": "K_UNDEFINED",
+          "decl": "let",
+          "sig": "let K_UNDEFINED = 9;",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 405
+        },
+        {
+          "name": "K_FLOAT",
+          "decl": "let",
+          "sig": "let K_FLOAT = 10;",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 406
+        },
+        {
+          "name": "K_SIMPLE",
+          "decl": "let",
+          "sig": "let K_SIMPLE = 11; // another simple value, in u",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 407
+        },
+        {
+          "name": "Value",
+          "decl": "struct",
+          "sig": "gc struct Value",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 409
+        },
+        {
+          "name": "int_value",
+          "decl": "fn",
+          "sig": "fn int_value(v: int) -> Value",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 421
+        },
+        {
+          "name": "text_value",
+          "decl": "fn",
+          "sig": "fn text_value(s: str) -> Value",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 427
+        },
+        {
+          "name": "bytes_value",
+          "decl": "fn",
+          "sig": "fn bytes_value(b: bytes) -> Value",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 428
+        },
+        {
+          "name": "float_value",
+          "decl": "fn",
+          "sig": "fn float_value(f: float) -> Value",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 429
+        },
+        {
+          "name": "bool_value",
+          "decl": "fn",
+          "sig": "fn bool_value(b: bool) -> Value",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 430
+        },
+        {
+          "name": "null_value",
+          "decl": "fn",
+          "sig": "fn null_value() -> Value",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 431
+        },
+        {
+          "name": "array_value",
+          "decl": "fn",
+          "sig": "fn array_value(items: [Value]) -> Value",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 432
+        },
+        {
+          "name": "map_value",
+          "decl": "fn",
+          "sig": "fn map_value(keys: [Value], vals: [Value]) -> Value",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 433
+        },
+        {
+          "name": "tag_value",
+          "decl": "fn",
+          "sig": "fn tag_value(tag: u64, item: Value) -> Value",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 439
+        },
+        {
+          "name": "as_int",
+          "decl": "fn",
+          "sig": "fn as_int(v: Value) -> opt[int]",
+          "doc": "An integer value as int, if it fits.",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 447
+        },
+        {
+          "name": "get",
+          "decl": "fn",
+          "sig": "fn get(v: Value, key: str) -> opt[Value]",
+          "doc": "The value of a map entry whose key is the text key.",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 456
+        },
+        {
+          "name": "decode",
+          "decl": "fn",
+          "sig": "fn decode(b: bytes) -> result[Value, str]",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 464
+        },
+        {
+          "name": "read_value",
+          "decl": "fn",
+          "sig": "fn read_value(r: Reader, depth: int) -> result[Value, str]",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 472
+        },
+        {
+          "name": "encode",
+          "decl": "fn",
+          "sig": "fn encode(v: Value) -> bytes",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 557
+        },
+        {
+          "name": "write_value",
+          "decl": "fn",
+          "sig": "fn write_value(w: Writer, v: Value)",
+          "doc": "",
+          "file": "stdlib/cbor/cbor.sl",
+          "line": 563
+        }
+      ]
+    },
     "compress": {
       "name": "compress",
       "kind": "native",
@@ -442,6 +992,338 @@
           "ret": "result[bytes,str]",
           "tls": false,
           "sig": "compress.inflate_raw(bytes, int) -> result[bytes,str]"
+        }
+      ]
+    },
+    "context": {
+      "name": "context",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Context",
+          "decl": "struct",
+          "sig": "gc struct Context",
+          "doc": "",
+          "file": "stdlib/context/context.sl",
+          "line": 31
+        },
+        {
+          "name": "background",
+          "decl": "fn",
+          "sig": "fn background() -> Context",
+          "doc": "The root: no deadline, never cancelled unless cancel is called on it.",
+          "file": "stdlib/context/context.sl",
+          "line": 43
+        },
+        {
+          "name": "with_cancel",
+          "decl": "fn",
+          "sig": "fn with_cancel(parent: Context) -> Context",
+          "doc": "A child of parent that can be cancelled on its own.",
+          "file": "stdlib/context/context.sl",
+          "line": 51
+        },
+        {
+          "name": "with_timeout",
+          "decl": "fn",
+          "sig": "fn with_timeout(parent: Context, ns: int) -> Context",
+          "doc": "A child of parent that ends ns nanoseconds from now (or at the parent's deadline, if that is sooner). ns <= 0 is already past.",
+          "file": "stdlib/context/context.sl",
+          "line": 57
+        },
+        {
+          "name": "with_deadline_at",
+          "decl": "fn",
+          "sig": "fn with_deadline_at(parent: Context, mono_ns: int) -> Context",
+          "doc": "A child of parent that ends at mono_ns, an absolute time.mono() value.",
+          "file": "stdlib/context/context.sl",
+          "line": 66
+        },
+        {
+          "name": "cancel",
+          "decl": "fn",
+          "sig": "fn cancel(c: Context, reason: str)",
+          "doc": "Cancels c and every context made from it, with reason as cause's text. The first cancel wins; later ones do nothing.",
+          "file": "stdlib/context/context.sl",
+          "line": 72
+        },
+        {
+          "name": "release",
+          "decl": "fn",
+          "sig": "fn release(c: Context)",
+          "doc": "Cancel with the reason \"released\": for a context whose work finished.",
+          "file": "stdlib/context/context.sl",
+          "line": 105
+        },
+        {
+          "name": "is_done",
+          "decl": "fn",
+          "sig": "fn is_done(c: Context) -> bool",
+          "doc": "Whether c was cancelled or its deadline has passed.",
+          "file": "stdlib/context/context.sl",
+          "line": 110
+        },
+        {
+          "name": "cause",
+          "decl": "fn",
+          "sig": "fn cause(c: Context) -> opt[str]",
+          "doc": "Why c is done: the cancel reason, or \"deadline exceeded\"; none while it is live.",
+          "file": "stdlib/context/context.sl",
+          "line": 119
+        },
+        {
+          "name": "deadline",
+          "decl": "fn",
+          "sig": "fn deadline(c: Context) -> until",
+          "doc": "c's deadline as an `until` for any API that waits: never for a context without one, already passed for a cancelled one.",
+          "file": "stdlib/context/context.sl",
+          "line": 136
+        },
+        {
+          "name": "remaining",
+          "decl": "fn",
+          "sig": "fn remaining(c: Context) -> int",
+          "doc": "Nanoseconds until c's deadline (0 once passed or cancelled), or -1 for a context without one: for a timeout another protocol carries, such as a database statement timeout.",
+          "file": "stdlib/context/context.sl",
+          "line": 153
+        },
+        {
+          "name": "watch_fd",
+          "decl": "fn",
+          "sig": "fn watch_fd(c: Context, fd: i32)",
+          "doc": "Closes fd when c is cancelled, waking any task parked on it with \"closed\". If c is already cancelled, closes it now. Call unwatch_fd before closing fd yourself, so a later cancel cannot close a reused fd number.",
+          "file": "stdlib/context/context.sl",
+          "line": 175
+        },
+        {
+          "name": "unwatch_fd",
+          "decl": "fn",
+          "sig": "fn unwatch_fd(c: Context, fd: i32) -> bool",
+          "doc": "Stops watching fd. Returns false if c had already been cancelled (and fd closed by it).",
+          "file": "stdlib/context/context.sl",
+          "line": 188
+        },
+        {
+          "name": "done_chan",
+          "decl": "fn",
+          "sig": "fn done_chan(c: Context) -> chan[bool]",
+          "doc": "A channel that is closed when c is cancelled, for a `select` that should also end on cancellation. Nothing is ever sent on it.",
+          "file": "stdlib/context/context.sl",
+          "line": 207
+        }
+      ]
+    },
+    "crdt": {
+      "name": "crdt",
+      "kind": "source",
+      "items": [
+        {
+          "name": "GCounter",
+          "decl": "struct",
+          "sig": "gc struct GCounter",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 25
+        },
+        {
+          "name": "gcounter",
+          "decl": "fn",
+          "sig": "fn gcounter() -> GCounter",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 29
+        },
+        {
+          "name": "gc_inc",
+          "decl": "fn",
+          "sig": "fn gc_inc(c: GCounter, node: str, n: int)",
+          "doc": "Adds n (n >= 0) to node's count.",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 35
+        },
+        {
+          "name": "gc_value",
+          "decl": "fn",
+          "sig": "fn gc_value(c: GCounter) -> int",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 42
+        },
+        {
+          "name": "gc_merge",
+          "decl": "fn",
+          "sig": "fn gc_merge(c: GCounter, other: GCounter)",
+          "doc": "c takes in everything other has seen.",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 49
+        },
+        {
+          "name": "PNCounter",
+          "decl": "struct",
+          "sig": "gc struct PNCounter",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 57
+        },
+        {
+          "name": "pncounter",
+          "decl": "fn",
+          "sig": "fn pncounter() -> PNCounter",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 62
+        },
+        {
+          "name": "pn_add",
+          "decl": "fn",
+          "sig": "fn pn_add(c: PNCounter, node: str, delta: int)",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 66
+        },
+        {
+          "name": "pn_value",
+          "decl": "fn",
+          "sig": "fn pn_value(c: PNCounter) -> int",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 70
+        },
+        {
+          "name": "pn_merge",
+          "decl": "fn",
+          "sig": "fn pn_merge(c: PNCounter, other: PNCounter)",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 74
+        },
+        {
+          "name": "ORSet",
+          "decl": "struct",
+          "sig": "gc struct ORSet",
+          "doc": "Each element carries the dots (\"node:n\") of the adds that are still live; clock holds the highest n seen from each node. A dot the clock has seen but the element lacks was removed.",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 84
+        },
+        {
+          "name": "orset",
+          "decl": "fn",
+          "sig": "fn orset() -> ORSet",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 89
+        },
+        {
+          "name": "set_add",
+          "decl": "fn",
+          "sig": "fn set_add(s: ORSet, node: str, elem: str)",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 95
+        },
+        {
+          "name": "set_remove",
+          "decl": "fn",
+          "sig": "fn set_remove(s: ORSet, elem: str)",
+          "doc": "Removes elem as this replica sees it; an add elsewhere that this replica has not seen survives the merge (add wins).",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 106
+        },
+        {
+          "name": "set_has",
+          "decl": "fn",
+          "sig": "fn set_has(s: ORSet, elem: str) -> bool",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 110
+        },
+        {
+          "name": "set_items",
+          "decl": "fn",
+          "sig": "fn set_items(s: ORSet) -> [str]",
+          "doc": "The elements, sorted.",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 115
+        },
+        {
+          "name": "set_merge",
+          "decl": "fn",
+          "sig": "fn set_merge(s: ORSet, other: ORSet)",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 122
+        },
+        {
+          "name": "Entry",
+          "decl": "struct",
+          "sig": "struct Entry",
+          "doc": "A value with the time it was written and by whom. A delete is a tombstone, so a merge cannot bring the value back.",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 164
+        },
+        {
+          "name": "LWWMap",
+          "decl": "struct",
+          "sig": "gc struct LWWMap",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 171
+        },
+        {
+          "name": "lwwmap",
+          "decl": "fn",
+          "sig": "fn lwwmap() -> LWWMap",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 175
+        },
+        {
+          "name": "map_set",
+          "decl": "fn",
+          "sig": "fn map_set(m: LWWMap, node: str, key: str, value: str, ts: int)",
+          "doc": "Sets key at time ts (any clock that only moves forward on each node, such as time.wall()); ties go to the larger node id, so every replica picks the same winner.",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 183
+        },
+        {
+          "name": "map_delete",
+          "decl": "fn",
+          "sig": "fn map_delete(m: LWWMap, node: str, key: str, ts: int)",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 187
+        },
+        {
+          "name": "map_get",
+          "decl": "fn",
+          "sig": "fn map_get(m: LWWMap, key: str) -> opt[str]",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 191
+        },
+        {
+          "name": "map_keys",
+          "decl": "fn",
+          "sig": "fn map_keys(m: LWWMap) -> [str]",
+          "doc": "The live keys, sorted.",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 199
+        },
+        {
+          "name": "map_merge",
+          "decl": "fn",
+          "sig": "fn map_merge(m: LWWMap, other: LWWMap)",
+          "doc": "",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 208
+        },
+        {
+          "name": "map_compact",
+          "decl": "fn",
+          "sig": "fn map_compact(m: LWWMap, before_ts: int)",
+          "doc": "Drops tombstones older than before_ts, once every replica has merged past it (a caller's knowledge: merging an older replica afterwards could bring a deleted value back).",
+          "file": "stdlib/crdt/crdt.sl",
+          "line": 215
         }
       ]
     },
@@ -1678,6 +2560,84 @@
         }
       ]
     },
+    "envelope": {
+      "name": "envelope",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Keyring",
+          "decl": "struct",
+          "sig": "gc struct Keyring",
+          "doc": "",
+          "file": "stdlib/envelope/envelope.sl",
+          "line": 25
+        },
+        {
+          "name": "keyring",
+          "decl": "fn",
+          "sig": "fn keyring() -> Keyring",
+          "doc": "",
+          "file": "stdlib/envelope/envelope.sl",
+          "line": 31
+        },
+        {
+          "name": "add_key",
+          "decl": "fn",
+          "sig": "fn add_key(kr: Keyring, id: str, key: bytes) -> result[bool, str]",
+          "doc": "Adds a 32-byte key-encryption key under id (1 to 255 bytes) and makes it the one new values are sealed with.",
+          "file": "stdlib/envelope/envelope.sl",
+          "line": 38
+        },
+        {
+          "name": "use_key",
+          "decl": "fn",
+          "sig": "fn use_key(kr: Keyring, id: str) -> result[bool, str]",
+          "doc": "Makes an already added key the one new values are sealed with.",
+          "file": "stdlib/envelope/envelope.sl",
+          "line": 50
+        },
+        {
+          "name": "remove_key",
+          "decl": "fn",
+          "sig": "fn remove_key(kr: Keyring, id: str) -> result[bool, str]",
+          "doc": "Forgets a key: values sealed with it no longer open. Refused for the current key.",
+          "file": "stdlib/envelope/envelope.sl",
+          "line": 63
+        },
+        {
+          "name": "seal",
+          "decl": "fn",
+          "sig": "fn seal(kr: Keyring, plaintext: bytes, aad: bytes) -> result[bytes, str]",
+          "doc": "",
+          "file": "stdlib/envelope/envelope.sl",
+          "line": 74
+        },
+        {
+          "name": "open",
+          "decl": "fn",
+          "sig": "fn open(kr: Keyring, box: bytes, aad: bytes) -> result[bytes, str]",
+          "doc": "",
+          "file": "stdlib/envelope/envelope.sl",
+          "line": 91
+        },
+        {
+          "name": "key_id",
+          "decl": "fn",
+          "sig": "fn key_id(box: bytes) -> result[str, str]",
+          "doc": "The id of the key a box was sealed with.",
+          "file": "stdlib/envelope/envelope.sl",
+          "line": 102
+        },
+        {
+          "name": "rewrap",
+          "decl": "fn",
+          "sig": "fn rewrap(kr: Keyring, box: bytes) -> result[bytes, str]",
+          "doc": "The box with its data key wrapped by the current key instead; the sealed value itself is unchanged. For rotating keys over stored data.",
+          "file": "stdlib/envelope/envelope.sl",
+          "line": 110
+        }
+      ]
+    },
     "flags": {
       "name": "flags",
       "kind": "source",
@@ -2426,6 +3386,30 @@
           "doc": "",
           "file": "stdlib/http/http.sl",
           "line": 3511
+        },
+        {
+          "name": "ByteRange",
+          "decl": "struct",
+          "sig": "struct ByteRange",
+          "doc": "One satisfiable byte range, both ends included.",
+          "file": "stdlib/http/http.sl",
+          "line": 3519
+        },
+        {
+          "name": "parse_range",
+          "decl": "fn",
+          "sig": "fn parse_range(header: str, size: int) -> result[[ByteRange], str]",
+          "doc": "The ranges a Range header asks for, out of a resource of `size` bytes: \"bytes=0-499\", \"bytes=500-\", \"bytes=-500\" (the last 500), or several separated by commas. Ranges past the end are clipped; ranges that cannot be satisfied are dropped. ok([])       no Range header worth honouring: send the whole thing (200) ok(ranges)   send 206 with these err(...)     every range unsatisfiable: send 416 with Content-Range: bytes */size A malformed header is treated as absent (ok([])), as RFC 9110 lets a server ignore it. More than 16 ranges are refused as absent too: many small overlapping ranges are a known amplification trick.",
+          "file": "stdlib/http/http.sl",
+          "line": 3535
+        },
+        {
+          "name": "content_range",
+          "decl": "fn",
+          "sig": "fn content_range(r: ByteRange, size: int) -> str",
+          "doc": "The Content-Range value for one range of a size-byte resource: \"bytes 0-499/1234\".",
+          "file": "stdlib/http/http.sl",
+          "line": 3584
         }
       ]
     },
@@ -3782,6 +4766,76 @@
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
           "line": 1859
+        }
+      ]
+    },
+    "idempotency": {
+      "name": "idempotency",
+      "kind": "source",
+      "items": [
+        {
+          "name": "NEW",
+          "decl": "let",
+          "sig": "let NEW = 0;",
+          "doc": "",
+          "file": "stdlib/idempotency/idempotency.sl",
+          "line": 30
+        },
+        {
+          "name": "IN_PROGRESS",
+          "decl": "let",
+          "sig": "let IN_PROGRESS = 1;",
+          "doc": "",
+          "file": "stdlib/idempotency/idempotency.sl",
+          "line": 31
+        },
+        {
+          "name": "DONE",
+          "decl": "let",
+          "sig": "let DONE = 2;",
+          "doc": "",
+          "file": "stdlib/idempotency/idempotency.sl",
+          "line": 32
+        },
+        {
+          "name": "MISMATCH",
+          "decl": "let",
+          "sig": "let MISMATCH = 3;",
+          "doc": "",
+          "file": "stdlib/idempotency/idempotency.sl",
+          "line": 33
+        },
+        {
+          "name": "Begin",
+          "decl": "struct",
+          "sig": "struct Begin",
+          "doc": "",
+          "file": "stdlib/idempotency/idempotency.sl",
+          "line": 35
+        },
+        {
+          "name": "begin",
+          "decl": "fn",
+          "sig": "fn begin(c: redis.Conn, key: str, fingerprint: str, lock_ms: int, deadline: until) -> result[Begin, str]",
+          "doc": "Reserves key for this request, or reports what an earlier one did.",
+          "file": "stdlib/idempotency/idempotency.sl",
+          "line": 46
+        },
+        {
+          "name": "complete",
+          "decl": "fn",
+          "sig": "fn complete(c: redis.Conn, key: str, b: Begin, response: bytes, keep_ms: int, deadline: until) -> result[bool, str]",
+          "doc": "Stores the response of a NEW request for keep_ms: false if the reservation was lost (it expired and another request took the key).",
+          "file": "stdlib/idempotency/idempotency.sl",
+          "line": 83
+        },
+        {
+          "name": "abandon",
+          "decl": "fn",
+          "sig": "fn abandon(c: redis.Conn, key: str, b: Begin, deadline: until) -> result[bool, str]",
+          "doc": "Gives the key up after a failure that should let a retry run again.",
+          "file": "stdlib/idempotency/idempotency.sl",
+          "line": 94
         }
       ]
     },
@@ -8911,129 +9965,805 @@
         }
       ]
     },
-    "memcache": {
-      "name": "memcache",
+    "metrics": {
+      "name": "metrics",
       "kind": "source",
       "items": [
         {
-          "name": "Client",
-          "decl": "struct",
-          "sig": "gc struct Client",
+          "name": "CONTENT_TYPE",
+          "decl": "let",
+          "sig": "let CONTENT_TYPE = \"text/plain; version=0.0.4; charset=utf-8\";",
           "doc": "",
-          "file": "stdlib/memcache/memcache.sl",
-          "line": 23
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 28
         },
         {
-          "name": "new",
-          "decl": "fn",
-          "sig": "fn new(servers: [str]) -> Client",
+          "name": "Series",
+          "decl": "struct",
+          "sig": "gc struct Series",
           "doc": "",
-          "file": "stdlib/memcache/memcache.sl",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 34
+        },
+        {
+          "name": "Family",
+          "decl": "struct",
+          "sig": "gc struct Family",
+          "doc": "",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 45
+        },
+        {
+          "name": "Registry",
+          "decl": "struct",
+          "sig": "gc struct Registry",
+          "doc": "",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 55
+        },
+        {
+          "name": "registry",
+          "decl": "fn",
+          "sig": "fn registry() -> Registry",
+          "doc": "",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 60
+        },
+        {
+          "name": "default_buckets",
+          "decl": "fn",
+          "sig": "fn default_buckets() -> [float]",
+          "doc": "Prometheus's default latency buckets, in seconds.",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 66
+        },
+        {
+          "name": "exponential_buckets",
+          "decl": "fn",
+          "sig": "fn exponential_buckets(start: float, factor: float, count: int) -> [float]",
+          "doc": "count bounds from start, each factor times the last.",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 71
+        },
+        {
+          "name": "counter",
+          "decl": "fn",
+          "sig": "fn counter(r: Registry, name: str, help: str, labels: [str]) -> Family",
+          "doc": "A counter family: a value that only goes up (inc, add).",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 82
+        },
+        {
+          "name": "gauge",
+          "decl": "fn",
+          "sig": "fn gauge(r: Registry, name: str, help: str, labels: [str]) -> Family",
+          "doc": "A gauge family: a value that goes up and down (set, add, inc, dec).",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 87
+        },
+        {
+          "name": "histogram",
+          "decl": "fn",
+          "sig": "fn histogram(r: Registry, name: str, help: str, labels: [str], bounds: [float]) -> Family",
+          "doc": "A histogram family with these upper bounds (ascending; +Inf is added).",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 92
+        },
+        {
+          "name": "with",
+          "decl": "fn",
+          "sig": "fn with(f: Family, values: [str]) -> Series",
+          "doc": "The series for these label values (one per label name, in order), made on first use. Keep it to skip this lookup on every update.",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 104
+        },
+        {
+          "name": "remove",
+          "decl": "fn",
+          "sig": "fn remove(f: Family, values: [str])",
+          "doc": "Drops a series (a label value that will not come back, such as a finished job's id), so a family's memory does not grow without bound.",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 131
+        },
+        {
+          "name": "inc",
+          "decl": "fn",
+          "sig": "fn inc(s: Series)",
+          "doc": "",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 140
+        },
+        {
+          "name": "add",
+          "decl": "fn",
+          "sig": "fn add(s: Series, v: float)",
+          "doc": "Adds v. A counter panics on a negative v: counters only go up, and a decrease reads as a reset to every rate() over it.",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 146
+        },
+        {
+          "name": "dec",
+          "decl": "fn",
+          "sig": "fn dec(s: Series)",
+          "doc": "",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 158
+        },
+        {
+          "name": "set",
+          "decl": "fn",
+          "sig": "fn set(s: Series, v: float)",
+          "doc": "",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 167
+        },
+        {
+          "name": "observe",
+          "decl": "fn",
+          "sig": "fn observe(s: Series, v: float)",
+          "doc": "Records one value into a histogram.",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 177
+        },
+        {
+          "name": "value",
+          "decl": "fn",
+          "sig": "fn value(s: Series) -> float",
+          "doc": "A counter's or gauge's value now.",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 196
+        },
+        {
+          "name": "expose",
+          "decl": "fn",
+          "sig": "fn expose(r: Registry) -> str",
+          "doc": "Every family in the text exposition format, families by name and series by labels, so two scrapes of an idle program are identical.",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 205
+        }
+      ]
+    },
+    "msgpack": {
+      "name": "msgpack",
+      "kind": "source",
+      "items": [
+        {
+          "name": "MAX_DEPTH",
+          "decl": "let",
+          "sig": "let MAX_DEPTH = 512;",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 29
+        },
+        {
+          "name": "Writer",
+          "decl": "struct",
+          "sig": "gc struct Writer",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 33
+        },
+        {
+          "name": "writer",
+          "decl": "fn",
+          "sig": "fn writer() -> Writer",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 37
+        },
+        {
+          "name": "finish",
+          "decl": "fn",
+          "sig": "fn finish(w: Writer) -> bytes",
+          "doc": "The bytes written so far; the writer is empty again afterwards.",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 42
+        },
+        {
+          "name": "write_nil",
+          "decl": "fn",
+          "sig": "fn write_nil(w: Writer)",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 46
+        },
+        {
+          "name": "write_bool",
+          "decl": "fn",
+          "sig": "fn write_bool(w: Writer, v: bool)",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 50
+        },
+        {
+          "name": "write_int",
+          "decl": "fn",
+          "sig": "fn write_int(w: Writer, v: int)",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 54
+        },
+        {
+          "name": "write_uint",
+          "decl": "fn",
+          "sig": "fn write_uint(w: Writer, v: u64)",
+          "doc": "An unsigned value beyond int's range (up to 2^64 - 1).",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 71
+        },
+        {
+          "name": "write_float",
+          "decl": "fn",
+          "sig": "fn write_float(w: Writer, v: float)",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 80
+        },
+        {
+          "name": "write_float32",
+          "decl": "fn",
+          "sig": "fn write_float32(w: Writer, v: float)",
+          "doc": "A float32: half the size, for values that fit one.",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 86
+        },
+        {
+          "name": "write_str",
+          "decl": "fn",
+          "sig": "fn write_str(w: Writer, s: str)",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 91
+        },
+        {
+          "name": "write_bin",
+          "decl": "fn",
+          "sig": "fn write_bin(w: Writer, b: bytes)",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 101
+        },
+        {
+          "name": "write_array",
+          "decl": "fn",
+          "sig": "fn write_array(w: Writer, n: int)",
+          "doc": "The header of an array of n values; write the n values next.",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 110
+        },
+        {
+          "name": "write_map",
+          "decl": "fn",
+          "sig": "fn write_map(w: Writer, n: int)",
+          "doc": "The header of a map of n pairs; write key, value, key, value, ... next.",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 117
+        },
+        {
+          "name": "write_ext",
+          "decl": "fn",
+          "sig": "fn write_ext(w: Writer, kind: int, data: bytes)",
+          "doc": "An extension value: an application type -128..127 and its bytes.",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 124
+        },
+        {
+          "name": "write_timestamp",
+          "decl": "fn",
+          "sig": "fn write_timestamp(w: Writer, secs: int, nanos: int)",
+          "doc": "A timestamp (extension type -1) for unix seconds and nanoseconds, in the shortest of its three forms.",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 140
+        },
+        {
+          "name": "K_NIL",
+          "decl": "let",
+          "sig": "let K_NIL = 0;",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 167
+        },
+        {
+          "name": "K_BOOL",
+          "decl": "let",
+          "sig": "let K_BOOL = 1;",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 168
+        },
+        {
+          "name": "K_INT",
+          "decl": "let",
+          "sig": "let K_INT = 2; // fits int",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 169
+        },
+        {
+          "name": "K_UINT",
+          "decl": "let",
+          "sig": "let K_UINT = 3; // above int's range: read_uint",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 170
+        },
+        {
+          "name": "K_FLOAT",
+          "decl": "let",
+          "sig": "let K_FLOAT = 4;",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 171
+        },
+        {
+          "name": "K_STR",
+          "decl": "let",
+          "sig": "let K_STR = 5;",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 172
+        },
+        {
+          "name": "K_BIN",
+          "decl": "let",
+          "sig": "let K_BIN = 6;",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 173
+        },
+        {
+          "name": "K_ARRAY",
+          "decl": "let",
+          "sig": "let K_ARRAY = 7;",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 174
+        },
+        {
+          "name": "K_MAP",
+          "decl": "let",
+          "sig": "let K_MAP = 8;",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 175
+        },
+        {
+          "name": "K_EXT",
+          "decl": "let",
+          "sig": "let K_EXT = 9;",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 176
+        },
+        {
+          "name": "K_END",
+          "decl": "let",
+          "sig": "let K_END = 10; // no bytes left",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 177
+        },
+        {
+          "name": "K_BAD",
+          "decl": "let",
+          "sig": "let K_BAD = 11; // 0xc1, never used",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 178
+        },
+        {
+          "name": "Reader",
+          "decl": "struct",
+          "sig": "gc struct Reader",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 180
+        },
+        {
+          "name": "reader",
+          "decl": "fn",
+          "sig": "fn reader(b: bytes) -> Reader",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 185
+        },
+        {
+          "name": "remaining",
+          "decl": "fn",
+          "sig": "fn remaining(r: Reader) -> int",
+          "doc": "Bytes not yet read.",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 190
+        },
+        {
+          "name": "peek",
+          "decl": "fn",
+          "sig": "fn peek(r: Reader) -> int",
+          "doc": "The kind of the next value, without reading it.",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 195
+        },
+        {
+          "name": "read_nil",
+          "decl": "fn",
+          "sig": "fn read_nil(r: Reader) -> result[bool, str]",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 218
+        },
+        {
+          "name": "read_bool",
+          "decl": "fn",
+          "sig": "fn read_bool(r: Reader) -> result[bool, str]",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 226
+        },
+        {
+          "name": "read_int",
+          "decl": "fn",
+          "sig": "fn read_int(r: Reader) -> result[int, str]",
+          "doc": "Any integer encoding that fits int.",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 238
+        },
+        {
+          "name": "read_uint",
+          "decl": "fn",
+          "sig": "fn read_uint(r: Reader) -> result[u64, str]",
+          "doc": "An unsigned integer, the full u64 range.",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 262
+        },
+        {
+          "name": "read_float",
+          "decl": "fn",
+          "sig": "fn read_float(r: Reader) -> result[float, str]",
+          "doc": "A float32 or float64; an integer is read as its float too.",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 280
+        },
+        {
+          "name": "read_str",
+          "decl": "fn",
+          "sig": "fn read_str(r: Reader) -> result[str, str]",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 300
+        },
+        {
+          "name": "read_bin",
+          "decl": "fn",
+          "sig": "fn read_bin(r: Reader) -> result[bytes, str]",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 316
+        },
+        {
+          "name": "read_array",
+          "decl": "fn",
+          "sig": "fn read_array(r: Reader) -> result[int, str]",
+          "doc": "An array header: how many values follow.",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 331
+        },
+        {
+          "name": "read_map",
+          "decl": "fn",
+          "sig": "fn read_map(r: Reader) -> result[int, str]",
+          "doc": "A map header: how many key-value pairs follow.",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 336
+        },
+        {
+          "name": "Ext",
+          "decl": "struct",
+          "sig": "struct Ext",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 340
+        },
+        {
+          "name": "read_ext",
+          "decl": "fn",
+          "sig": "fn read_ext(r: Reader) -> result[Ext, str]",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 345
+        },
+        {
+          "name": "Timestamp",
+          "decl": "struct",
+          "sig": "struct Timestamp",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 364
+        },
+        {
+          "name": "read_timestamp",
+          "decl": "fn",
+          "sig": "fn read_timestamp(r: Reader) -> result[Timestamp, str]",
+          "doc": "Reads extension type -1 in any of its three forms.",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 370
+        },
+        {
+          "name": "skip",
+          "decl": "fn",
+          "sig": "fn skip(r: Reader) -> result[bool, str]",
+          "doc": "Skips the next value, containers and all.",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 389
+        },
+        {
+          "name": "Value",
+          "decl": "struct",
+          "sig": "gc struct Value",
+          "doc": "Any MessagePack value. kind is one of the K_ constants; the field for it holds the value (items for an array, keys and vals for a map).",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 464
+        },
+        {
+          "name": "nil_value",
+          "decl": "fn",
+          "sig": "fn nil_value() -> Value",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 478
+        },
+        {
+          "name": "bool_value",
+          "decl": "fn",
+          "sig": "fn bool_value(v: bool) -> Value",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 479
+        },
+        {
+          "name": "int_value",
+          "decl": "fn",
+          "sig": "fn int_value(v: int) -> Value",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 480
+        },
+        {
+          "name": "float_value",
+          "decl": "fn",
+          "sig": "fn float_value(v: float) -> Value",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 481
+        },
+        {
+          "name": "str_value",
+          "decl": "fn",
+          "sig": "fn str_value(v: str) -> Value",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 482
+        },
+        {
+          "name": "bin_value",
+          "decl": "fn",
+          "sig": "fn bin_value(v: bytes) -> Value",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 483
+        },
+        {
+          "name": "array_value",
+          "decl": "fn",
+          "sig": "fn array_value(items: [Value]) -> Value",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 484
+        },
+        {
+          "name": "map_value",
+          "decl": "fn",
+          "sig": "fn map_value(keys: [Value], vals: [Value]) -> Value",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 485
+        },
+        {
+          "name": "get",
+          "decl": "fn",
+          "sig": "fn get(v: Value, key: str) -> opt[Value]",
+          "doc": "The value of a map entry whose key is the string key.",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 493
+        },
+        {
+          "name": "decode",
+          "decl": "fn",
+          "sig": "fn decode(b: bytes) -> result[Value, str]",
+          "doc": "One whole value; trailing bytes are an error.",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 502
+        },
+        {
+          "name": "read_value",
+          "decl": "fn",
+          "sig": "fn read_value(r: Reader, depth: int) -> result[Value, str]",
+          "doc": "The next value from r as a tree.",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 511
+        },
+        {
+          "name": "encode",
+          "decl": "fn",
+          "sig": "fn encode(v: Value) -> bytes",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 565
+        },
+        {
+          "name": "write_value",
+          "decl": "fn",
+          "sig": "fn write_value(w: Writer, v: Value)",
+          "doc": "",
+          "file": "stdlib/msgpack/msgpack.sl",
+          "line": 571
+        }
+      ]
+    },
+    "multipart": {
+      "name": "multipart",
+      "kind": "source",
+      "items": [
+        {
+          "name": "PART",
+          "decl": "let",
+          "sig": "let PART = 0; // a part starts: see Event.part",
+          "doc": "",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 30
+        },
+        {
+          "name": "DATA",
+          "decl": "let",
+          "sig": "let DATA = 1; // part data: Event.data",
+          "doc": "",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 31
+        },
+        {
+          "name": "PART_END",
+          "decl": "let",
+          "sig": "let PART_END = 2; // the current part is complete",
+          "doc": "",
+          "file": "stdlib/multipart/multipart.sl",
           "line": 32
+        },
+        {
+          "name": "DONE",
+          "decl": "let",
+          "sig": "let DONE = 3; // the closing boundary: nothing more",
+          "doc": "",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 33
+        },
+        {
+          "name": "Part",
+          "decl": "struct",
+          "sig": "struct Part",
+          "doc": "",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 35
+        },
+        {
+          "name": "Event",
+          "decl": "struct",
+          "sig": "struct Event",
+          "doc": "",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 42
+        },
+        {
+          "name": "Parser",
+          "decl": "struct",
+          "sig": "gc struct Parser",
+          "doc": "",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 48
+        },
+        {
+          "name": "boundary_of",
+          "decl": "fn",
+          "sig": "fn boundary_of(content_type: str) -> opt[str]",
+          "doc": "The boundary parameter of a multipart Content-Type.",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 64
+        },
+        {
+          "name": "parser",
+          "decl": "fn",
+          "sig": "fn parser(boundary: str) -> Parser",
+          "doc": "",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 80
+        },
+        {
+          "name": "feed",
+          "decl": "fn",
+          "sig": "fn feed(p: Parser, chunk: bytes) -> result[[Event], str]",
+          "doc": "Takes the next bytes of the body; returns what they completed.",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 88
+        },
+        {
+          "name": "finish",
+          "decl": "fn",
+          "sig": "fn finish(p: Parser) -> result[bool, str]",
+          "doc": "The body has ended: an error unless the closing boundary was seen.",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 166
         },
         {
           "name": "Item",
           "decl": "struct",
           "sig": "struct Item",
+          "doc": "A whole part with its data, from parse.",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 172
+        },
+        {
+          "name": "parse",
+          "decl": "fn",
+          "sig": "fn parse(body: bytes, boundary: str) -> result[[Item], str]",
+          "doc": "Every part of a body already in memory.",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 178
+        },
+        {
+          "name": "Body",
+          "decl": "struct",
+          "sig": "gc struct Body",
           "doc": "",
-          "file": "stdlib/memcache/memcache.sl",
-          "line": 38
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 197
         },
         {
-          "name": "get",
+          "name": "body",
           "decl": "fn",
-          "sig": "fn get(c: Client, key: str, deadline: until) -> result[opt[bytes], str]",
-          "doc": "The value for key, or none on a miss.",
-          "file": "stdlib/memcache/memcache.sl",
-          "line": 45
+          "sig": "fn body(boundary: str) -> Body",
+          "doc": "A body to fill with fields and files; boundary should be random and not occur in the data (a 32-character hex token from a CSPRNG does).",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 204
         },
         {
-          "name": "gets",
+          "name": "add_field",
           "decl": "fn",
-          "sig": "fn gets(c: Client, key: str, deadline: until) -> result[opt[Item], str]",
-          "doc": "The item for key with its cas token, or none on a miss.",
-          "file": "stdlib/memcache/memcache.sl",
-          "line": 53
+          "sig": "fn add_field(w: Body, name: str, value: str)",
+          "doc": "",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 208
         },
         {
-          "name": "get_multi",
+          "name": "add_file",
           "decl": "fn",
-          "sig": "fn get_multi(c: Client, keys: [str], deadline: until) -> result[map[str]bytes, str]",
-          "doc": "The values of every key found, one request per server.",
-          "file": "stdlib/memcache/memcache.sl",
-          "line": 70
-        },
-        {
-          "name": "set",
-          "decl": "fn",
-          "sig": "fn set(c: Client, key: str, value: bytes, ttl: int, deadline: until) -> result[bool, str]",
-          "doc": "Stores value for ttl seconds (0: no expiry; over 30 days is read by memcached as a unix time).",
-          "file": "stdlib/memcache/memcache.sl",
-          "line": 96
-        },
-        {
-          "name": "add",
-          "decl": "fn",
-          "sig": "fn add(c: Client, key: str, value: bytes, ttl: int, deadline: until) -> result[bool, str]",
-          "doc": "Stores only if the key is absent: false if it was there.",
-          "file": "stdlib/memcache/memcache.sl",
-          "line": 101
-        },
-        {
-          "name": "replace",
-          "decl": "fn",
-          "sig": "fn replace(c: Client, key: str, value: bytes, ttl: int, deadline: until) -> result[bool, str]",
-          "doc": "Stores only if the key is present: false if it was not.",
-          "file": "stdlib/memcache/memcache.sl",
-          "line": 106
-        },
-        {
-          "name": "cas",
-          "decl": "fn",
-          "sig": "fn cas(c: Client, key: str, value: bytes, ttl: int, cas_token: int, deadline: until) -> result[bool, str]",
-          "doc": "Stores only if the item is unchanged since gets returned cas: false if another writer got there first (or the key is gone).",
-          "file": "stdlib/memcache/memcache.sl",
-          "line": 112
-        },
-        {
-          "name": "delete",
-          "decl": "fn",
-          "sig": "fn delete(c: Client, key: str, deadline: until) -> result[bool, str]",
-          "doc": "Deletes key: false if it was not there.",
-          "file": "stdlib/memcache/memcache.sl",
-          "line": 118
-        },
-        {
-          "name": "incr",
-          "decl": "fn",
-          "sig": "fn incr(c: Client, key: str, delta: int, deadline: until) -> result[opt[int], str]",
-          "doc": "Adds delta to a numeric value: the new value, or none if the key is absent.",
-          "file": "stdlib/memcache/memcache.sl",
-          "line": 128
-        },
-        {
-          "name": "decr",
-          "decl": "fn",
-          "sig": "fn decr(c: Client, key: str, delta: int, deadline: until) -> result[opt[int], str]",
-          "doc": "Subtracts delta, stopping at 0 as memcached does.",
-          "file": "stdlib/memcache/memcache.sl",
-          "line": 133
-        },
-        {
-          "name": "touch",
-          "decl": "fn",
-          "sig": "fn touch(c: Client, key: str, ttl: int, deadline: until) -> result[bool, str]",
-          "doc": "Gives key a new ttl: false if it was not there.",
-          "file": "stdlib/memcache/memcache.sl",
-          "line": 138
+          "sig": "fn add_file(w: Body, name: str, filename: str, content_type: str, data: bytes)",
+          "doc": "",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 215
         },
         {
           "name": "close",
           "decl": "fn",
-          "sig": "fn close(c: Client)",
-          "doc": "Closes every idle connection.",
-          "file": "stdlib/memcache/memcache.sl",
-          "line": 147
+          "sig": "fn close(w: Body) -> bytes",
+          "doc": "The finished body and the Content-Type to send it with.",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 227
+        },
+        {
+          "name": "content_type",
+          "decl": "fn",
+          "sig": "fn content_type(w: Body) -> str",
+          "doc": "",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 232
         }
       ]
     },
@@ -10328,6 +12058,138 @@
         }
       ]
     },
+    "otp": {
+      "name": "otp",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Options",
+          "decl": "struct",
+          "sig": "struct Options",
+          "doc": "",
+          "file": "stdlib/otp/otp.sl",
+          "line": 26
+        },
+        {
+          "name": "totp_options",
+          "decl": "fn",
+          "sig": "fn totp_options() -> Options",
+          "doc": "",
+          "file": "stdlib/otp/otp.sl",
+          "line": 33
+        },
+        {
+          "name": "new_secret",
+          "decl": "fn",
+          "sig": "fn new_secret() -> result[bytes, str]",
+          "doc": "A random 160-bit secret, the size RFC 4226 recommends for SHA-1.",
+          "file": "stdlib/otp/otp.sl",
+          "line": 38
+        },
+        {
+          "name": "hotp",
+          "decl": "fn",
+          "sig": "fn hotp(secret: bytes, counter: int, o: Options) -> str",
+          "doc": "The HOTP code for a counter value.",
+          "file": "stdlib/otp/otp.sl",
+          "line": 43
+        },
+        {
+          "name": "totp",
+          "decl": "fn",
+          "sig": "fn totp(secret: bytes, unix_secs: int, o: Options) -> str",
+          "doc": "The TOTP code for a moment, in unix seconds.",
+          "file": "stdlib/otp/otp.sl",
+          "line": 58
+        },
+        {
+          "name": "step_of",
+          "decl": "fn",
+          "sig": "fn step_of(unix_secs: int, o: Options) -> int",
+          "doc": "The time step (counter) a TOTP code at unix_secs belongs to.",
+          "file": "stdlib/otp/otp.sl",
+          "line": 63
+        },
+        {
+          "name": "verify_totp",
+          "decl": "fn",
+          "sig": "fn verify_totp(secret: bytes, code: str, unix_secs: int, o: Options) -> opt[int]",
+          "doc": "The time step code is valid for, within o.skew steps of unix_secs; none if it matches none. Compare the step with the last one accepted for the user to refuse replays.",
+          "file": "stdlib/otp/otp.sl",
+          "line": 73
+        },
+        {
+          "name": "verify_hotp",
+          "decl": "fn",
+          "sig": "fn verify_hotp(secret: bytes, code: str, counter: int, window: int, o: Options) -> opt[int]",
+          "doc": "The counter value code matches, looking ahead up to window counters from counter (HOTP resynchronisation); none if none does.",
+          "file": "stdlib/otp/otp.sl",
+          "line": 93
+        },
+        {
+          "name": "uri",
+          "decl": "fn",
+          "sig": "fn uri(secret: bytes, issuer: str, account: str, o: Options) -> str",
+          "doc": "The otpauth:// URI authenticator apps read (usually from a QR code).",
+          "file": "stdlib/otp/otp.sl",
+          "line": 105
+        },
+        {
+          "name": "parse_secret",
+          "decl": "fn",
+          "sig": "fn parse_secret(b32: str) -> result[bytes, str]",
+          "doc": "A secret typed or pasted as base32 (spaces, lower case and missing padding allowed), as apps display it.",
+          "file": "stdlib/otp/otp.sl",
+          "line": 116
+        }
+      ]
+    },
+    "outbox": {
+      "name": "outbox",
+      "kind": "source",
+      "items": [
+        {
+          "name": "schema",
+          "decl": "fn",
+          "sig": "fn schema() -> str",
+          "doc": "",
+          "file": "stdlib/outbox/outbox.sl",
+          "line": 29
+        },
+        {
+          "name": "add",
+          "decl": "fn",
+          "sig": "fn add(c: pg.Conn, topic: str, payload: bytes, deadline: until) -> result[int, str]",
+          "doc": "Queues an event; call it inside the transaction that makes the change. Returns the event's id.",
+          "file": "stdlib/outbox/outbox.sl",
+          "line": 40
+        },
+        {
+          "name": "Message",
+          "decl": "struct",
+          "sig": "struct Message",
+          "doc": "",
+          "file": "stdlib/outbox/outbox.sl",
+          "line": 47
+        },
+        {
+          "name": "relay",
+          "decl": "fn",
+          "sig": "fn relay(c: pg.Conn, batch: int, publish: fn(Message) -> bool, deadline: until) -> result[int, str]",
+          "doc": "Publishes up to batch ready events with publish (true: it went out), deleting those that did and pushing back those that did not (by 2^attempts seconds, at most an hour). Returns how many were published. Uses its own transaction: call it on a connection that is not in one.",
+          "file": "stdlib/outbox/outbox.sl",
+          "line": 58
+        },
+        {
+          "name": "pending",
+          "decl": "fn",
+          "sig": "fn pending(c: pg.Conn, deadline: until) -> result[int, str]",
+          "doc": "Events waiting, ready or not.",
+          "file": "stdlib/outbox/outbox.sl",
+          "line": 92
+        }
+      ]
+    },
     "pg": {
       "name": "pg",
       "kind": "source",
@@ -10798,6 +12660,100 @@
         }
       ]
     },
+    "pool": {
+      "name": "pool",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Options",
+          "decl": "struct",
+          "sig": "struct Options",
+          "doc": "",
+          "file": "stdlib/pool/pool.sl",
+          "line": 28
+        },
+        {
+          "name": "options",
+          "decl": "fn",
+          "sig": "fn options(max_open: int) -> Options",
+          "doc": "Options with the defaults above for a pool of max_open connections.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 46
+        },
+        {
+          "name": "Lease",
+          "decl": "struct",
+          "sig": "gc struct Lease[T]",
+          "doc": "One connection, on loan from acquire until release or discard.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 53
+        },
+        {
+          "name": "Stats",
+          "decl": "struct",
+          "sig": "struct Stats",
+          "doc": "",
+          "file": "stdlib/pool/pool.sl",
+          "line": 60
+        },
+        {
+          "name": "Pool",
+          "decl": "struct",
+          "sig": "gc struct Pool[T]",
+          "doc": "",
+          "file": "stdlib/pool/pool.sl",
+          "line": 80
+        },
+        {
+          "name": "new",
+          "decl": "fn",
+          "sig": "fn new[T](o: Options, dial: fn(until) -> result[T, str], close: fn(T), probe: fn(T) -> bool) -> Pool[T]",
+          "doc": "A pool that opens nothing until the first acquire. dial makes a connection by a deadline, close ends one, probe says whether an idle one still works (one cheap check, such as net.idle_alive).",
+          "file": "stdlib/pool/pool.sl",
+          "line": 102
+        },
+        {
+          "name": "acquire",
+          "decl": "fn",
+          "sig": "fn acquire[T](p: Pool[T], deadline: until) -> result[Lease[T], str]",
+          "doc": "A connection for the caller's use until release or discard: an idle one, a new one if fewer than max_open are open, or else the next one released, in arrival order. \"timeout\" if deadline passes first, \"pool is closed\" after close.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 123
+        },
+        {
+          "name": "release",
+          "decl": "fn",
+          "sig": "fn release[T](p: Pool[T], l: Lease[T])",
+          "doc": "Gives a connection back: to the task that has waited longest, else to the idle list. Closed instead once past max_lifetime, beyond max_idle, or after close. Releasing a lease twice panics: two tasks would then share one connection.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 200
+        },
+        {
+          "name": "discard",
+          "decl": "fn",
+          "sig": "fn discard[T](p: Pool[T], l: Lease[T])",
+          "doc": "Closes a connection the caller found broken, freeing its slot for the next waiter to dial.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 234
+        },
+        {
+          "name": "close",
+          "decl": "fn",
+          "sig": "fn close[T](p: Pool[T])",
+          "doc": "Closes every idle connection and fails every waiting acquire; connections in use are closed as they come back. acquire fails from now on.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 251
+        },
+        {
+          "name": "stats",
+          "decl": "fn",
+          "sig": "fn stats[T](p: Pool[T]) -> Stats",
+          "doc": "A snapshot of the counters.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 268
+        }
+      ]
+    },
     "proc": {
       "name": "proc",
       "kind": "native",
@@ -10877,6 +12833,386 @@
           "ret": "result[int,str]",
           "tls": false,
           "sig": "proc.wait(int, until) -> result[int,str]"
+        }
+      ]
+    },
+    "protobuf": {
+      "name": "protobuf",
+      "kind": "source",
+      "items": [
+        {
+          "name": "WIRE_VARINT",
+          "decl": "let",
+          "sig": "let WIRE_VARINT = 0;",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 34
+        },
+        {
+          "name": "WIRE_I64",
+          "decl": "let",
+          "sig": "let WIRE_I64 = 1;",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 35
+        },
+        {
+          "name": "WIRE_LEN",
+          "decl": "let",
+          "sig": "let WIRE_LEN = 2;",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 36
+        },
+        {
+          "name": "WIRE_I32",
+          "decl": "let",
+          "sig": "let WIRE_I32 = 5;",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 37
+        },
+        {
+          "name": "Writer",
+          "decl": "struct",
+          "sig": "gc struct Writer",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 41
+        },
+        {
+          "name": "writer",
+          "decl": "fn",
+          "sig": "fn writer() -> Writer",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 45
+        },
+        {
+          "name": "finish",
+          "decl": "fn",
+          "sig": "fn finish(w: Writer) -> bytes",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 49
+        },
+        {
+          "name": "size",
+          "decl": "fn",
+          "sig": "fn size(w: Writer) -> int",
+          "doc": "The bytes written so far, without emptying the writer.",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 54
+        },
+        {
+          "name": "write_int64",
+          "decl": "fn",
+          "sig": "fn write_int64(w: Writer, field: int, v: int)",
+          "doc": "int32, int64, uint32, uint64 and enum fields. A negative int32 or int64 takes ten bytes, as the format says; use write_sint for fields declared sint32/sint64.",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 84
+        },
+        {
+          "name": "write_uint64",
+          "decl": "fn",
+          "sig": "fn write_uint64(w: Writer, field: int, v: u64)",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 89
+        },
+        {
+          "name": "write_sint",
+          "decl": "fn",
+          "sig": "fn write_sint(w: Writer, field: int, v: int)",
+          "doc": "sint32 and sint64 fields: zigzag, so small negatives stay small.",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 95
+        },
+        {
+          "name": "write_bool",
+          "decl": "fn",
+          "sig": "fn write_bool(w: Writer, field: int, v: bool)",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 100
+        },
+        {
+          "name": "write_fixed64",
+          "decl": "fn",
+          "sig": "fn write_fixed64(w: Writer, field: int, v: u64)",
+          "doc": "fixed64, sfixed64.",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 106
+        },
+        {
+          "name": "write_fixed32",
+          "decl": "fn",
+          "sig": "fn write_fixed32(w: Writer, field: int, v: int)",
+          "doc": "fixed32, sfixed32 (the low 32 bits of v).",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 112
+        },
+        {
+          "name": "write_double",
+          "decl": "fn",
+          "sig": "fn write_double(w: Writer, field: int, v: float)",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 117
+        },
+        {
+          "name": "write_float",
+          "decl": "fn",
+          "sig": "fn write_float(w: Writer, field: int, v: float)",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 122
+        },
+        {
+          "name": "write_bytes",
+          "decl": "fn",
+          "sig": "fn write_bytes(w: Writer, field: int, b: bytes)",
+          "doc": "bytes fields and nested messages (a finished Writer's bytes).",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 128
+        },
+        {
+          "name": "write_string",
+          "decl": "fn",
+          "sig": "fn write_string(w: Writer, field: int, s: str)",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 134
+        },
+        {
+          "name": "write_packed_int",
+          "decl": "fn",
+          "sig": "fn write_packed_int(w: Writer, field: int, vs: [int])",
+          "doc": "repeated int32/int64/uint32/uint64/enum/bool, packed.",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 139
+        },
+        {
+          "name": "write_packed_sint",
+          "decl": "fn",
+          "sig": "fn write_packed_sint(w: Writer, field: int, vs: [int])",
+          "doc": "repeated sint32/sint64, packed.",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 146
+        },
+        {
+          "name": "write_packed_double",
+          "decl": "fn",
+          "sig": "fn write_packed_double(w: Writer, field: int, vs: [float])",
+          "doc": "repeated double, packed.",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 153
+        },
+        {
+          "name": "Reader",
+          "decl": "struct",
+          "sig": "gc struct Reader",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 161
+        },
+        {
+          "name": "reader",
+          "decl": "fn",
+          "sig": "fn reader(b: bytes) -> Reader",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 166
+        },
+        {
+          "name": "more",
+          "decl": "fn",
+          "sig": "fn more(r: Reader) -> bool",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 170
+        },
+        {
+          "name": "Field",
+          "decl": "struct",
+          "sig": "struct Field",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 174
+        },
+        {
+          "name": "next",
+          "decl": "fn",
+          "sig": "fn next(r: Reader) -> result[Field, str]",
+          "doc": "The next field's number and wire type; read its value next with the reader for that type, or skip it.",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 181
+        },
+        {
+          "name": "read_varint",
+          "decl": "fn",
+          "sig": "fn read_varint(r: Reader) -> result[int, str]",
+          "doc": "A varint field: int32/int64/uint*/enum read as int (uint64 values above int's range come back negative; read_uvarint keeps them).",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 195
+        },
+        {
+          "name": "read_uvarint",
+          "decl": "fn",
+          "sig": "fn read_uvarint(r: Reader) -> result[u64, str]",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 201
+        },
+        {
+          "name": "read_sint",
+          "decl": "fn",
+          "sig": "fn read_sint(r: Reader) -> result[int, str]",
+          "doc": "A zigzag (sint32/sint64) field.",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 206
+        },
+        {
+          "name": "read_bool",
+          "decl": "fn",
+          "sig": "fn read_bool(r: Reader) -> result[bool, str]",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 212
+        },
+        {
+          "name": "read_fixed64",
+          "decl": "fn",
+          "sig": "fn read_fixed64(r: Reader) -> result[u64, str]",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 218
+        },
+        {
+          "name": "read_fixed32",
+          "decl": "fn",
+          "sig": "fn read_fixed32(r: Reader) -> result[int, str]",
+          "doc": "A fixed32 field as an unsigned value; sfixed32 is read_sfixed32.",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 227
+        },
+        {
+          "name": "read_sfixed32",
+          "decl": "fn",
+          "sig": "fn read_sfixed32(r: Reader) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 235
+        },
+        {
+          "name": "read_double",
+          "decl": "fn",
+          "sig": "fn read_double(r: Reader) -> result[float, str]",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 242
+        },
+        {
+          "name": "read_float",
+          "decl": "fn",
+          "sig": "fn read_float(r: Reader) -> result[float, str]",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 248
+        },
+        {
+          "name": "read_bytes",
+          "decl": "fn",
+          "sig": "fn read_bytes(r: Reader) -> result[bytes, str]",
+          "doc": "A length-delimited field: bytes, a string, a nested message, or packed repeated values.",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 256
+        },
+        {
+          "name": "read_string",
+          "decl": "fn",
+          "sig": "fn read_string(r: Reader) -> result[str, str]",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 266
+        },
+        {
+          "name": "read_packed_int",
+          "decl": "fn",
+          "sig": "fn read_packed_int(r: Reader, wire: int) -> result[[int], str]",
+          "doc": "A packed repeated varint field (or a single unpacked element, which a parser must also accept for repeated scalars).",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 274
+        },
+        {
+          "name": "read_packed_sint",
+          "decl": "fn",
+          "sig": "fn read_packed_sint(r: Reader, wire: int) -> result[[int], str]",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 293
+        },
+        {
+          "name": "skip",
+          "decl": "fn",
+          "sig": "fn skip(r: Reader, wire: int) -> result[bool, str]",
+          "doc": "Skips a field's value of the given wire type.",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 313
+        }
+      ]
+    },
+    "proxyproto": {
+      "name": "proxyproto",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Tlv",
+          "decl": "struct",
+          "sig": "struct Tlv",
+          "doc": "One v2 type-length-value field: ALPN (0x01), authority (0x02, the TLS SNI name), unique id (0x05), SSL details (0x20), AWS VPC endpoint id (0xEA), and so on.",
+          "file": "stdlib/proxyproto/proxyproto.sl",
+          "line": 28
+        },
+        {
+          "name": "Header",
+          "decl": "struct",
+          "sig": "struct Header",
+          "doc": "",
+          "file": "stdlib/proxyproto/proxyproto.sl",
+          "line": 33
+        },
+        {
+          "name": "parse",
+          "decl": "fn",
+          "sig": "fn parse(b: bytes) -> result[opt[Header], str]",
+          "doc": "The header at the start of b; none if b is a prefix of one and more bytes are needed; an error if b does not start with a PROXY header.",
+          "file": "stdlib/proxyproto/proxyproto.sl",
+          "line": 53
+        },
+        {
+          "name": "read_until",
+          "decl": "fn",
+          "sig": "fn read_until(fd: i32, deadline: until) -> result[Header, str]",
+          "doc": "Reads a header from fd, then stops: whatever arrived after it is in rest. Bounded by deadline as a whole.",
+          "file": "stdlib/proxyproto/proxyproto.sl",
+          "line": 68
+        },
+        {
+          "name": "encode_v1",
+          "decl": "fn",
+          "sig": "fn encode_v1(h: Header) -> bytes",
+          "doc": "The v1 (text) header for h: \"PROXY TCP4 1.2.3.4 5.6.7.8 1111 443\\r\\n\". Families other than tcp4 and tcp6 are sent as UNKNOWN.",
+          "file": "stdlib/proxyproto/proxyproto.sl",
+          "line": 92
+        },
+        {
+          "name": "encode_v2",
+          "decl": "fn",
+          "sig": "fn encode_v2(h: Header) -> result[bytes, str]",
+          "doc": "The v2 (binary) header for h, TLVs included. An error for an address that does not match h.family.",
+          "file": "stdlib/proxyproto/proxyproto.sl",
+          "line": 103
         }
       ]
     },
@@ -12395,6 +14731,268 @@
         }
       ]
     },
+    "resilience": {
+      "name": "resilience",
+      "kind": "source",
+      "items": [
+        {
+          "name": "BreakerOptions",
+          "decl": "struct",
+          "sig": "struct BreakerOptions",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 27
+        },
+        {
+          "name": "breaker_options",
+          "decl": "fn",
+          "sig": "fn breaker_options() -> BreakerOptions",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 41
+        },
+        {
+          "name": "Breaker",
+          "decl": "struct",
+          "sig": "gc struct Breaker",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 46
+        },
+        {
+          "name": "breaker",
+          "decl": "fn",
+          "sig": "fn breaker(o: BreakerOptions) -> Breaker",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 64
+        },
+        {
+          "name": "allow",
+          "decl": "fn",
+          "sig": "fn allow(b: Breaker) -> bool",
+          "doc": "Whether a call may go ahead. Every allowed call must be followed by record(b, ok) once it finishes.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 78
+        },
+        {
+          "name": "record",
+          "decl": "fn",
+          "sig": "fn record(b: Breaker, ok: bool)",
+          "doc": "The outcome of a call allow let through.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 101
+        },
+        {
+          "name": "breaker_state",
+          "decl": "fn",
+          "sig": "fn breaker_state(b: Breaker) -> str",
+          "doc": "\"closed\", \"open\" or \"half-open\".",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 135
+        },
+        {
+          "name": "trips",
+          "decl": "fn",
+          "sig": "fn trips(b: Breaker) -> int",
+          "doc": "How many times the breaker has opened.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 146
+        },
+        {
+          "name": "Bulkhead",
+          "decl": "struct",
+          "sig": "gc struct Bulkhead",
+          "doc": "At most `limit` calls at once; the rest are turned away at once rather than queued, so one slow dependency cannot take every task with it.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 171
+        },
+        {
+          "name": "bulkhead",
+          "decl": "fn",
+          "sig": "fn bulkhead(limit: int) -> Bulkhead",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 178
+        },
+        {
+          "name": "try_enter",
+          "decl": "fn",
+          "sig": "fn try_enter(b: Bulkhead) -> bool",
+          "doc": "Takes a place if there is one. Every true must be followed by leave.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 185
+        },
+        {
+          "name": "leave",
+          "decl": "fn",
+          "sig": "fn leave(b: Bulkhead)",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 197
+        },
+        {
+          "name": "bulkhead_active",
+          "decl": "fn",
+          "sig": "fn bulkhead_active(b: Bulkhead) -> int",
+          "doc": "Calls in progress, and calls turned away so far.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 204
+        },
+        {
+          "name": "bulkhead_rejected",
+          "decl": "fn",
+          "sig": "fn bulkhead_rejected(b: Bulkhead) -> int",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 211
+        },
+        {
+          "name": "RetryBudget",
+          "decl": "struct",
+          "sig": "gc struct RetryBudget",
+          "doc": "Retries as a share of requests (Finagle's and gRPC's budget): each request deposits `ratio` of a retry, each retry withdraws one, and `min_per_sec` retries a second are always allowed. During an outage retries cannot multiply the load beyond 1 + ratio.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 224
+        },
+        {
+          "name": "retry_budget",
+          "decl": "fn",
+          "sig": "fn retry_budget(ratio: float, min_per_sec: int) -> RetryBudget",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 236
+        },
+        {
+          "name": "deposit",
+          "decl": "fn",
+          "sig": "fn deposit(b: RetryBudget)",
+          "doc": "An original request (not a retry) was made.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 247
+        },
+        {
+          "name": "can_retry",
+          "decl": "fn",
+          "sig": "fn can_retry(b: RetryBudget) -> bool",
+          "doc": "Whether a retry may go ahead; takes one from the budget if so.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 255
+        },
+        {
+          "name": "RetryOptions",
+          "decl": "struct",
+          "sig": "struct RetryOptions",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 281
+        },
+        {
+          "name": "retry_options",
+          "decl": "fn",
+          "sig": "fn retry_options() -> RetryOptions",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 290
+        },
+        {
+          "name": "retry",
+          "decl": "fn",
+          "sig": "fn retry[A, T](f: fn(A, until) -> result[T, str], a: A, o: RetryOptions, budget: RetryBudget, r: rand.Rng, deadline: until) -> result[T, str]",
+          "doc": "Calls f(a, deadline) until it succeeds, the attempts run out, the budget refuses a retry, or the deadline passes. The last error is returned. budget may be shared by every caller of one dependency. Errors reported as \"permanent: ...\" by f are not retried.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 299
+        },
+        {
+          "name": "TokenBucket",
+          "decl": "struct",
+          "sig": "gc struct TokenBucket",
+          "doc": "rate tokens a second, holding at most burst: allow takes one.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 335
+        },
+        {
+          "name": "token_bucket",
+          "decl": "fn",
+          "sig": "fn token_bucket(rate_per_sec: float, burst: int) -> TokenBucket",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 343
+        },
+        {
+          "name": "take",
+          "decl": "fn",
+          "sig": "fn take(tb: TokenBucket) -> bool",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 350
+        },
+        {
+          "name": "take_n",
+          "decl": "fn",
+          "sig": "fn take_n(tb: TokenBucket, n: int) -> bool",
+          "doc": "Takes n tokens if there are that many; none otherwise.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 355
+        },
+        {
+          "name": "wait_ns",
+          "decl": "fn",
+          "sig": "fn wait_ns(tb: TokenBucket, n: int) -> int",
+          "doc": "Nanoseconds until n tokens are there (0 if they are now; -1 if n is more than the bucket holds).",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 370
+        },
+        {
+          "name": "Gcra",
+          "decl": "struct",
+          "sig": "gc struct Gcra",
+          "doc": "The generic cell rate algorithm, per key: `rate` a second per key with bursts of `burst`, one int of state per key (its theoretical arrival time) -- the limiter Redis's redis-cell and many gateways use. Keys idle long enough to be full again are dropped as the map grows, so memory follows the keys active within one burst period.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 398
+        },
+        {
+          "name": "Decision",
+          "decl": "struct",
+          "sig": "struct Decision",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 406
+        },
+        {
+          "name": "gcra",
+          "decl": "fn",
+          "sig": "fn gcra(rate_per_sec: float, burst: int) -> Gcra",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 414
+        },
+        {
+          "name": "gcra_allow",
+          "decl": "fn",
+          "sig": "fn gcra_allow(g: Gcra, key: str) -> Decision",
+          "doc": "",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 426
+        },
+        {
+          "name": "gcra_keys",
+          "decl": "fn",
+          "sig": "fn gcra_keys(g: Gcra) -> int",
+          "doc": "Keys tracked now.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 450
+        },
+        {
+          "name": "hedge",
+          "decl": "fn",
+          "sig": "fn hedge[A, T](f: fn(A, until) -> result[T, str], a: A, delay_ns: int, deadline: until) -> result[T, str]",
+          "doc": "Calls f(a, deadline); if it has not answered within delay_ns, calls it again and takes whichever answers first with a success. Cuts tail latency for idempotent reads at the cost of at most one extra call. The slower call is not stopped: it runs to its end in the background and its answer is dropped.",
+          "file": "stdlib/resilience/resilience.sl",
+          "line": 504
+        }
+      ]
+    },
     "s3": {
       "name": "s3",
       "kind": "source",
@@ -12703,6 +15301,146 @@
         }
       ]
     },
+    "singleflight": {
+      "name": "singleflight",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Flight",
+          "decl": "struct",
+          "sig": "gc struct Flight[T]",
+          "doc": "",
+          "file": "stdlib/singleflight/singleflight.sl",
+          "line": 18
+        },
+        {
+          "name": "Group",
+          "decl": "struct",
+          "sig": "gc struct Group[A, T]",
+          "doc": "",
+          "file": "stdlib/singleflight/singleflight.sl",
+          "line": 25
+        },
+        {
+          "name": "group",
+          "decl": "fn",
+          "sig": "fn group[A, T](f: fn(A, until) -> result[T, str]) -> Group[A, T]",
+          "doc": "A group whose calls run f.",
+          "file": "stdlib/singleflight/singleflight.sl",
+          "line": 34
+        },
+        {
+          "name": "call",
+          "decl": "fn",
+          "sig": "fn call[A, T](g: Group[A, T], key: str, a: A, deadline: until) -> result[T, str]",
+          "doc": "g's function on a, once per key at a time; concurrent calls for the key share its result.",
+          "file": "stdlib/singleflight/singleflight.sl",
+          "line": 41
+        },
+        {
+          "name": "forget",
+          "decl": "fn",
+          "sig": "fn forget[A, T](g: Group[A, T], key: str)",
+          "doc": "Makes the next call for key run anew, even while one is in flight (those already waiting still get the running call's answer).",
+          "file": "stdlib/singleflight/singleflight.sl",
+          "line": 79
+        },
+        {
+          "name": "runs",
+          "decl": "fn",
+          "sig": "fn runs[A, T](g: Group[A, T]) -> int",
+          "doc": "Calls that ran f, and calls that shared another's run.",
+          "file": "stdlib/singleflight/singleflight.sl",
+          "line": 88
+        },
+        {
+          "name": "joins",
+          "decl": "fn",
+          "sig": "fn joins[A, T](g: Group[A, T]) -> int",
+          "doc": "",
+          "file": "stdlib/singleflight/singleflight.sl",
+          "line": 95
+        }
+      ]
+    },
+    "smtp": {
+      "name": "smtp",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Config",
+          "decl": "struct",
+          "sig": "struct Config",
+          "doc": "",
+          "file": "stdlib/smtp/smtp.sl",
+          "line": 25
+        },
+        {
+          "name": "config",
+          "decl": "fn",
+          "sig": "fn config(host: str, port: int) -> Config",
+          "doc": "",
+          "file": "stdlib/smtp/smtp.sl",
+          "line": 37
+        },
+        {
+          "name": "Attachment",
+          "decl": "struct",
+          "sig": "struct Attachment",
+          "doc": "",
+          "file": "stdlib/smtp/smtp.sl",
+          "line": 44
+        },
+        {
+          "name": "Message",
+          "decl": "struct",
+          "sig": "struct Message",
+          "doc": "",
+          "file": "stdlib/smtp/smtp.sl",
+          "line": 50
+        },
+        {
+          "name": "message",
+          "decl": "fn",
+          "sig": "fn message(from: str, to: [str], subject: str) -> Message",
+          "doc": "",
+          "file": "stdlib/smtp/smtp.sl",
+          "line": 63
+        },
+        {
+          "name": "send",
+          "decl": "fn",
+          "sig": "fn send(cfg: Config, m: Message, deadline: until) -> result[bool, str]",
+          "doc": "Sends m: one SMTP transaction to every recipient in to, cc and bcc.",
+          "file": "stdlib/smtp/smtp.sl",
+          "line": 72
+        },
+        {
+          "name": "build",
+          "decl": "fn",
+          "sig": "fn build(m: Message) -> bytes",
+          "doc": "The RFC 5322 message for m, with CRLF line endings: what send puts after DATA (before dot-stuffing).",
+          "file": "stdlib/smtp/smtp.sl",
+          "line": 84
+        },
+        {
+          "name": "send_raw",
+          "decl": "fn",
+          "sig": "fn send_raw(cfg: Config, from: str, rcpts: [str], data: bytes, deadline: until) -> result[bool, str]",
+          "doc": "",
+          "file": "stdlib/smtp/smtp.sl",
+          "line": 131
+        },
+        {
+          "name": "address_of",
+          "decl": "fn",
+          "sig": "fn address_of(a: str) -> str",
+          "doc": "The bare address of \"Name <addr>\" or \"addr\".",
+          "file": "stdlib/smtp/smtp.sl",
+          "line": 416
+        }
+      ]
+    },
     "sort": {
       "name": "sort",
       "kind": "source",
@@ -12981,6 +15719,84 @@
           "ret": "bytes",
           "tls": false,
           "sig": "sql.col_blob(rawptr, int) -> bytes"
+        }
+      ]
+    },
+    "sse": {
+      "name": "sse",
+      "kind": "source",
+      "items": [
+        {
+          "name": "head",
+          "decl": "fn",
+          "sig": "fn head() -> bytes",
+          "doc": "The response head for an event stream.",
+          "file": "stdlib/sse/sse.sl",
+          "line": 23
+        },
+        {
+          "name": "event",
+          "decl": "fn",
+          "sig": "fn event(kind: str, data: str, id: str) -> bytes",
+          "doc": "One event. kind \"\" means the default \"message\"; id \"\" sends none. Data with newlines becomes several data lines, as the format requires.",
+          "file": "stdlib/sse/sse.sl",
+          "line": 31
+        },
+        {
+          "name": "comment",
+          "decl": "fn",
+          "sig": "fn comment(text: str) -> bytes",
+          "doc": "A comment line, which clients ignore: a heartbeat that keeps idle proxies from closing the stream.",
+          "file": "stdlib/sse/sse.sl",
+          "line": 46
+        },
+        {
+          "name": "retry",
+          "decl": "fn",
+          "sig": "fn retry(ms: int) -> bytes",
+          "doc": "Tells the client how long to wait before reconnecting.",
+          "file": "stdlib/sse/sse.sl",
+          "line": 51
+        },
+        {
+          "name": "Event",
+          "decl": "struct",
+          "sig": "struct Event",
+          "doc": "",
+          "file": "stdlib/sse/sse.sl",
+          "line": 55
+        },
+        {
+          "name": "Parser",
+          "decl": "struct",
+          "sig": "gc struct Parser",
+          "doc": "",
+          "file": "stdlib/sse/sse.sl",
+          "line": 61
+        },
+        {
+          "name": "parser",
+          "decl": "fn",
+          "sig": "fn parser() -> Parser",
+          "doc": "",
+          "file": "stdlib/sse/sse.sl",
+          "line": 71
+        },
+        {
+          "name": "feed",
+          "decl": "fn",
+          "sig": "fn feed(p: Parser, chunk: bytes) -> [Event]",
+          "doc": "The events completed by the next bytes of the stream.",
+          "file": "stdlib/sse/sse.sl",
+          "line": 78
+        },
+        {
+          "name": "retry_ms",
+          "decl": "fn",
+          "sig": "fn retry_ms(p: Parser) -> int",
+          "doc": "The reconnection delay the server last asked for, or -1.",
+          "file": "stdlib/sse/sse.sl",
+          "line": 103
         }
       ]
     },
@@ -14656,6 +17472,252 @@
           "doc": "The document decoded into T, as json.decode would decode its JSON.",
           "file": "stdlib/toml/toml.sl",
           "line": 101
+        }
+      ]
+    },
+    "trace": {
+      "name": "trace",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Options",
+          "decl": "struct",
+          "sig": "struct Options",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 31
+        },
+        {
+          "name": "options",
+          "decl": "fn",
+          "sig": "fn options() -> Options",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 43
+        },
+        {
+          "name": "SpanContext",
+          "decl": "struct",
+          "sig": "struct SpanContext",
+          "doc": "A span's place in a trace, as traceparent carries it.",
+          "file": "stdlib/trace/trace.sl",
+          "line": 49
+        },
+        {
+          "name": "Attr",
+          "decl": "struct",
+          "sig": "struct Attr",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 55
+        },
+        {
+          "name": "Span",
+          "decl": "struct",
+          "sig": "gc struct Span",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 64
+        },
+        {
+          "name": "Tracer",
+          "decl": "struct",
+          "sig": "gc struct Tracer",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 78
+        },
+        {
+          "name": "KIND_INTERNAL",
+          "decl": "let",
+          "sig": "let KIND_INTERNAL = 1;",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 93
+        },
+        {
+          "name": "KIND_SERVER",
+          "decl": "let",
+          "sig": "let KIND_SERVER = 2;",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 94
+        },
+        {
+          "name": "KIND_CLIENT",
+          "decl": "let",
+          "sig": "let KIND_CLIENT = 3;",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 95
+        },
+        {
+          "name": "KIND_PRODUCER",
+          "decl": "let",
+          "sig": "let KIND_PRODUCER = 4;",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 96
+        },
+        {
+          "name": "KIND_CONSUMER",
+          "decl": "let",
+          "sig": "let KIND_CONSUMER = 5;",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 97
+        },
+        {
+          "name": "tracer",
+          "decl": "fn",
+          "sig": "fn tracer(service: str, endpoint: str) -> Tracer",
+          "doc": "A tracer for one service. endpoint is the collector's base URL (spans go to endpoint + \"/v1/traces\"); \"\" exports nothing and keeps ended spans for drain(), for tests.",
+          "file": "stdlib/trace/trace.sl",
+          "line": 107
+        },
+        {
+          "name": "tracer_with",
+          "decl": "fn",
+          "sig": "fn tracer_with(service: str, endpoint: str, o: Options) -> Tracer",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 111
+        },
+        {
+          "name": "start",
+          "decl": "fn",
+          "sig": "fn start(t: Tracer, name: str, parent: opt[SpanContext]) -> Span",
+          "doc": "A new span: a child of parent (a caller's context, from parse_traceparent) or the root of a new trace.",
+          "file": "stdlib/trace/trace.sl",
+          "line": 132
+        },
+        {
+          "name": "child",
+          "decl": "fn",
+          "sig": "fn child(s: Span, name: str) -> Span",
+          "doc": "A span inside s, in the same trace.",
+          "file": "stdlib/trace/trace.sl",
+          "line": 158
+        },
+        {
+          "name": "set_kind",
+          "decl": "fn",
+          "sig": "fn set_kind(s: Span, kind: int)",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 164
+        },
+        {
+          "name": "set_str",
+          "decl": "fn",
+          "sig": "fn set_str(s: Span, key: str, v: str)",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 166
+        },
+        {
+          "name": "set_int",
+          "decl": "fn",
+          "sig": "fn set_int(s: Span, key: str, v: int)",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 171
+        },
+        {
+          "name": "set_float",
+          "decl": "fn",
+          "sig": "fn set_float(s: Span, key: str, v: float)",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 176
+        },
+        {
+          "name": "set_bool",
+          "decl": "fn",
+          "sig": "fn set_bool(s: Span, key: str, v: bool)",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 181
+        },
+        {
+          "name": "set_error",
+          "decl": "fn",
+          "sig": "fn set_error(s: Span, msg: str)",
+          "doc": "Marks the span failed, with a message.",
+          "file": "stdlib/trace/trace.sl",
+          "line": 187
+        },
+        {
+          "name": "set_ok",
+          "decl": "fn",
+          "sig": "fn set_ok(s: Span)",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 192
+        },
+        {
+          "name": "end",
+          "decl": "fn",
+          "sig": "fn end(s: Span)",
+          "doc": "Ends the span and queues it for export. A second end does nothing.",
+          "file": "stdlib/trace/trace.sl",
+          "line": 197
+        },
+        {
+          "name": "traceparent",
+          "decl": "fn",
+          "sig": "fn traceparent(s: Span) -> str",
+          "doc": "The traceparent header value for s: \"00-<trace>-<span>-<flags>\".",
+          "file": "stdlib/trace/trace.sl",
+          "line": 219
+        },
+        {
+          "name": "parse_traceparent",
+          "decl": "fn",
+          "sig": "fn parse_traceparent(h: str) -> opt[SpanContext]",
+          "doc": "The caller's span context from a traceparent header; none if the value is missing or malformed (start a new trace then).",
+          "file": "stdlib/trace/trace.sl",
+          "line": 227
+        },
+        {
+          "name": "flush",
+          "decl": "fn",
+          "sig": "fn flush(t: Tracer, deadline: until) -> result[int, str]",
+          "doc": "Sends every queued span now. Returns how many were sent.",
+          "file": "stdlib/trace/trace.sl",
+          "line": 248
+        },
+        {
+          "name": "drain",
+          "decl": "fn",
+          "sig": "fn drain(t: Tracer) -> [Span]",
+          "doc": "Ended spans not yet sent, removed from the queue: for a tracer with no endpoint, as in tests.",
+          "file": "stdlib/trace/trace.sl",
+          "line": 291
+        },
+        {
+          "name": "Counts",
+          "decl": "struct",
+          "sig": "struct Counts",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 300
+        },
+        {
+          "name": "counts",
+          "decl": "fn",
+          "sig": "fn counts(t: Tracer) -> Counts",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 308
+        },
+        {
+          "name": "encode_otlp",
+          "decl": "fn",
+          "sig": "fn encode_otlp(t: Tracer, spans: [Span]) -> bytes",
+          "doc": "The OTLP/HTTP JSON body for spans (ExportTraceServiceRequest).",
+          "file": "stdlib/trace/trace.sl",
+          "line": 317
         }
       ]
     },
