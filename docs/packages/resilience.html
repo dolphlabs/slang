@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>resilience — slang</title>
+<meta name="description" content="Package resilience.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<meta name="theme-color" content="#07080a" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f7f5ef" media="(prefers-color-scheme: light)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="resilience">
+<meta property="og:description" content="Package resilience.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://slang.dolphlabs.com/packages/resilience">
+<meta property="og:image" content="https://slang.dolphlabs.com/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The slang rabbit mark beside the slang wordmark">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://slang.dolphlabs.com/packages/resilience">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/resilience.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preload" href="../fonts/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<script>
+/* Before first paint, so a saved light theme never flashes dark. */
+try { var t = localStorage.getItem("slang-theme");
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="nav" data-nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="../" aria-label="slang home">
+      <img class="logo-on-dark" src="../brand/slang-logo-light.svg" alt="" width="77" height="32">
+      <img class="logo-on-light" src="../brand/slang-logo-dark.svg" alt="" width="77" height="32">
+    </a>
+    <nav class="nav-links" aria-label="Primary"><a href="../guide/">Guide</a><a href="../concurrency/">Concurrency</a><a class="active" href="../packages/">Packages</a><a href="../bench/">Benchmarks</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a></nav>
+    <div class="nav-actions">
+      <button class="search-btn" type="button" data-search aria-label="Search the docs" aria-keyshortcuts="Control+K Meta+K /">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <span class="search-label">Search</span>
+        <kbd class="search-kbd">/</kbd>
+      </button>
+      <button class="icon-btn" type="button" data-theme-toggle aria-label="Switch to light theme" title="Switch theme">
+        <svg class="i-sun" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <svg class="i-moon" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.6A8 8 0 1 1 9.4 4a6.4 6.4 0 0 0 10.6 10.6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      </button>
+      <a class="btn btn-ghost btn-sm nav-gh" href="https://github.com/dolphlabs/slang">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span>GitHub</span>
+      </a>
+      <a class="btn btn-light btn-sm nav-start" href="../#install">Get started</a>
+      <button class="nav-menu" type="button" aria-expanded="false" aria-controls="nav-sheet" aria-label="Menu" data-menu>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6h14M3 10h14M3 14h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </div>
+  <nav class="nav-sheet" id="nav-sheet" aria-label="Menu" hidden><a href="../guide/">Guide</a><a href="../concurrency/">Concurrency</a><a class="active" href="../packages/">Packages</a><a href="../bench/">Benchmarks</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="https://github.com/dolphlabs/slang">GitHub</a></nav>
+</header>
+
+<div class="docbar">
+  <button class="docbar-btn" type="button" aria-expanded="false" aria-controls="sidebar" data-drawer>
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    <span>Docs</span>
+  </button>
+  <span class="docbar-here">resilience</span>
+</div>
+
+<div class="docs">
+  <aside class="sidebar" id="sidebar" aria-label="Documentation">
+    <div class="sidebar-inner"><div class="side-group"><p class="side-title">Start</p><ul class="side-list"><li><a href="../">Overview</a></li><li><a href="../guide/">Guide</a></li><li><a href="../guide/data">Data types</a></li><li><a href="../guide/errors">Errors</a></li><li><a href="../guide/functions">Functions</a></li></ul></div><div class="side-group"><p class="side-title">Build</p><ul class="side-list"><li><a href="../concurrency/">Concurrency</a></li><li><a href="../testing/">Testing</a></li><li><a href="../packages/">Packages</a></li><li><a href="../interop/">C interop</a></li></ul></div><div class="side-group"><p class="side-title">Under the hood</p><ul class="side-list"><li><a href="../internals/">Internals</a></li><li><a href="../bench/">Benchmarks</a></li><li><a href="../limitations/">Limitations</a></li></ul></div><details class="side-group side-pkgs" open><summary>Packages<span class="side-count">54</span></summary><ul class="side-list"><li><a href="../packages/builder">builder</a></li><li><a href="../packages/byteutil">byteutil</a></li><li><a href="../packages/cache">cache</a></li><li><a href="../packages/compress">compress</a></li><li><a href="../packages/crypto">crypto</a></li><li><a href="../packages/csv">csv</a></li><li><a href="../packages/decimal">decimal</a></li><li><a href="../packages/encoding">encoding</a></li><li><a href="../packages/flags">flags</a></li><li><a href="../packages/fs">fs</a></li><li><a href="../packages/http">http</a></li><li><a href="../packages/http2">http2</a></li><li><a href="../packages/httpc">httpc</a></li><li><a href="../packages/io">io</a></li><li><a href="../packages/json">json</a></li><li><a href="../packages/log">log</a></li><li><a href="../packages/math">math</a></li><li><a href="../packages/math/big">math/big</a></li><li><a href="../packages/math/finance">math/finance</a></li><li><a href="../packages/math/geo">math/geo</a></li><li><a href="../packages/math/interp">math/interp</a></li><li><a href="../packages/math/numtheory">math/numtheory</a></li><li><a href="../packages/math/optimize">math/optimize</a></li><li><a href="../packages/math/shard">math/shard</a></li><li><a href="../packages/math/sketch">math/sketch</a></li><li><a href="../packages/math/stats">math/stats</a></li><li><a href="../packages/math/vec">math/vec</a></li><li><a href="../packages/mysql">mysql</a></li><li><a href="../packages/nats">nats</a></li><li><a href="../packages/net">net</a></li><li><a href="../packages/os">os</a></li><li><a href="../packages/pg">pg</a></li><li><a href="../packages/proc">proc</a></li><li><a href="../packages/rand">rand</a></li><li><a href="../packages/redis">redis</a></li><li><a href="../packages/regex">regex</a></li><li><a href="../packages/resilience" aria-current="page">resilience</a></li><li><a href="../packages/s3">s3</a></li><li><a href="../packages/sigv4">sigv4</a></li><li><a href="../packages/sort">sort</a></li><li><a href="../packages/sql">sql</a></li><li><a href="../packages/strings">strings</a></li><li><a href="../packages/tar">tar</a></li><li><a href="../packages/template">template</a></li><li><a href="../packages/time">time</a></li><li><a href="../packages/timez">timez</a></li><li><a href="../packages/toml">toml</a></li><li><a href="../packages/unicode">unicode</a></li><li><a href="../packages/uuid">uuid</a></li><li><a href="../packages/websocket">websocket</a></li><li><a href="../packages/x509">x509</a></li><li><a href="../packages/xml">xml</a></li><li><a href="../packages/yaml">yaml</a></li><li><a href="../packages/zip">zip</a></li></ul></details></div>
+  </aside>
+  <div class="drawer-scrim" data-scrim hidden></div>
+
+  <main id="main" class="doc-main">
+
+    <article class="content">
+      <nav class="crumbs" aria-label="Breadcrumb"><a href="../">Docs</a><span class="sep" aria-hidden="true">/</span><a href="../packages/">Packages</a><span class="sep" aria-hidden="true">/</span><span aria-current="page">resilience</span></nav>
+      <header class="page-head">
+        <h1>resilience</h1>
+        <p class="tagline">Package resilience.</p>
+        <p class="agentline">
+          <a href="../packages/resilience.md">Markdown</a><span aria-hidden="true">·</span><a href="../llms.txt">llms.txt</a><span aria-hidden="true">·</span><a href="../api.json">api.json</a>
+        </p>
+      </header>
+<p>Ways to fail well under load, each safe to share between tasks.</p>
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;resilience&quot;</span>;
+
+<span class="k">let</span> b = resilience.<span class="f">breaker</span>(resilience.<span class="f">breaker_options</span>());
+<span class="k">if</span> resilience.<span class="f">allow</span>(b) {
+    <span class="k">let</span> r = <span class="f">call_upstream</span>();
+    <span class="k">let</span> worked = <span class="k">false</span>;
+    <span class="k">if</span> <span class="k">let</span> _v = r { worked = <span class="k">true</span>; }
+    resilience.<span class="f">record</span>(b, worked);
+}
+
+<span class="k">let</span> per_ip = resilience.<span class="f">gcra</span>(<span class="n">100.0</span>, <span class="n">20</span>);        <span class="c">// 100/s per key, bursts of 20</span>
+<span class="k">let</span> d = resilience.<span class="f">gcra_allow</span>(per_ip, client_ip);
+<span class="k">if</span> !d.allowed { /* <span class="n">429</span> with Retry-After from d.retry_after_ns */ }</code></pre></div>
+<ul><li><strong>Circuit breaker:</strong> <code>breaker(o)</code>, <code>allow</code>, <code>record</code>. It opens when failures reach <code>failure_ratio</code> of the last <code>window</code> calls (once <code>min_calls</code> have been seen), refuses calls for <code>open_ns</code>, then lets <code>probes</code> trial calls through: that many successes close it, one failure opens it again. <code>breaker_state</code> and <code>trips</code> report it.</li><li><strong>Bulkhead:</strong> <code>bulkhead(limit)</code>, <code>try_enter</code>, <code>leave</code>. At most <code>limit</code> calls at once; the rest are turned away at once rather than queued.</li><li><strong>Retry budget:</strong> <code>retry_budget(ratio, min_per_sec)</code>. Each request <code>deposit</code>s <code>ratio</code> of a retry and each retry (<code>can_retry</code>) takes one, so retries cannot multiply the load in an outage.</li><li><strong>Retry:</strong> <code>retry(f, arg, options, budget, rng, deadline)</code> calls <code>f(arg, deadline)</code> with full-jitter backoff until it succeeds, the attempts run out, the budget refuses, or the deadline passes. An error starting with <code>&quot;permanent:&quot;</code> is not retried.</li><li><strong>Token bucket:</strong> <code>token_bucket(rate, burst)</code>, <code>take</code>, <code>take_n</code>, <code>wait_ns</code>.</li><li><strong>Keyed GCRA:</strong> <code>gcra(rate, burst)</code> and <code>gcra_allow(g, key)</code> give a <code>Decision</code> with <code>allowed</code>, <code>retry_after_ns</code> and <code>remaining</code>. State is one int per key; keys whose bucket is full again are dropped as the map grows, so memory follows the keys active within one burst period.</li><li><strong>Hedging:</strong> <code>hedge(f, arg, delay_ns, deadline)</code> calls <code>f</code> and, if it has not answered within <code>delay_ns</code>, calls it again and returns the first success. Use it for idempotent reads only. The slower call runs to its end in the background.</li></ul>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="breakeroptions"><div class="api-sig"><code><span class="k">struct</span> BreakerOptions</code> <span class="src">stdlib/resilience/resilience.sl:27</span><a class="anchor" href="#breakeroptions">#</a></div></div><div class="api-item" id="breaker-options"><div class="api-sig"><code><span class="k">fn</span> <span class="f">breaker_options</span>() -&gt; BreakerOptions</code> <span class="src">stdlib/resilience/resilience.sl:41</span><a class="anchor" href="#breaker-options">#</a></div></div><div class="api-item" id="breaker"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Breaker</code> <span class="src">stdlib/resilience/resilience.sl:46</span><a class="anchor" href="#breaker">#</a></div></div><div class="api-item" id="breaker"><div class="api-sig"><code><span class="k">fn</span> <span class="f">breaker</span>(o: BreakerOptions) -&gt; Breaker</code> <span class="src">stdlib/resilience/resilience.sl:64</span><a class="anchor" href="#breaker">#</a></div></div><div class="api-item" id="allow"><div class="api-sig"><code><span class="k">fn</span> <span class="f">allow</span>(b: Breaker) -&gt; <span class="t">bool</span></code> <span class="src">stdlib/resilience/resilience.sl:78</span><a class="anchor" href="#allow">#</a></div><p class="api-doc">Whether a call may go ahead. Every allowed call must be followed by record(b, ok) once it finishes.</p></div><div class="api-item" id="record"><div class="api-sig"><code><span class="k">fn</span> <span class="f">record</span>(b: Breaker, <span class="b">ok</span>: <span class="t">bool</span>)</code> <span class="src">stdlib/resilience/resilience.sl:101</span><a class="anchor" href="#record">#</a></div><p class="api-doc">The outcome of a call allow let through.</p></div><div class="api-item" id="breaker-state"><div class="api-sig"><code><span class="k">fn</span> <span class="f">breaker_state</span>(b: Breaker) -&gt; <span class="t">str</span></code> <span class="src">stdlib/resilience/resilience.sl:135</span><a class="anchor" href="#breaker-state">#</a></div><p class="api-doc">&quot;closed&quot;, &quot;open&quot; or &quot;half-open&quot;.</p></div><div class="api-item" id="trips"><div class="api-sig"><code><span class="k">fn</span> <span class="f">trips</span>(b: Breaker) -&gt; <span class="t">int</span></code> <span class="src">stdlib/resilience/resilience.sl:146</span><a class="anchor" href="#trips">#</a></div><p class="api-doc">How many times the breaker has opened.</p></div><div class="api-item" id="bulkhead"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Bulkhead</code> <span class="src">stdlib/resilience/resilience.sl:171</span><a class="anchor" href="#bulkhead">#</a></div><p class="api-doc">At most <code>limit</code> calls at once; the rest are turned away at once rather than queued, so one slow dependency cannot take every task with it.</p></div><div class="api-item" id="bulkhead"><div class="api-sig"><code><span class="k">fn</span> <span class="f">bulkhead</span>(limit: <span class="t">int</span>) -&gt; Bulkhead</code> <span class="src">stdlib/resilience/resilience.sl:178</span><a class="anchor" href="#bulkhead">#</a></div></div><div class="api-item" id="try-enter"><div class="api-sig"><code><span class="k">fn</span> <span class="f">try_enter</span>(b: Bulkhead) -&gt; <span class="t">bool</span></code> <span class="src">stdlib/resilience/resilience.sl:185</span><a class="anchor" href="#try-enter">#</a></div><p class="api-doc">Takes a place if there is one. Every true must be followed by leave.</p></div><div class="api-item" id="leave"><div class="api-sig"><code><span class="k">fn</span> <span class="f">leave</span>(b: Bulkhead)</code> <span class="src">stdlib/resilience/resilience.sl:197</span><a class="anchor" href="#leave">#</a></div></div><div class="api-item" id="bulkhead-active"><div class="api-sig"><code><span class="k">fn</span> <span class="f">bulkhead_active</span>(b: Bulkhead) -&gt; <span class="t">int</span></code> <span class="src">stdlib/resilience/resilience.sl:204</span><a class="anchor" href="#bulkhead-active">#</a></div><p class="api-doc">Calls in progress, and calls turned away so far.</p></div><div class="api-item" id="bulkhead-rejected"><div class="api-sig"><code><span class="k">fn</span> <span class="f">bulkhead_rejected</span>(b: Bulkhead) -&gt; <span class="t">int</span></code> <span class="src">stdlib/resilience/resilience.sl:211</span><a class="anchor" href="#bulkhead-rejected">#</a></div></div><div class="api-item" id="retrybudget"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> RetryBudget</code> <span class="src">stdlib/resilience/resilience.sl:224</span><a class="anchor" href="#retrybudget">#</a></div><p class="api-doc">Retries as a share of requests (Finagle&#x27;s and gRPC&#x27;s budget): each request deposits <code>ratio</code> of a retry, each retry withdraws one, and <code>min_per_sec</code> retries a second are always allowed. During an outage retries cannot multiply the load beyond 1 + ratio.</p></div><div class="api-item" id="retry-budget"><div class="api-sig"><code><span class="k">fn</span> <span class="f">retry_budget</span>(ratio: <span class="t">float</span>, min_per_sec: <span class="t">int</span>) -&gt; RetryBudget</code> <span class="src">stdlib/resilience/resilience.sl:236</span><a class="anchor" href="#retry-budget">#</a></div></div><div class="api-item" id="deposit"><div class="api-sig"><code><span class="k">fn</span> <span class="f">deposit</span>(b: RetryBudget)</code> <span class="src">stdlib/resilience/resilience.sl:247</span><a class="anchor" href="#deposit">#</a></div><p class="api-doc">An original request (not a retry) was made.</p></div><div class="api-item" id="can-retry"><div class="api-sig"><code><span class="k">fn</span> <span class="f">can_retry</span>(b: RetryBudget) -&gt; <span class="t">bool</span></code> <span class="src">stdlib/resilience/resilience.sl:255</span><a class="anchor" href="#can-retry">#</a></div><p class="api-doc">Whether a retry may go ahead; takes one from the budget if so.</p></div><div class="api-item" id="retryoptions"><div class="api-sig"><code><span class="k">struct</span> RetryOptions</code> <span class="src">stdlib/resilience/resilience.sl:281</span><a class="anchor" href="#retryoptions">#</a></div></div><div class="api-item" id="retry-options"><div class="api-sig"><code><span class="k">fn</span> <span class="f">retry_options</span>() -&gt; RetryOptions</code> <span class="src">stdlib/resilience/resilience.sl:290</span><a class="anchor" href="#retry-options">#</a></div></div><div class="api-item" id="retry"><div class="api-sig"><code><span class="k">fn</span> retry[A, T](f: <span class="k">fn</span>(A, <span class="t">until</span>) -&gt; <span class="t">result</span>[T, <span class="t">str</span>], a: A, o: RetryOptions, budget: RetryBudget, r: rand.Rng, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[T, <span class="t">str</span>]</code> <span class="src">stdlib/resilience/resilience.sl:299</span><a class="anchor" href="#retry">#</a></div><p class="api-doc">Calls f(a, deadline) until it succeeds, the attempts run out, the budget refuses a retry, or the deadline passes. The last error is returned. budget may be shared by every caller of one dependency. Errors reported as &quot;permanent: ...&quot; by f are not retried.</p></div><div class="api-item" id="tokenbucket"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> TokenBucket</code> <span class="src">stdlib/resilience/resilience.sl:335</span><a class="anchor" href="#tokenbucket">#</a></div><p class="api-doc">rate tokens a second, holding at most burst: allow takes one.</p></div><div class="api-item" id="token-bucket"><div class="api-sig"><code><span class="k">fn</span> <span class="f">token_bucket</span>(rate_per_sec: <span class="t">float</span>, burst: <span class="t">int</span>) -&gt; TokenBucket</code> <span class="src">stdlib/resilience/resilience.sl:343</span><a class="anchor" href="#token-bucket">#</a></div></div><div class="api-item" id="take"><div class="api-sig"><code><span class="k">fn</span> <span class="f">take</span>(tb: TokenBucket) -&gt; <span class="t">bool</span></code> <span class="src">stdlib/resilience/resilience.sl:350</span><a class="anchor" href="#take">#</a></div></div><div class="api-item" id="take-n"><div class="api-sig"><code><span class="k">fn</span> <span class="f">take_n</span>(tb: TokenBucket, n: <span class="t">int</span>) -&gt; <span class="t">bool</span></code> <span class="src">stdlib/resilience/resilience.sl:355</span><a class="anchor" href="#take-n">#</a></div><p class="api-doc">Takes n tokens if there are that many; none otherwise.</p></div><div class="api-item" id="wait-ns"><div class="api-sig"><code><span class="k">fn</span> <span class="f">wait_ns</span>(tb: TokenBucket, n: <span class="t">int</span>) -&gt; <span class="t">int</span></code> <span class="src">stdlib/resilience/resilience.sl:370</span><a class="anchor" href="#wait-ns">#</a></div><p class="api-doc">Nanoseconds until n tokens are there (0 if they are now; -1 if n is more than the bucket holds).</p></div><div class="api-item" id="gcra"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Gcra</code> <span class="src">stdlib/resilience/resilience.sl:398</span><a class="anchor" href="#gcra">#</a></div><p class="api-doc">The generic cell rate algorithm, per key: <code>rate</code> a second per key with bursts of <code>burst</code>, one int of state per key (its theoretical arrival time) -- the limiter Redis&#x27;s redis-cell and many gateways use. Keys idle long enough to be full again are dropped as the map grows, so memory follows the keys active within one burst period.</p></div><div class="api-item" id="decision"><div class="api-sig"><code><span class="k">struct</span> Decision</code> <span class="src">stdlib/resilience/resilience.sl:406</span><a class="anchor" href="#decision">#</a></div></div><div class="api-item" id="gcra"><div class="api-sig"><code><span class="k">fn</span> <span class="f">gcra</span>(rate_per_sec: <span class="t">float</span>, burst: <span class="t">int</span>) -&gt; Gcra</code> <span class="src">stdlib/resilience/resilience.sl:414</span><a class="anchor" href="#gcra">#</a></div></div><div class="api-item" id="gcra-allow"><div class="api-sig"><code><span class="k">fn</span> <span class="f">gcra_allow</span>(g: Gcra, key: <span class="t">str</span>) -&gt; Decision</code> <span class="src">stdlib/resilience/resilience.sl:426</span><a class="anchor" href="#gcra-allow">#</a></div></div><div class="api-item" id="gcra-keys"><div class="api-sig"><code><span class="k">fn</span> <span class="f">gcra_keys</span>(g: Gcra) -&gt; <span class="t">int</span></code> <span class="src">stdlib/resilience/resilience.sl:450</span><a class="anchor" href="#gcra-keys">#</a></div><p class="api-doc">Keys tracked now.</p></div><div class="api-item" id="hedge"><div class="api-sig"><code><span class="k">fn</span> hedge[A, T](f: <span class="k">fn</span>(A, <span class="t">until</span>) -&gt; <span class="t">result</span>[T, <span class="t">str</span>], a: A, delay_ns: <span class="t">int</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[T, <span class="t">str</span>]</code> <span class="src">stdlib/resilience/resilience.sl:504</span><a class="anchor" href="#hedge">#</a></div><p class="api-doc">Calls f(a, deadline); if it has not answered within delay_ns, calls it again and takes whichever answers first with a success. Cuts tail latency for idempotent reads at the cost of at most one extra call. The slower call is not stopped: it runs to its end in the background and its answer is dropped.</p></div></div>
+<nav class="pager" aria-label="Previous and next"><a class="prev" href="../packages/regex"><span class="dir">Previous</span><span class="name">regex</span></a><a class="next" href="../packages/s3"><span class="dir">Next</span><span class="name">s3</span></a></nav>
+    </article>
+  </main>
+
+  <aside class="toc" aria-label="On this page">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+
+<footer class="foot">
+  <div class="foot-inner">
+    <a class="foot-logo" href="../" aria-label="slang home">
+      <img class="logo-on-dark" src="../brand/slang-icon-light.svg" alt="" width="28" height="28">
+      <img class="logo-on-light" src="../brand/slang-icon-dark.svg" alt="" width="28" height="28">
+    </a>
+    <p class="foot-by">Built and maintained by
+      <a href="https://dolphlabs.com" rel="noopener">Dolphlabs</a> · Dolph Tech Limited</p>
+    <p class="foot-note">Generated from the repository by <code>www/build.py</code>:
+      the guide from <code>README.md</code>, the API from the compiler's own
+      signature tables and the <code>pub</code> declarations in
+      <code>stdlib/</code>. Nothing here is written twice.</p>
+  </div>
+</footer>
+
+<div class="palette" id="palette" role="dialog" aria-modal="true" aria-label="Search the docs" hidden>
+  <div class="palette-box">
+    <div class="palette-field">
+      <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <input id="palette-input" type="search" placeholder="Search pages, packages and functions" autocomplete="off" spellcheck="false"
+             role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list">
+      <kbd>esc</kbd>
+    </div>
+    <div class="palette-list" id="palette-list" role="listbox" aria-label="Results"></div>
+    <div class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+
+<script src="../app.js" defer></script>
+</body>
+</html>
