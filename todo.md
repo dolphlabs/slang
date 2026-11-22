@@ -1,5 +1,13 @@
 # todo
 
+- [x] **`acme` (2026-11-22, feat/acme).** An RFC 8555 client: ES256 JWS
+  with replay nonces (badNonce retried), account registration, orders,
+  http-01 challenges served from a store the program's handler answers,
+  finalize with a CSR for a fresh P-256 key, chain download and
+  renew_due. Tested end to end against an in-test CA that verifies the
+  JWS signatures and the key authorization. Carries a copy of oidc's
+  small JSON reader; one shared package is a follow-up.
+
 - [x] **A leaf function could hold a safepoint (found 2026-11-21 when
   math/big's tests crashed after merging dev; fixed in
   fix/leaf-body-no-safepoint).** Callers skip their bracket around a call
