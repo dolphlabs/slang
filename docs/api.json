@@ -15283,6 +15283,252 @@
         }
       ]
     },
+    "trace": {
+      "name": "trace",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Options",
+          "decl": "struct",
+          "sig": "struct Options",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 31
+        },
+        {
+          "name": "options",
+          "decl": "fn",
+          "sig": "fn options() -> Options",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 43
+        },
+        {
+          "name": "SpanContext",
+          "decl": "struct",
+          "sig": "struct SpanContext",
+          "doc": "A span's place in a trace, as traceparent carries it.",
+          "file": "stdlib/trace/trace.sl",
+          "line": 49
+        },
+        {
+          "name": "Attr",
+          "decl": "struct",
+          "sig": "struct Attr",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 55
+        },
+        {
+          "name": "Span",
+          "decl": "struct",
+          "sig": "gc struct Span",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 64
+        },
+        {
+          "name": "Tracer",
+          "decl": "struct",
+          "sig": "gc struct Tracer",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 78
+        },
+        {
+          "name": "KIND_INTERNAL",
+          "decl": "let",
+          "sig": "let KIND_INTERNAL = 1;",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 93
+        },
+        {
+          "name": "KIND_SERVER",
+          "decl": "let",
+          "sig": "let KIND_SERVER = 2;",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 94
+        },
+        {
+          "name": "KIND_CLIENT",
+          "decl": "let",
+          "sig": "let KIND_CLIENT = 3;",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 95
+        },
+        {
+          "name": "KIND_PRODUCER",
+          "decl": "let",
+          "sig": "let KIND_PRODUCER = 4;",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 96
+        },
+        {
+          "name": "KIND_CONSUMER",
+          "decl": "let",
+          "sig": "let KIND_CONSUMER = 5;",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 97
+        },
+        {
+          "name": "tracer",
+          "decl": "fn",
+          "sig": "fn tracer(service: str, endpoint: str) -> Tracer",
+          "doc": "A tracer for one service. endpoint is the collector's base URL (spans go to endpoint + \"/v1/traces\"); \"\" exports nothing and keeps ended spans for drain(), for tests.",
+          "file": "stdlib/trace/trace.sl",
+          "line": 107
+        },
+        {
+          "name": "tracer_with",
+          "decl": "fn",
+          "sig": "fn tracer_with(service: str, endpoint: str, o: Options) -> Tracer",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 111
+        },
+        {
+          "name": "start",
+          "decl": "fn",
+          "sig": "fn start(t: Tracer, name: str, parent: opt[SpanContext]) -> Span",
+          "doc": "A new span: a child of parent (a caller's context, from parse_traceparent) or the root of a new trace.",
+          "file": "stdlib/trace/trace.sl",
+          "line": 132
+        },
+        {
+          "name": "child",
+          "decl": "fn",
+          "sig": "fn child(s: Span, name: str) -> Span",
+          "doc": "A span inside s, in the same trace.",
+          "file": "stdlib/trace/trace.sl",
+          "line": 158
+        },
+        {
+          "name": "set_kind",
+          "decl": "fn",
+          "sig": "fn set_kind(s: Span, kind: int)",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 164
+        },
+        {
+          "name": "set_str",
+          "decl": "fn",
+          "sig": "fn set_str(s: Span, key: str, v: str)",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 166
+        },
+        {
+          "name": "set_int",
+          "decl": "fn",
+          "sig": "fn set_int(s: Span, key: str, v: int)",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 171
+        },
+        {
+          "name": "set_float",
+          "decl": "fn",
+          "sig": "fn set_float(s: Span, key: str, v: float)",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 176
+        },
+        {
+          "name": "set_bool",
+          "decl": "fn",
+          "sig": "fn set_bool(s: Span, key: str, v: bool)",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 181
+        },
+        {
+          "name": "set_error",
+          "decl": "fn",
+          "sig": "fn set_error(s: Span, msg: str)",
+          "doc": "Marks the span failed, with a message.",
+          "file": "stdlib/trace/trace.sl",
+          "line": 187
+        },
+        {
+          "name": "set_ok",
+          "decl": "fn",
+          "sig": "fn set_ok(s: Span)",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 192
+        },
+        {
+          "name": "end",
+          "decl": "fn",
+          "sig": "fn end(s: Span)",
+          "doc": "Ends the span and queues it for export. A second end does nothing.",
+          "file": "stdlib/trace/trace.sl",
+          "line": 197
+        },
+        {
+          "name": "traceparent",
+          "decl": "fn",
+          "sig": "fn traceparent(s: Span) -> str",
+          "doc": "The traceparent header value for s: \"00-<trace>-<span>-<flags>\".",
+          "file": "stdlib/trace/trace.sl",
+          "line": 219
+        },
+        {
+          "name": "parse_traceparent",
+          "decl": "fn",
+          "sig": "fn parse_traceparent(h: str) -> opt[SpanContext]",
+          "doc": "The caller's span context from a traceparent header; none if the value is missing or malformed (start a new trace then).",
+          "file": "stdlib/trace/trace.sl",
+          "line": 227
+        },
+        {
+          "name": "flush",
+          "decl": "fn",
+          "sig": "fn flush(t: Tracer, deadline: until) -> result[int, str]",
+          "doc": "Sends every queued span now. Returns how many were sent.",
+          "file": "stdlib/trace/trace.sl",
+          "line": 248
+        },
+        {
+          "name": "drain",
+          "decl": "fn",
+          "sig": "fn drain(t: Tracer) -> [Span]",
+          "doc": "Ended spans not yet sent, removed from the queue: for a tracer with no endpoint, as in tests.",
+          "file": "stdlib/trace/trace.sl",
+          "line": 291
+        },
+        {
+          "name": "Counts",
+          "decl": "struct",
+          "sig": "struct Counts",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 300
+        },
+        {
+          "name": "counts",
+          "decl": "fn",
+          "sig": "fn counts(t: Tracer) -> Counts",
+          "doc": "",
+          "file": "stdlib/trace/trace.sl",
+          "line": 308
+        },
+        {
+          "name": "encode_otlp",
+          "decl": "fn",
+          "sig": "fn encode_otlp(t: Tracer, spans: [Span]) -> bytes",
+          "doc": "The OTLP/HTTP JSON body for spans (ExportTraceServiceRequest).",
+          "file": "stdlib/trace/trace.sl",
+          "line": 317
+        }
+      ]
+    },
     "unicode": {
       "name": "unicode",
       "kind": "native",

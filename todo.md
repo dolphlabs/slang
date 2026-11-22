@@ -1,5 +1,11 @@
 # todo
 
+- [x] **`trace` (2026-11-22, feat/trace).** Spans with W3C traceparent
+  parsing and formatting, head sampling, and batched export to an
+  OpenTelemetry collector over OTLP/HTTP with JSON bodies (protobuf
+  bodies can follow the protobuf codec item). The queue is bounded and
+  drops are counted. Automatic propagation inside `http`/`httpc` is a
+  follow-up; programs pass the header themselves for now.
 - [x] **`metrics` (2026-11-22, feat/metrics).** Prometheus counters,
   gauges and histograms with labels and the text exposition format.
   Histograms are classic fixed-bucket rather than `math/sketch` (as the
