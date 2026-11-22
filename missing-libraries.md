@@ -47,9 +47,9 @@ standalone repo under `slangpackages/`.
 - [x] **Generic connection pool** (stdlib): health checks, max idle/open,
   idle and lifetime limits, fair FIFO waiting, wait-time metrics. The
   speed audit found Slang's pool-acquisition p99 above Go's on every route. PR #604 (open).
-- [ ] **Failure handling** (stdlib): circuit breaker, bulkhead, retry with a
+- [x] **Failure handling** (stdlib): circuit breaker, bulkhead, retry with a
   retry budget (over `rand.backoff`), token-bucket and GCRA rate limiters,
-  and request hedging.
+  and request hedging. PR #611 (open).
 - [ ] **Singleflight** (stdlib): concurrent identical calls share one
   execution, for cache stampedes.
 
