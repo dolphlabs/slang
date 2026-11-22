@@ -100,7 +100,7 @@ standalone repo under `slangpackages/`.
 
 ## 6. Data and integrations
 
-- [ ] **SMTP client and MIME** (stdlib): STARTTLS, AUTH, multipart mail.
+- [x] **SMTP client and MIME** (stdlib): STARTTLS, AUTH, multipart mail. PR #609 (open).
 - [ ] **ClickHouse client** (package).
   Status: needs a new slangpackages repository; not created without approval.
 - [ ] **OpenSearch / Elasticsearch client** (package).
