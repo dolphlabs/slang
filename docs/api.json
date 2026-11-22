@@ -445,6 +445,124 @@
         }
       ]
     },
+    "context": {
+      "name": "context",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Context",
+          "decl": "struct",
+          "sig": "gc struct Context",
+          "doc": "",
+          "file": "stdlib/context/context.sl",
+          "line": 31
+        },
+        {
+          "name": "background",
+          "decl": "fn",
+          "sig": "fn background() -> Context",
+          "doc": "The root: no deadline, never cancelled unless cancel is called on it.",
+          "file": "stdlib/context/context.sl",
+          "line": 43
+        },
+        {
+          "name": "with_cancel",
+          "decl": "fn",
+          "sig": "fn with_cancel(parent: Context) -> Context",
+          "doc": "A child of parent that can be cancelled on its own.",
+          "file": "stdlib/context/context.sl",
+          "line": 51
+        },
+        {
+          "name": "with_timeout",
+          "decl": "fn",
+          "sig": "fn with_timeout(parent: Context, ns: int) -> Context",
+          "doc": "A child of parent that ends ns nanoseconds from now (or at the parent's deadline, if that is sooner). ns <= 0 is already past.",
+          "file": "stdlib/context/context.sl",
+          "line": 57
+        },
+        {
+          "name": "with_deadline_at",
+          "decl": "fn",
+          "sig": "fn with_deadline_at(parent: Context, mono_ns: int) -> Context",
+          "doc": "A child of parent that ends at mono_ns, an absolute time.mono() value.",
+          "file": "stdlib/context/context.sl",
+          "line": 66
+        },
+        {
+          "name": "cancel",
+          "decl": "fn",
+          "sig": "fn cancel(c: Context, reason: str)",
+          "doc": "Cancels c and every context made from it, with reason as cause's text. The first cancel wins; later ones do nothing.",
+          "file": "stdlib/context/context.sl",
+          "line": 72
+        },
+        {
+          "name": "release",
+          "decl": "fn",
+          "sig": "fn release(c: Context)",
+          "doc": "Cancel with the reason \"released\": for a context whose work finished.",
+          "file": "stdlib/context/context.sl",
+          "line": 105
+        },
+        {
+          "name": "is_done",
+          "decl": "fn",
+          "sig": "fn is_done(c: Context) -> bool",
+          "doc": "Whether c was cancelled or its deadline has passed.",
+          "file": "stdlib/context/context.sl",
+          "line": 110
+        },
+        {
+          "name": "cause",
+          "decl": "fn",
+          "sig": "fn cause(c: Context) -> opt[str]",
+          "doc": "Why c is done: the cancel reason, or \"deadline exceeded\"; none while it is live.",
+          "file": "stdlib/context/context.sl",
+          "line": 119
+        },
+        {
+          "name": "deadline",
+          "decl": "fn",
+          "sig": "fn deadline(c: Context) -> until",
+          "doc": "c's deadline as an `until` for any API that waits: never for a context without one, already passed for a cancelled one.",
+          "file": "stdlib/context/context.sl",
+          "line": 136
+        },
+        {
+          "name": "remaining",
+          "decl": "fn",
+          "sig": "fn remaining(c: Context) -> int",
+          "doc": "Nanoseconds until c's deadline (0 once passed or cancelled), or -1 for a context without one: for a timeout another protocol carries, such as a database statement timeout.",
+          "file": "stdlib/context/context.sl",
+          "line": 153
+        },
+        {
+          "name": "watch_fd",
+          "decl": "fn",
+          "sig": "fn watch_fd(c: Context, fd: i32)",
+          "doc": "Closes fd when c is cancelled, waking any task parked on it with \"closed\". If c is already cancelled, closes it now. Call unwatch_fd before closing fd yourself, so a later cancel cannot close a reused fd number.",
+          "file": "stdlib/context/context.sl",
+          "line": 175
+        },
+        {
+          "name": "unwatch_fd",
+          "decl": "fn",
+          "sig": "fn unwatch_fd(c: Context, fd: i32) -> bool",
+          "doc": "Stops watching fd. Returns false if c had already been cancelled (and fd closed by it).",
+          "file": "stdlib/context/context.sl",
+          "line": 188
+        },
+        {
+          "name": "done_chan",
+          "decl": "fn",
+          "sig": "fn done_chan(c: Context) -> chan[bool]",
+          "doc": "A channel that is closed when c is cancelled, for a `select` that should also end on cancellation. Nothing is ever sent on it.",
+          "file": "stdlib/context/context.sl",
+          "line": 207
+        }
+      ]
+    },
     "crypto": {
       "name": "crypto",
       "kind": "native",
@@ -10669,6 +10787,100 @@
           "doc": "Closes every idle connection and fails every waiting acquire. Connections in use are closed as they are released; acquire fails from now on.",
           "file": "stdlib/pg/pg.sl",
           "line": 3111
+        }
+      ]
+    },
+    "pool": {
+      "name": "pool",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Options",
+          "decl": "struct",
+          "sig": "struct Options",
+          "doc": "",
+          "file": "stdlib/pool/pool.sl",
+          "line": 28
+        },
+        {
+          "name": "options",
+          "decl": "fn",
+          "sig": "fn options(max_open: int) -> Options",
+          "doc": "Options with the defaults above for a pool of max_open connections.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 46
+        },
+        {
+          "name": "Lease",
+          "decl": "struct",
+          "sig": "gc struct Lease[T]",
+          "doc": "One connection, on loan from acquire until release or discard.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 53
+        },
+        {
+          "name": "Stats",
+          "decl": "struct",
+          "sig": "struct Stats",
+          "doc": "",
+          "file": "stdlib/pool/pool.sl",
+          "line": 60
+        },
+        {
+          "name": "Pool",
+          "decl": "struct",
+          "sig": "gc struct Pool[T]",
+          "doc": "",
+          "file": "stdlib/pool/pool.sl",
+          "line": 80
+        },
+        {
+          "name": "new",
+          "decl": "fn",
+          "sig": "fn new[T](o: Options, dial: fn(until) -> result[T, str], close: fn(T), probe: fn(T) -> bool) -> Pool[T]",
+          "doc": "A pool that opens nothing until the first acquire. dial makes a connection by a deadline, close ends one, probe says whether an idle one still works (one cheap check, such as net.idle_alive).",
+          "file": "stdlib/pool/pool.sl",
+          "line": 102
+        },
+        {
+          "name": "acquire",
+          "decl": "fn",
+          "sig": "fn acquire[T](p: Pool[T], deadline: until) -> result[Lease[T], str]",
+          "doc": "A connection for the caller's use until release or discard: an idle one, a new one if fewer than max_open are open, or else the next one released, in arrival order. \"timeout\" if deadline passes first, \"pool is closed\" after close.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 123
+        },
+        {
+          "name": "release",
+          "decl": "fn",
+          "sig": "fn release[T](p: Pool[T], l: Lease[T])",
+          "doc": "Gives a connection back: to the task that has waited longest, else to the idle list. Closed instead once past max_lifetime, beyond max_idle, or after close. Releasing a lease twice panics: two tasks would then share one connection.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 200
+        },
+        {
+          "name": "discard",
+          "decl": "fn",
+          "sig": "fn discard[T](p: Pool[T], l: Lease[T])",
+          "doc": "Closes a connection the caller found broken, freeing its slot for the next waiter to dial.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 234
+        },
+        {
+          "name": "close",
+          "decl": "fn",
+          "sig": "fn close[T](p: Pool[T])",
+          "doc": "Closes every idle connection and fails every waiting acquire; connections in use are closed as they come back. acquire fails from now on.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 251
+        },
+        {
+          "name": "stats",
+          "decl": "fn",
+          "sig": "fn stats[T](p: Pool[T]) -> Stats",
+          "doc": "A snapshot of the counters.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 268
         }
       ]
     },
