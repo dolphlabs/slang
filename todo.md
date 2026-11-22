@@ -1,5 +1,11 @@
 # todo
 
+- [x] **`crdt` (2026-11-22, feat/crdt).** G-counter, PN-counter, an
+  optimized OR-set (no tombstones; checked to stay bounded through 1000
+  adds and removes) and an LWW-map with tombstone compaction. Merges are
+  checked for order, repetition and convergence of three replicas under
+  400 seeded random operations.
+
 - [x] **A leaf function could hold a safepoint (found 2026-11-21 when
   math/big's tests crashed after merging dev; fixed in
   fix/leaf-body-no-safepoint).** Callers skip their bracket around a call
