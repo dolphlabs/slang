@@ -11980,6 +11980,92 @@
         }
       ]
     },
+    "otp": {
+      "name": "otp",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Options",
+          "decl": "struct",
+          "sig": "struct Options",
+          "doc": "",
+          "file": "stdlib/otp/otp.sl",
+          "line": 26
+        },
+        {
+          "name": "totp_options",
+          "decl": "fn",
+          "sig": "fn totp_options() -> Options",
+          "doc": "",
+          "file": "stdlib/otp/otp.sl",
+          "line": 33
+        },
+        {
+          "name": "new_secret",
+          "decl": "fn",
+          "sig": "fn new_secret() -> result[bytes, str]",
+          "doc": "A random 160-bit secret, the size RFC 4226 recommends for SHA-1.",
+          "file": "stdlib/otp/otp.sl",
+          "line": 38
+        },
+        {
+          "name": "hotp",
+          "decl": "fn",
+          "sig": "fn hotp(secret: bytes, counter: int, o: Options) -> str",
+          "doc": "The HOTP code for a counter value.",
+          "file": "stdlib/otp/otp.sl",
+          "line": 43
+        },
+        {
+          "name": "totp",
+          "decl": "fn",
+          "sig": "fn totp(secret: bytes, unix_secs: int, o: Options) -> str",
+          "doc": "The TOTP code for a moment, in unix seconds.",
+          "file": "stdlib/otp/otp.sl",
+          "line": 58
+        },
+        {
+          "name": "step_of",
+          "decl": "fn",
+          "sig": "fn step_of(unix_secs: int, o: Options) -> int",
+          "doc": "The time step (counter) a TOTP code at unix_secs belongs to.",
+          "file": "stdlib/otp/otp.sl",
+          "line": 63
+        },
+        {
+          "name": "verify_totp",
+          "decl": "fn",
+          "sig": "fn verify_totp(secret: bytes, code: str, unix_secs: int, o: Options) -> opt[int]",
+          "doc": "The time step code is valid for, within o.skew steps of unix_secs; none if it matches none. Compare the step with the last one accepted for the user to refuse replays.",
+          "file": "stdlib/otp/otp.sl",
+          "line": 73
+        },
+        {
+          "name": "verify_hotp",
+          "decl": "fn",
+          "sig": "fn verify_hotp(secret: bytes, code: str, counter: int, window: int, o: Options) -> opt[int]",
+          "doc": "The counter value code matches, looking ahead up to window counters from counter (HOTP resynchronisation); none if none does.",
+          "file": "stdlib/otp/otp.sl",
+          "line": 93
+        },
+        {
+          "name": "uri",
+          "decl": "fn",
+          "sig": "fn uri(secret: bytes, issuer: str, account: str, o: Options) -> str",
+          "doc": "The otpauth:// URI authenticator apps read (usually from a QR code).",
+          "file": "stdlib/otp/otp.sl",
+          "line": 105
+        },
+        {
+          "name": "parse_secret",
+          "decl": "fn",
+          "sig": "fn parse_secret(b32: str) -> result[bytes, str]",
+          "doc": "A secret typed or pasted as base32 (spaces, lower case and missing padding allowed), as apps display it.",
+          "file": "stdlib/otp/otp.sl",
+          "line": 116
+        }
+      ]
+    },
     "outbox": {
       "name": "outbox",
       "kind": "source",

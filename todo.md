@@ -1,5 +1,9 @@
 # todo
 
+- [x] **`otp` (2026-11-22, feat/otp).** HOTP and TOTP over SHA-1/256/512
+  with replay-safe verification (the matched step is returned), base32
+  secrets and otpauth URIs. HMAC-SHA1 is built on `crypto.sha1` in slang,
+  as `crypto` has none. Checked against RFC 4226 and RFC 6238 vectors.
 - [x] **`idempotency` and `outbox` (2026-11-22, feat/outbox-idempotency).**
   Redis idempotency keys (atomic reservation, replay, in-progress and
   fingerprint-mismatch states, owner-checked complete/abandon) and a
