@@ -12460,6 +12460,84 @@
         }
       ]
     },
+    "smtp": {
+      "name": "smtp",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Config",
+          "decl": "struct",
+          "sig": "struct Config",
+          "doc": "",
+          "file": "stdlib/smtp/smtp.sl",
+          "line": 25
+        },
+        {
+          "name": "config",
+          "decl": "fn",
+          "sig": "fn config(host: str, port: int) -> Config",
+          "doc": "",
+          "file": "stdlib/smtp/smtp.sl",
+          "line": 37
+        },
+        {
+          "name": "Attachment",
+          "decl": "struct",
+          "sig": "struct Attachment",
+          "doc": "",
+          "file": "stdlib/smtp/smtp.sl",
+          "line": 44
+        },
+        {
+          "name": "Message",
+          "decl": "struct",
+          "sig": "struct Message",
+          "doc": "",
+          "file": "stdlib/smtp/smtp.sl",
+          "line": 50
+        },
+        {
+          "name": "message",
+          "decl": "fn",
+          "sig": "fn message(from: str, to: [str], subject: str) -> Message",
+          "doc": "",
+          "file": "stdlib/smtp/smtp.sl",
+          "line": 63
+        },
+        {
+          "name": "send",
+          "decl": "fn",
+          "sig": "fn send(cfg: Config, m: Message, deadline: until) -> result[bool, str]",
+          "doc": "Sends m: one SMTP transaction to every recipient in to, cc and bcc.",
+          "file": "stdlib/smtp/smtp.sl",
+          "line": 72
+        },
+        {
+          "name": "build",
+          "decl": "fn",
+          "sig": "fn build(m: Message) -> bytes",
+          "doc": "The RFC 5322 message for m, with CRLF line endings: what send puts after DATA (before dot-stuffing).",
+          "file": "stdlib/smtp/smtp.sl",
+          "line": 84
+        },
+        {
+          "name": "send_raw",
+          "decl": "fn",
+          "sig": "fn send_raw(cfg: Config, from: str, rcpts: [str], data: bytes, deadline: until) -> result[bool, str]",
+          "doc": "",
+          "file": "stdlib/smtp/smtp.sl",
+          "line": 131
+        },
+        {
+          "name": "address_of",
+          "decl": "fn",
+          "sig": "fn address_of(a: str) -> str",
+          "doc": "The bare address of \"Name <addr>\" or \"addr\".",
+          "file": "stdlib/smtp/smtp.sl",
+          "line": 416
+        }
+      ]
+    },
     "sort": {
       "name": "sort",
       "kind": "source",
