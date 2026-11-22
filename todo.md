@@ -1,5 +1,10 @@
 # todo
 
+- [x] **`envelope` (2026-11-22, feat/envelope).** Envelope encryption over
+  `crypto.seal`: a random data key per value wrapped by a named
+  key-encryption key, aad binding, key rotation with `rewrap` (the value
+  is unchanged) and a versioned layout.
+
 - [x] **A leaf function could hold a safepoint (found 2026-11-21 when
   math/big's tests crashed after merging dev; fixed in
   fix/leaf-body-no-safepoint).** Callers skip their bracket around a call
