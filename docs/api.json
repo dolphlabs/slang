@@ -2426,6 +2426,30 @@
           "doc": "",
           "file": "stdlib/http/http.sl",
           "line": 3511
+        },
+        {
+          "name": "ByteRange",
+          "decl": "struct",
+          "sig": "struct ByteRange",
+          "doc": "One satisfiable byte range, both ends included.",
+          "file": "stdlib/http/http.sl",
+          "line": 3519
+        },
+        {
+          "name": "parse_range",
+          "decl": "fn",
+          "sig": "fn parse_range(header: str, size: int) -> result[[ByteRange], str]",
+          "doc": "The ranges a Range header asks for, out of a resource of `size` bytes: \"bytes=0-499\", \"bytes=500-\", \"bytes=-500\" (the last 500), or several separated by commas. Ranges past the end are clipped; ranges that cannot be satisfied are dropped. ok([])       no Range header worth honouring: send the whole thing (200) ok(ranges)   send 206 with these err(...)     every range unsatisfiable: send 416 with Content-Range: bytes */size A malformed header is treated as absent (ok([])), as RFC 9110 lets a server ignore it. More than 16 ranges are refused as absent too: many small overlapping ranges are a known amplification trick.",
+          "file": "stdlib/http/http.sl",
+          "line": 3535
+        },
+        {
+          "name": "content_range",
+          "decl": "fn",
+          "sig": "fn content_range(r: ByteRange, size: int) -> str",
+          "doc": "The Content-Range value for one range of a size-byte resource: \"bytes 0-499/1234\".",
+          "file": "stdlib/http/http.sl",
+          "line": 3584
         }
       ]
     },
@@ -8911,6 +8935,164 @@
         }
       ]
     },
+    "multipart": {
+      "name": "multipart",
+      "kind": "source",
+      "items": [
+        {
+          "name": "PART",
+          "decl": "let",
+          "sig": "let PART = 0; // a part starts: see Event.part",
+          "doc": "",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 30
+        },
+        {
+          "name": "DATA",
+          "decl": "let",
+          "sig": "let DATA = 1; // part data: Event.data",
+          "doc": "",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 31
+        },
+        {
+          "name": "PART_END",
+          "decl": "let",
+          "sig": "let PART_END = 2; // the current part is complete",
+          "doc": "",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 32
+        },
+        {
+          "name": "DONE",
+          "decl": "let",
+          "sig": "let DONE = 3; // the closing boundary: nothing more",
+          "doc": "",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 33
+        },
+        {
+          "name": "Part",
+          "decl": "struct",
+          "sig": "struct Part",
+          "doc": "",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 35
+        },
+        {
+          "name": "Event",
+          "decl": "struct",
+          "sig": "struct Event",
+          "doc": "",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 42
+        },
+        {
+          "name": "Parser",
+          "decl": "struct",
+          "sig": "gc struct Parser",
+          "doc": "",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 48
+        },
+        {
+          "name": "boundary_of",
+          "decl": "fn",
+          "sig": "fn boundary_of(content_type: str) -> opt[str]",
+          "doc": "The boundary parameter of a multipart Content-Type.",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 64
+        },
+        {
+          "name": "parser",
+          "decl": "fn",
+          "sig": "fn parser(boundary: str) -> Parser",
+          "doc": "",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 80
+        },
+        {
+          "name": "feed",
+          "decl": "fn",
+          "sig": "fn feed(p: Parser, chunk: bytes) -> result[[Event], str]",
+          "doc": "Takes the next bytes of the body; returns what they completed.",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 88
+        },
+        {
+          "name": "finish",
+          "decl": "fn",
+          "sig": "fn finish(p: Parser) -> result[bool, str]",
+          "doc": "The body has ended: an error unless the closing boundary was seen.",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 166
+        },
+        {
+          "name": "Item",
+          "decl": "struct",
+          "sig": "struct Item",
+          "doc": "A whole part with its data, from parse.",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 172
+        },
+        {
+          "name": "parse",
+          "decl": "fn",
+          "sig": "fn parse(body: bytes, boundary: str) -> result[[Item], str]",
+          "doc": "Every part of a body already in memory.",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 178
+        },
+        {
+          "name": "Body",
+          "decl": "struct",
+          "sig": "gc struct Body",
+          "doc": "",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 197
+        },
+        {
+          "name": "body",
+          "decl": "fn",
+          "sig": "fn body(boundary: str) -> Body",
+          "doc": "A body to fill with fields and files; boundary should be random and not occur in the data (a 32-character hex token from a CSPRNG does).",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 204
+        },
+        {
+          "name": "add_field",
+          "decl": "fn",
+          "sig": "fn add_field(w: Body, name: str, value: str)",
+          "doc": "",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 208
+        },
+        {
+          "name": "add_file",
+          "decl": "fn",
+          "sig": "fn add_file(w: Body, name: str, filename: str, content_type: str, data: bytes)",
+          "doc": "",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 215
+        },
+        {
+          "name": "close",
+          "decl": "fn",
+          "sig": "fn close(w: Body) -> bytes",
+          "doc": "The finished body and the Content-Type to send it with.",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 227
+        },
+        {
+          "name": "content_type",
+          "decl": "fn",
+          "sig": "fn content_type(w: Body) -> str",
+          "doc": "",
+          "file": "stdlib/multipart/multipart.sl",
+          "line": 232
+        }
+      ]
+    },
     "mysql": {
       "name": "mysql",
       "kind": "source",
@@ -12738,6 +12920,84 @@
           "ret": "bytes",
           "tls": false,
           "sig": "sql.col_blob(rawptr, int) -> bytes"
+        }
+      ]
+    },
+    "sse": {
+      "name": "sse",
+      "kind": "source",
+      "items": [
+        {
+          "name": "head",
+          "decl": "fn",
+          "sig": "fn head() -> bytes",
+          "doc": "The response head for an event stream.",
+          "file": "stdlib/sse/sse.sl",
+          "line": 23
+        },
+        {
+          "name": "event",
+          "decl": "fn",
+          "sig": "fn event(kind: str, data: str, id: str) -> bytes",
+          "doc": "One event. kind \"\" means the default \"message\"; id \"\" sends none. Data with newlines becomes several data lines, as the format requires.",
+          "file": "stdlib/sse/sse.sl",
+          "line": 31
+        },
+        {
+          "name": "comment",
+          "decl": "fn",
+          "sig": "fn comment(text: str) -> bytes",
+          "doc": "A comment line, which clients ignore: a heartbeat that keeps idle proxies from closing the stream.",
+          "file": "stdlib/sse/sse.sl",
+          "line": 46
+        },
+        {
+          "name": "retry",
+          "decl": "fn",
+          "sig": "fn retry(ms: int) -> bytes",
+          "doc": "Tells the client how long to wait before reconnecting.",
+          "file": "stdlib/sse/sse.sl",
+          "line": 51
+        },
+        {
+          "name": "Event",
+          "decl": "struct",
+          "sig": "struct Event",
+          "doc": "",
+          "file": "stdlib/sse/sse.sl",
+          "line": 55
+        },
+        {
+          "name": "Parser",
+          "decl": "struct",
+          "sig": "gc struct Parser",
+          "doc": "",
+          "file": "stdlib/sse/sse.sl",
+          "line": 61
+        },
+        {
+          "name": "parser",
+          "decl": "fn",
+          "sig": "fn parser() -> Parser",
+          "doc": "",
+          "file": "stdlib/sse/sse.sl",
+          "line": 71
+        },
+        {
+          "name": "feed",
+          "decl": "fn",
+          "sig": "fn feed(p: Parser, chunk: bytes) -> [Event]",
+          "doc": "The events completed by the next bytes of the stream.",
+          "file": "stdlib/sse/sse.sl",
+          "line": 78
+        },
+        {
+          "name": "retry_ms",
+          "decl": "fn",
+          "sig": "fn retry_ms(p: Parser) -> int",
+          "doc": "The reconnection delay the server last asked for, or -1.",
+          "file": "stdlib/sse/sse.sl",
+          "line": 103
         }
       ]
     },
