@@ -95,8 +95,8 @@ standalone repo under `slangpackages/`.
 - [x] **TOTP and HOTP** (stdlib): RFC 6238/4226 codes and checks with skew. PR #617 (open).
 - [ ] **WebAuthn / passkeys** (package): registration and assertion.
   Status: waits for the CBOR PR (feat/msgpack-cbor) to merge.
-- [ ] **Envelope encryption** (stdlib, `crypto`): AES-GCM data keys wrapped
-  by a key-encryption key, with key ids for rotation.
+- [x] **Envelope encryption** (stdlib, `crypto`): AES-GCM data keys wrapped
+  by a key-encryption key, with key ids for rotation. PR #618 (open).
 
 ## 6. Data and integrations
 
