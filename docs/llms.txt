@@ -51,6 +51,7 @@ Start with /llms-small.txt: the whole language on one page, about 3k tokens, eno
 - [net](packages/net.md): Package net.
 - [os](packages/os.md): Package os.
 - [pg](packages/pg.md): Package pg.
+- [pool](packages/pool.md): Package pool.
 - [proc](packages/proc.md): Package proc.
 - [rand](packages/rand.md): Package rand.
 - [redis](packages/redis.md): Package redis.

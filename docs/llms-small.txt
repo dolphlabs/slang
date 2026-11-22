@@ -268,6 +268,7 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg mysql redis regex
 strings unicode encoding compress math math/vec decimal rand builder byteutil flags sort
+uuid http http2 httpc websocket pool template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 uuid http http2 httpc websocket context template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 `xml.parse(text)` gives the root `xml.Node` (`name`, `local`, `ns`, `attrs`, `children`);
 `n.find("a/b")`, `n.find_all(path)`, `n.child_text("link")`, `n.attr("id")`; DOCTYPE refused.
@@ -470,6 +471,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - net: listen, port, accept, dial, dial_until, lookup_srv_until, lookup_txt_until, dial_unix, listen_unix, send, recv, recv_until (+34 more)
 - os: setenv, unsetenv, environ, pid, hostname, tmpdir, exists, is_dir, is_file, size, mtime, mtime_ns (+6 more)
 - pg: rows_as, parse_url, sqlstate, scram_client_final, connect, connect_config, close, usable, in_transaction, server_param, arg_text, arg_int (+39 more)
+- pool: options, new, acquire, release, discard, close, stats
 - proc: shutdown_requested, active_tasks, wait_idle, getenv, args, cwd, spawn, kill, wait
 - rand: new, from_os, fork, next_u64, below, between, unit, chance, shuffle, pick, backoff, jitter (+2 more)
 - redis: encode, decode, decode_at, slot, parse_url, connect_config, connect, do, close, usable, ping, echo (+132 more)

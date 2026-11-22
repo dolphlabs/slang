@@ -1,5 +1,10 @@
 # todo
 
+- [x] **`pool` (2026-11-22, feat/pool).** A generic connection pool,
+  `pool.Pool[T]` over `dial`/`close`/`probe` functions, with the FIFO
+  hand-off, slot passing, waiter reuse and reaper of `pg`'s pool plus
+  `max_idle`, `max_lifetime` and wait statistics. `pg` and `mysql` keep
+  their own pools for now; moving them onto this one is a follow-up.
 - [x] **`context` (2026-11-22, feat/context).** Cancellation trees with
   deadlines: `with_cancel`, `with_timeout`, `with_deadline_at`,
   `cancel`/`release`, `cause`, `deadline` (an `until`), `remaining`,
