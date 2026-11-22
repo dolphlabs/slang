@@ -405,6 +405,8 @@ the session, one OpenSSL call at a time. A link splits once.
 
 ### `net.nonblock(int) -> result[bool,str]`
 
+### `net.inherited() -> [i32]`
+
 ### `net.send_file(int, int, int, int) -> result[int,str]`
 
 ### `net.send_file_until(int, int, int, int, until) -> result[int,str]`

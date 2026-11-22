@@ -498,14 +498,14 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - multipart: boundary_of, parser, feed, finish, parse, body, add_field, add_file, close, content_type
 - mysql: parse_url, connect, connect_config, close, usable, in_transaction, server_version, connection_id, last_insert_id, affected_rows, ping, sqlstate (+32 more)
 - nats: options, with_creds, connect, connect_with, publish, publish_reply, publish_headers, publish_full, subscribe, queue_subscribe, next_msg, unsubscribe (+15 more)
-- net: listen, port, accept, dial, dial_until, lookup_srv_until, lookup_txt_until, dial_unix, listen_unix, send, recv, recv_until (+41 more)
+- net: listen, port, accept, dial, dial_until, lookup_srv_until, lookup_txt_until, dial_unix, listen_unix, send, recv, recv_until (+42 more)
 - oidc: discover, client, pkce, random_token, authorize_url, exchange, refresh, client_credentials, verify_id_token
 - os: setenv, unsetenv, environ, pid, hostname, tmpdir, exists, is_dir, is_file, size, mtime, mtime_ns (+6 more)
 - otp: totp_options, new_secret, hotp, totp, step_of, verify_totp, verify_hotp, uri, parse_secret
 - outbox: schema, add, relay, pending
 - pg: rows_as, parse_url, sqlstate, scram_client_final, connect, connect_config, close, usable, in_transaction, server_param, arg_text, arg_int (+39 more)
 - pool: options, new, acquire, release, discard, close, stats
-- proc: shutdown_requested, active_tasks, wait_idle, getenv, args, cwd, spawn, runtime_stats, kill, wait
+- proc: shutdown_requested, active_tasks, wait_idle, wait_idle_until, getenv, args, cwd, spawn, spawn_fds, runtime_stats, kill, wait
 - protobuf: writer, finish, size, write_int64, write_uint64, write_sint, write_bool, write_fixed64, write_fixed32, write_double, write_float, write_bytes (+21 more)
 - proxyproto: parse, read_until, encode_v1, encode_v2
 - rand: new, from_os, fork, next_u64, below, between, unit, chance, shuffle, pick, backoff, jitter (+2 more)
