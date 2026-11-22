@@ -10637,6 +10637,60 @@
         }
       ]
     },
+    "proxyproto": {
+      "name": "proxyproto",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Tlv",
+          "decl": "struct",
+          "sig": "struct Tlv",
+          "doc": "One v2 type-length-value field: ALPN (0x01), authority (0x02, the TLS SNI name), unique id (0x05), SSL details (0x20), AWS VPC endpoint id (0xEA), and so on.",
+          "file": "stdlib/proxyproto/proxyproto.sl",
+          "line": 28
+        },
+        {
+          "name": "Header",
+          "decl": "struct",
+          "sig": "struct Header",
+          "doc": "",
+          "file": "stdlib/proxyproto/proxyproto.sl",
+          "line": 33
+        },
+        {
+          "name": "parse",
+          "decl": "fn",
+          "sig": "fn parse(b: bytes) -> result[opt[Header], str]",
+          "doc": "The header at the start of b; none if b is a prefix of one and more bytes are needed; an error if b does not start with a PROXY header.",
+          "file": "stdlib/proxyproto/proxyproto.sl",
+          "line": 53
+        },
+        {
+          "name": "read_until",
+          "decl": "fn",
+          "sig": "fn read_until(fd: i32, deadline: until) -> result[Header, str]",
+          "doc": "Reads a header from fd, then stops: whatever arrived after it is in rest. Bounded by deadline as a whole.",
+          "file": "stdlib/proxyproto/proxyproto.sl",
+          "line": 68
+        },
+        {
+          "name": "encode_v1",
+          "decl": "fn",
+          "sig": "fn encode_v1(h: Header) -> bytes",
+          "doc": "The v1 (text) header for h: \"PROXY TCP4 1.2.3.4 5.6.7.8 1111 443\\r\\n\". Families other than tcp4 and tcp6 are sent as UNKNOWN.",
+          "file": "stdlib/proxyproto/proxyproto.sl",
+          "line": 92
+        },
+        {
+          "name": "encode_v2",
+          "decl": "fn",
+          "sig": "fn encode_v2(h: Header) -> result[bytes, str]",
+          "doc": "The v2 (binary) header for h, TLVs included. An error for an address that does not match h.family.",
+          "file": "stdlib/proxyproto/proxyproto.sl",
+          "line": 103
+        }
+      ]
+    },
     "rand": {
       "name": "rand",
       "kind": "source",
