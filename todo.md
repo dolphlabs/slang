@@ -1,5 +1,10 @@
 # todo
 
+- [x] **`singleflight` (2026-11-22, feat/singleflight).** A group bound
+  to a loader function: concurrent calls for one key share a single run
+  and its result or error; a panicking call answers every waiter with an
+  error (the run is a spawned task, so `join_wait` catches it).
+
 - [x] **A leaf function could hold a safepoint (found 2026-11-21 when
   math/big's tests crashed after merging dev; fixed in
   fix/leaf-body-no-safepoint).** Callers skip their bracket around a call

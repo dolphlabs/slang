@@ -3634,6 +3634,28 @@ that case.
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
 
+#### `singleflight`
+
+Concurrent identical calls share one execution: while a call for a key
+is running, more calls for that key wait for its answer instead of
+running again. It is the cure for a cache stampede, where a popular key
+expires and a thousand requests reach the database at once.
+
+```slang
+import "singleflight";
+
+fn load_user(id: str, deadline: until) -> result[User, str] { ... }
+
+let users = singleflight.group(load_user);     // one group per loader
+let r = singleflight.call(users, "user:" + id, id, deadline);
+```
+
+The first caller for a key runs the function; the others get its result
+or its error. A call that panics answers every waiter with an error.
+Waiters wait for the running call, which ends at the first caller's
+deadline, not theirs. `forget(g, key)` makes the next call run anew, and
+`runs`/`joins` count calls that ran and calls that shared.
+
 #### `websocket`
 
 A WebSocket client (RFC 6455) over `ws://` and `wss://`, with
