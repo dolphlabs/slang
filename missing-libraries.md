@@ -27,41 +27,41 @@ standalone repo under `slangpackages/`.
 - [x] **Zero-copy file sends** (stdlib, `net`/`fs`): `sendfile` (and
   `splice` on Linux) from a file to a socket, used by `http` for static
   files. PR #602 (open).
-- [ ] **PROXY protocol v1/v2** (stdlib): parse the header HAProxy and AWS
-  NLB put in front of a connection, so servers see the real client address.
+- [x] **PROXY protocol v1/v2** (stdlib): parse the header HAProxy and AWS
+  NLB put in front of a connection, so servers see the real client address. PR #606 (open).
 - [ ] **DNS resolver** (stdlib): A/AAAA/CNAME lookups over UDP with TCP
   fallback, `/etc/resolv.conf` and `/etc/hosts`, a TTL cache, timeouts,
   and happy-eyeballs dialing (RFC 8305). `net.dial` resolves IPv4 only
-  today, so it cannot reach an IPv6 address: this fixes that.
-  Status: IPv6 dialing with happy eyeballs is in feat/net-dial-ipv6; the
+  today, so it cannot reach an IPv6 address: #614 fixes that.
+  Status: IPv6 dialing with happy eyeballs is in #614; the
   wire-protocol client with a TTL cache waits for UDP (#600) to merge.
-- [ ] **Graceful restart and draining** (stdlib): hand listening sockets to
+- [x] **Graceful restart and draining** (stdlib): hand listening sockets to
   a new process, stop accepting, and drain open connections with a
-  deadline.
+  deadline. PR #626 (open).
 
 ## 2. Resilience
 
 - [x] **Cancellation contexts** (stdlib): a deadline and cancel signal that
   flows from a request through `httpc`, `pg`, `redis` and the other
   clients, so one timeout stops everything under it. PR #603 (open).
-- [ ] **Generic connection pool** (stdlib): health checks, max idle/open,
+- [x] **Generic connection pool** (stdlib): health checks, max idle/open,
   idle and lifetime limits, fair FIFO waiting, wait-time metrics. The
-  speed audit found Slang's pool-acquisition p99 above Go's on every route.
-- [ ] **Failure handling** (stdlib): circuit breaker, bulkhead, retry with a
+  speed audit found Slang's pool-acquisition p99 above Go's on every route. PR #604 (open).
+- [x] **Failure handling** (stdlib): circuit breaker, bulkhead, retry with a
   retry budget (over `rand.backoff`), token-bucket and GCRA rate limiters,
-  and request hedging.
-- [ ] **Singleflight** (stdlib): concurrent identical calls share one
-  execution, for cache stampedes.
+  and request hedging. PR #611 (open).
+- [x] **Singleflight** (stdlib): concurrent identical calls share one
+  execution, for cache stampedes. PR #612 (open).
 
 ## 3. Observability
 
-- [ ] **Prometheus metrics** (stdlib): counters, gauges and histograms with
-  labels, text exposition format, histograms over `math/sketch`.
-- [ ] **OpenTelemetry export** (stdlib or package): OTLP over HTTP/protobuf
+- [x] **Prometheus metrics** (stdlib): counters, gauges and histograms with
+  labels, text exposition format, histograms over `math/sketch`. PR #607 (open).
+- [x] **OpenTelemetry export** (stdlib or package): OTLP over HTTP/protobuf
   for traces, metrics and logs, with W3C `traceparent` propagation in
-  `http` and `httpc`.
-- [ ] **Runtime stats API** (stdlib): GC cycles and pauses, heap and RSS,
-  task count, reactor queue depth.
+  `http` and `httpc`. PR #608 (open).
+- [x] **Runtime stats API** (stdlib): GC cycles and pauses, heap and RSS,
+  task count, reactor queue depth. PR #627 (open).
 - [ ] **Profiler endpoint** (stdlib): sampled CPU profiles, allocation
   sites and task dumps, readable by standard tools.
   Status: not started. Needs a design first: sampling by signal next to
@@ -73,12 +73,12 @@ standalone repo under `slangpackages/`.
   decode; zstd and brotli as HTTP `Content-Encoding`, lz4 for Kafka.
   Status: needs a decision. The libraries are not on the build machines;
   system dependencies or vendored sources?
-- [ ] **MessagePack and CBOR** (stdlib): encode and decode, structs
-  included, with size limits.
-- [ ] **Protobuf codec** (stdlib or package): wire-format encode and decode
-  outside gRPC.
-- [ ] **HTTP extras** (stdlib, `http`): Server-Sent Events, streaming
-  multipart/form-data uploads, and range requests.
+- [x] **MessagePack and CBOR** (stdlib): encode and decode, structs
+  included, with size limits. PR #615 (open).
+- [x] **Protobuf codec** (stdlib or package): wire-format encode and decode
+  outside gRPC. PR #605 (open).
+- [x] **HTTP extras** (stdlib, `http`): Server-Sent Events, streaming
+  multipart/form-data uploads, and range requests. PR #610 (open).
 - [ ] **gRPC streaming** (package `slangpackages/grpc`): server, client and
   bidirectional streams; the package is unary only.
   Status: in progress on feat/grpc-streaming in the grpc repo; left alone here.
@@ -87,40 +87,40 @@ standalone repo under `slangpackages/`.
 
 ## 5. Identity and security
 
-- [ ] **OAuth2 and OpenID Connect client** (stdlib or package):
+- [x] **OAuth2 and OpenID Connect client** (stdlib or package):
   authorization code with PKCE, client credentials, refresh, discovery,
-  ID-token checks against JWKS.
-- [ ] **ACME** (stdlib): automatic certificates from Let's Encrypt with
-  renewal, served through `tls_ctx_add_sni`.
-- [ ] **TOTP and HOTP** (stdlib): RFC 6238/4226 codes and checks with skew.
+  ID-token checks against JWKS. PR #624 (open).
+- [x] **ACME** (stdlib): automatic certificates from Let's Encrypt with
+  renewal, served through `tls_ctx_add_sni`. PR #622 (open).
+- [x] **TOTP and HOTP** (stdlib): RFC 6238/4226 codes and checks with skew. PR #617 (open).
 - [ ] **WebAuthn / passkeys** (package): registration and assertion.
   Status: waits for the CBOR PR (feat/msgpack-cbor) to merge.
-- [ ] **Envelope encryption** (stdlib, `crypto`): AES-GCM data keys wrapped
-  by a key-encryption key, with key ids for rotation.
+- [x] **Envelope encryption** (stdlib, `crypto`): AES-GCM data keys wrapped
+  by a key-encryption key, with key ids for rotation. PR #618 (open).
 
 ## 6. Data and integrations
 
-- [ ] **SMTP client and MIME** (stdlib): STARTTLS, AUTH, multipart mail.
+- [x] **SMTP client and MIME** (stdlib): STARTTLS, AUTH, multipart mail. PR #609 (open).
 - [ ] **ClickHouse client** (package).
   Status: needs a new slangpackages repository; not created without approval.
 - [ ] **OpenSearch / Elasticsearch client** (package).
   Status: needs a new slangpackages repository; not created without approval.
 - [ ] **Cassandra / Scylla client** (package).
   Status: needs a new slangpackages repository; not created without approval.
-- [ ] **memcached client** (stdlib or package).
+- [x] **memcached client** (stdlib or package). PR #619 (open).
 - [ ] **etcd and Consul** (package): key/value, watches, service discovery.
   Status: needs a new slangpackages repository; not created without approval.
 
 ## 7. Distributed systems
 
-- [ ] **Leases and leader election** (stdlib): over Redis and Postgres
-  advisory locks.
-- [ ] **Outbox and idempotency keys** (stdlib): transactional outbox and a
-  store for idempotent handlers.
-- [ ] **CRDTs** (stdlib): G-counter, PN-counter, OR-set, LWW-map, mergeable
-  like `math/sketch`.
-- [ ] **Client-side load balancing** (stdlib): pick a backend by
-  consistent hash (`math/shard`), least-loaded or power of two choices.
+- [x] **Leases and leader election** (stdlib): over Redis and Postgres
+  advisory locks. PR #621 (open).
+- [x] **Outbox and idempotency keys** (stdlib): transactional outbox and a
+  store for idempotent handlers. PR #616 (open).
+- [x] **CRDTs** (stdlib): G-counter, PN-counter, OR-set, LWW-map, mergeable
+  like `math/sketch`. PR #613 (open).
+- [x] **Client-side load balancing** (stdlib): pick a backend by
+  consistent hash (`math/shard`), least-loaded or power of two choices. PR #620 (open).
 
 ## Already covered
 

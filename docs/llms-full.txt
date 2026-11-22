@@ -5286,6 +5286,17 @@ Percent-escapes are emitted uppercase (RFC 3986 §2.1) and hex digests
 lowercase (what `sha256sum`, git and every API that returns one use).
 Both decoders accept either case.
 
+##### Range requests
+
+`http.parse_range(header, size)` reads a `Range` header for a resource of
+`size` bytes. It gives `ok([])` to send the whole resource (no header, or
+one worth ignoring: malformed, a unit other than bytes, more than 16
+ranges), `ok(ranges)` to answer 206 with those ranges (clipped to the
+end, suffix ranges like `bytes=-500` resolved), or an error to answer 416
+with `Content-Range: bytes */size`. `http.content_range(r, size)` gives
+the `Content-Range` value. With `net.send_file`, a range of a file goes
+straight from the page cache.
+
 #### `httpc`
 
 An HTTP/1.1 **client** — the mirror of `http`, which serves. Speaks
@@ -5497,6 +5508,711 @@ that case.
 
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
+
+#### `runtime`
+
+What the program's runtime is doing, for a `/debug` endpoint or metrics.
+
+```slang
+import "runtime";
+
+let s = runtime.stats();
+println(to_str(s.rss_bytes / 1048576) + " MB resident, " + to_str(s.tasks) +
+        " tasks, longest GC pause " + to_str(s.gc_pause_max_ns / 1000) + " us");
+```
+
+`runtime.stats()` returns `gc_majors` and `gc_minors` (collections so
+far), `gc_pause_total_ns` and `gc_pause_max_ns` (time the program was
+stopped for them), `heap_live_bytes` (live after the last full
+collection), `heap_new_bytes` (allocated since), `rss_bytes` and
+`rss_peak_bytes` (resident memory now and at most), `tasks` (spawned
+tasks running, the caller included if it is one) and `workers` (OS
+threads running tasks). The counters are kept whether or not anything
+reads them, at a few atomic adds per collection; reading them is a few
+loads and one system call.
+#### `oidc`
+
+OAuth 2.0 and OpenID Connect for a client: sign users in with Google,
+Microsoft, Okta, Auth0, Keycloak and the like, and get tokens for
+service-to-service calls.
+
+```slang
+import "oidc";
+
+let pr = oidc.discover("https://accounts.google.com", deadline);
+guard let provider = pr else { return err("no provider"); }
+let o = oidc.client(provider, client_id, client_secret, "https://app.example/callback");
+
+// 1. send the browser off; keep state, nonce and pk.verifier in the session
+let pk = oidc.pkce() ?? fail();
+let state = oidc.random_token() ?? "";
+let nonce = oidc.random_token() ?? "";
+redirect(oidc.authorize_url(o, ["openid", "email"], state, nonce, pk));
+
+// 2. on the callback, after checking state: trade the code
+let tr = oidc.exchange(o, code, pk.verifier, deadline);
+guard let tokens = tr else { return err("sign-in failed"); }
+let cr = oidc.verify_id_token(o, tokens.id_token, nonce, deadline);
+guard let who = cr else { return err("bad ID token"); }     // who.sub, who.email
+```
+
+`discover` checks that the document's issuer is the one asked for and
+that the endpoints are HTTPS. `exchange`, `refresh` and
+`client_credentials` authenticate with `client_secret_basic`.
+`verify_id_token` follows OpenID Connect Core 3.1.3.7:
+
+- the signature is checked against the provider's published keys, RS256
+  or ES256 only (`none` and HMAC are refused);
+- the issuer, the audience (and `azp` when there are several), expiry
+  with a minute of leeway, and the nonce are checked.
+
+Keys are cached by `kid` and refetched, at most once a minute, when a
+token names one not seen yet. `Claims.raw` holds every claim.
+#### `acme`
+
+Certificates from Let's Encrypt or any ACME CA (RFC 8555), obtained and
+renewed by the program itself with http-01 challenges.
+
+```slang
+import "acme";
+import "crypto";
+
+let store = acme.challenges();
+// in the port-80 handler: answer acme.http01(store, path) when it is some(body)
+
+let key = crypto.ecdsa_p256_generate() ?? b"";      // keep it: it is the account
+let ar = acme.account(acme.LETSENCRYPT, key, ["mailto:ops@example.com"], deadline);
+guard let acct = ar else { return err("acme account"); }
+let cr = acme.obtain(acct, store, ["example.com", "www.example.com"], deadline);
+guard let cert = cr else { return err("acme order"); }
+// cert.chain_pem and cert.key_pem: serve them with net.tls_ctx_add_sni
+if acme.renew_due(cert.chain_pem, 30) { /* obtain again */ }
+```
+
+- `account` registers (or finds) the account for a P-256 key and agrees
+  to the CA's terms.
+- `obtain` orders the names, publishes each http-01 key authorization in
+  the store while the CA checks it, finalizes with a CSR for a fresh
+  P-256 key, and downloads the chain.
+- Requests are JWS-signed (ES256) with the replay-nonce protocol, and
+  retried once on `badNonce`.
+- `LETSENCRYPT_STAGING` is for trying it out without production rate
+  limits.
+#### `lease`
+
+Leases and leader election: one process at a time holds a named lease,
+for running a scheduled job once across replicas, or for electing one
+leader.
+
+```slang
+import "lease";
+
+let e = lease.elector("jobs:nightly-report", 10000);   // a 10 s lease
+// every ~3 seconds:
+if lease.elect(e, redis_conn, deadline) ?? false {
+    // leading: pass lease.fence(e) with the writes made, so storage can
+    // refuse a stale leader's late ones
+}
+```
+
+- **Redis:** `redis_acquire(conn, name, ttl_ms, deadline)` is
+  `SET name token NX PX ttl`. `redis_renew` and `redis_release` are
+  scripts that check the token first, so a process can never renew or
+  release a lease it lost. Each acquisition takes a fencing token
+  (`INCR name:fence`) that only grows: a leader that stalled past its
+  lease and wakes up still believing it leads carries an older fence
+  than the real leader, and storage that checks fences refuses it. A
+  lease is safe to act on while `remaining_ms(l) > 0`.
+- **Leader election:** `elector(name, ttl_ms)`, `elect` (renew while
+  leading, try to acquire otherwise), `leading`, `fence` and `resign`,
+  which hands over at once instead of after the ttl.
+- **Postgres:** `pg_try_lock` and `pg_unlock` are session advisory
+  locks on `key_of(name)`. They are held while the connection lives, so
+  use a connection of its own, never a pooled one.
+#### `balance`
+
+Client-side load balancing: pick a backend per request, spread load,
+steer away from slow backends and stop sending to failing ones.
+
+```slang
+import "balance";
+import "time";
+
+let lb = balance.new(["10.0.0.1:8080", "10.0.0.2:8080"], balance.P2C);
+let pr = balance.pick(lb, "");
+guard let p = pr else { return err("no backend up"); }
+let t0 = time.mono();
+let r = call(p.addr);
+let worked = false;
+if let _v = r { worked = true; }
+balance.done(lb, p, worked, (time.mono() - t0) as int);
+```
+
+| Strategy | Picks |
+|---|---|
+| `ROUND_ROBIN` | each backend in turn |
+| `RANDOM` | uniformly at random |
+| `LEAST` | the fewest requests in flight |
+| `P2C` | two at random, the one with fewer in flight, then the lower latency (an EWMA): nearly `LEAST`'s spread without herding every client onto one backend |
+| `HASH` | the backend a key maps to (rendezvous hashing via `math/shard`), and the key's next backend while that one is ejected |
+
+A backend that fails `eject_after` times in a row (5) is ejected for
+`eject_ns` (10 s), doubling for each ejection in a row up to
+`eject_max_ns` (5 minutes); a success resets it. `set_backends` replaces
+the list from service discovery and keeps the state of backends that
+stay. `status` reports each backend.
+#### `memcache`
+
+A memcached client over the text protocol, across one or more servers.
+
+```slang
+import "memcache";
+
+let mc = memcache.new(["cache-1:11211", "cache-2:11211"]);
+memcache.set(mc, "user:42", to_bytes(body), 300, deadline);   // 5 minutes
+let gr = memcache.get(mc, "user:42", deadline);
+guard let found = gr else let e = err_of(gr) { return err(e); }  // I/O error
+if let v = found { use(v); } else { /* a miss */ }
+```
+
+The client has `get`, `gets` (with the cas token), `get_multi` (one
+request per server), `set`, `add`, `replace`, `cas`, `delete`, `incr`,
+`decr`, `touch` and `close`. Keys spread over servers by rendezvous
+hashing, so adding or removing a server moves only its share. Up to
+`max_idle` connections per server are kept and reused, and a connection
+that saw any error is closed rather than reused. Keys are checked (1 to
+250 bytes, no spaces or control characters) and values are limited to
+`max_value` (1 MB, memcached's default item size).
+#### `envelope`
+
+Envelope encryption for stored data: each value gets its own random data
+key, stored wrapped by a key-encryption key named by an id. Rotating the
+key-encryption key then rewrites a few dozen bytes per value, not the
+value, and old keys can stay for reading.
+
+```slang
+import "envelope";
+
+let kr = envelope.keyring();
+envelope.add_key(kr, "2026-11", key_from_kms);         // 32 bytes
+let box = envelope.seal(kr, to_bytes(ssn), to_bytes("user:42"));
+let back = envelope.open(kr, box ?? b"", to_bytes("user:42"));
+
+envelope.add_key(kr, "2027-01", next_key);              // now the sealing key
+let moved = envelope.rewrap(kr, box ?? b"");            // value untouched
+```
+
+Both layers are AES-256-GCM through `crypto.seal`, so nonces are always
+fresh. The aad binds a value to its context, so a box sealed for
+`"user:42"` will not open as `"user:43"`. The wrapped data key is bound
+to its key id. `key_id(box)` says which key sealed a box, `use_key`
+picks the sealing key, and `remove_key` drops an old one (never the
+current one).
+#### `otp`
+
+One-time passwords for two-factor sign-in: HOTP (RFC 4226) and TOTP
+(RFC 6238), the codes authenticator apps show.
+
+```slang
+import "otp";
+
+// enrolment: keep the secret, show the URI as a QR code
+let secret = otp.new_secret() ?? b"";
+let uri = otp.uri(secret, "Acme", "ada@example.com", otp.totp_options());
+
+// sign-in: accept each code once
+let matched = otp.verify_totp(secret, code, now_unix_secs, otp.totp_options());
+guard let step = matched else { return deny(); }
+if step <= user.last_otp_step { return deny(); }   // a replay
+user.last_otp_step = step;
+```
+
+`totp_options()` gives 6 digits, 30-second steps, one step of skew either
+side, and SHA-1 (what apps assume; `"SHA256"` and `"SHA512"` also work).
+`verify_totp` compares in constant time and returns the time step that
+matched, so a code cannot be used twice: within its 30 seconds it is
+otherwise valid for anyone who saw it. There are also `hotp`, `totp`,
+`verify_hotp` (with a look-ahead window), `parse_secret` (base32 as apps
+show it) and `new_secret` (160 random bits). Checked against both RFCs'
+test vectors.
+#### `idempotency` and `outbox`
+
+Two patterns for doing a thing exactly once in effect.
+
+**Idempotency keys** (the `Idempotency-Key` header): a retried request
+with the same key gets the first one's response instead of running
+twice.
+
+```slang
+import "idempotency";
+
+let br = idempotency.begin(redis_conn, key, request_fingerprint, 30000, deadline);
+guard let b = br else { return unavailable(); }
+if b.state == idempotency.DONE { return replay(b.response); }
+if b.state == idempotency.IN_PROGRESS { return conflict(); }          // 409
+if b.state == idempotency.MISMATCH { return unprocessable(); }        // 422
+let resp = handle();                                                  // NEW: run it
+idempotency.complete(redis_conn, key, b, resp, 86400000, deadline);   // keep a day
+```
+
+The reservation is one atomic `SET NX`, so two copies of a request
+arriving together cannot both run. It expires after `lock_ms` if the
+process dies, so the key does not stay stuck. `complete` and `abandon`
+act only on the caller's own reservation, and the fingerprint catches a
+key reused for a different request.
+
+**The transactional outbox:** write an event in the same Postgres
+transaction as the change it describes, and let a relay publish it.
+The event goes out if and only if the change commits.
+
+```slang
+import "outbox";
+
+pg.exec(conn, outbox.schema(), deadline);                  // in a migration
+// inside the business transaction:
+outbox.add(conn, "orders.created", payload, deadline);
+// in a relay task, in a loop (publish is fn(outbox.Message) -> bool):
+let n = outbox.relay(conn, 100, publish_to_kafka, deadline);
+```
+
+`relay` claims a batch with `FOR UPDATE SKIP LOCKED`, so several relays
+can share the table. Published rows are deleted, and failed ones are
+retried after 2, 4, 8, ... seconds (at most an hour). Delivery is at
+least once, so consumers should be idempotent too.
+#### `msgpack` and `cbor`
+
+MessagePack and CBOR (RFC 8949), the two common binary forms of JSON's
+data model, with binary strings added. CBOR also has tags; COSE,
+WebAuthn and CWT are built on it.
+
+```slang
+import "cbor";
+import "msgpack";
+
+// streaming: nothing allocated but the output
+let w = msgpack.writer();
+msgpack.write_map(w, 1);
+msgpack.write_str(w, "id");
+msgpack.write_int(w, 42);
+let data = msgpack.finish(w);
+
+let r = msgpack.reader(data);
+let pairs = msgpack.read_map(r) ?? 0;
+let key = msgpack.read_str(r) ?? "";
+let id = msgpack.read_int(r) ?? 0;
+
+// or as a tree
+let v = cbor.decode(bytes_in) ?? cbor.null_value();
+let temp = cbor.get(v, "temp");
+```
+
+- **Writers** (`write_int`, `write_str`/`write_text`, `write_bin`/
+  `write_bytes`, `write_float`, `write_array`, `write_map`, and so on)
+  always use the shortest form. CBOR writes a float in the smallest of
+  half, single or double precision that holds it exactly, its preferred
+  serialization. MessagePack has `write_ext` and `write_timestamp`; CBOR
+  has `write_tag`.
+- **Readers** read one value at a time (`peek`/`peek_major` says what
+  comes next) and `skip` past what is not needed. CBOR reads
+  indefinite-length strings and containers (`-1` from `read_array` /
+  `read_map`, then items until `at_break`).
+- **Values:** `decode`/`encode` and `read_value`/`write_value` work on a
+  `Value` tree; `get(v, key)` finds a map entry.
+- **Untrusted input:** every length is checked against the bytes left
+  before anything is allocated, so a five-byte "array of 4 billion"
+  fails at once. Nesting is limited to `MAX_DEPTH` (512), and CBOR text
+  must be UTF-8. Both are checked against the specifications' example
+  vectors.
+#### `crdt`
+
+Conflict-free replicated data types: state that replicas update on their
+own and merge in any order, any number of times, and then agree on.
+They suit counters, sets and maps shared between nodes without a
+coordinator.
+
+```slang
+import "crdt";
+
+let a = crdt.gcounter();
+let b = crdt.gcounter();
+crdt.gc_inc(a, "node-a", 3);
+crdt.gc_inc(b, "node-b", 4);
+crdt.gc_merge(a, b);
+crdt.gc_value(a)            // 7, on whichever node merges both
+```
+
+- `gcounter` (grow-only) and `pncounter` (up and down).
+- `orset`: a set where an add the remover had not seen survives the
+  remove. It is the optimized OR-set, with no tombstones: its size follows
+  the elements present plus one counter per node, however many adds and
+  removes it has seen.
+- `lwwmap`: last writer wins per key, by timestamp, with ties going to
+  the larger node id so every replica picks the same winner. Deletes
+  are tombstones; `map_compact` drops old ones once every replica is
+  known to have merged past them.
+
+Each node passes its own id with its updates. The state is plain data, so
+`json.encode`/`json.decode` ship it.
+#### `singleflight`
+
+Concurrent identical calls share one execution: while a call for a key
+is running, more calls for that key wait for its answer instead of
+running again. It is the cure for a cache stampede, where a popular key
+expires and a thousand requests reach the database at once.
+
+```slang
+import "singleflight";
+
+fn load_user(id: str, deadline: until) -> result[User, str] { ... }
+
+let users = singleflight.group(load_user);     // one group per loader
+let r = singleflight.call(users, "user:" + id, id, deadline);
+```
+
+The first caller for a key runs the function; the others get its result
+or its error. A call that panics answers every waiter with an error.
+Waiters wait for the running call, which ends at the first caller's
+deadline, not theirs. `forget(g, key)` makes the next call run anew, and
+`runs`/`joins` count calls that ran and calls that shared.
+#### `resilience`
+
+Ways to fail well under load, each safe to share between tasks.
+
+```slang
+import "resilience";
+
+let b = resilience.breaker(resilience.breaker_options());
+if resilience.allow(b) {
+    let r = call_upstream();
+    let worked = false;
+    if let _v = r { worked = true; }
+    resilience.record(b, worked);
+}
+
+let per_ip = resilience.gcra(100.0, 20);        // 100/s per key, bursts of 20
+let d = resilience.gcra_allow(per_ip, client_ip);
+if !d.allowed { /* 429 with Retry-After from d.retry_after_ns */ }
+```
+
+- **Circuit breaker:** `breaker(o)`, `allow`, `record`. It opens when
+  failures reach `failure_ratio` of the last `window` calls (once
+  `min_calls` have been seen), refuses calls for `open_ns`, then lets
+  `probes` trial calls through: that many successes close it, one failure
+  opens it again. `breaker_state` and `trips` report it.
+- **Bulkhead:** `bulkhead(limit)`, `try_enter`, `leave`. At most `limit`
+  calls at once; the rest are turned away at once rather than queued.
+- **Retry budget:** `retry_budget(ratio, min_per_sec)`. Each request
+  `deposit`s `ratio` of a retry and each retry (`can_retry`) takes one,
+  so retries cannot multiply the load in an outage.
+- **Retry:** `retry(f, arg, options, budget, rng, deadline)` calls
+  `f(arg, deadline)` with full-jitter backoff until it succeeds, the
+  attempts run out, the budget refuses, or the deadline passes. An error
+  starting with `"permanent:"` is not retried.
+- **Token bucket:** `token_bucket(rate, burst)`, `take`, `take_n`,
+  `wait_ns`.
+- **Keyed GCRA:** `gcra(rate, burst)` and `gcra_allow(g, key)` give a
+  `Decision` with `allowed`, `retry_after_ns` and `remaining`. State is
+  one int per key; keys whose bucket is full again are dropped as the map
+  grows, so memory follows the keys active within one burst period.
+- **Hedging:** `hedge(f, arg, delay_ns, deadline)` calls `f` and, if it
+  has not answered within `delay_ns`, calls it again and returns the
+  first success. Use it for idempotent reads only. The slower call runs
+  to its end in the background.
+#### `multipart`
+
+`multipart/form-data` (RFC 7578), the body of HTML file uploads, read as a
+stream so a large upload never has to fit in memory.
+
+```slang
+import "multipart";
+
+let b = multipart.boundary_of(content_type) ?? "";
+let p = multipart.parser(b);
+// as each chunk of the body arrives:
+let er = multipart.feed(p, chunk);
+guard let evs = er else { return bad_request(); }
+for e in evs {
+    if e.kind == multipart.PART { /* e.part.name, filename, content_type */ }
+    else if e.kind == multipart.DATA { /* the next e.data bytes of the part */ }
+    else if e.kind == multipart.PART_END { /* the part is complete */ }
+}
+// when the body ends: multipart.finish(p) is an error if it was cut short
+```
+
+Part data comes out as it arrives; the parser holds back only the bytes
+that could start a boundary. Part headers are limited to
+`max_header_bytes` (8 KB) and parts to `max_parts` (1000). `filename*`
+(RFC 5987) is decoded. `parse(body, boundary)` reads a body already in
+memory. `body(boundary)`, `add_field`, `add_file`, `close` and
+`content_type` build one for an upload.
+
+#### `sse`
+
+Server-Sent Events: a server pushing events to a browser's `EventSource`
+over one long response, and a client reading such a stream.
+
+```slang
+import "sse";
+
+// server, on a link after reading the request
+c.send_bytes(sse.head(), deadline);
+c.send_bytes(sse.event("tick", "{\"n\":1}", "1"), deadline);
+c.send_bytes(sse.comment("keep-alive"), deadline);     // every ~15 seconds
+
+// client
+let p = sse.parser();
+for e in sse.feed(p, chunk) { println(e.kind + ": " + e.data); }
+```
+
+`head()` sends no Content-Length (the stream ends when the server closes
+the connection) and tells buffering proxies not to hold events back.
+`event` splits multi-line data into data lines. The parser follows the
+HTML specification: CR, LF and CRLF line endings even when split between
+chunks, the last event id (for `Last-Event-ID` on reconnect), `retry_ms`,
+comments, and a leading byte-order mark.
+#### `smtp`
+
+Sending mail: an SMTP client (RFC 5321) with STARTTLS or implicit TLS and
+AUTH PLAIN, and a MIME builder for text, HTML and attachments.
+
+```slang
+import "proc";
+import "smtp";
+
+let cfg = smtp.config("smtp.example.com", 587);      // STARTTLS on 587
+cfg.username = "app@example.com";
+cfg.password = proc.getenv("SMTP_PASSWORD") ?? "";
+let m = smtp.message("App <app@example.com>", ["ada@example.com"], "Welcome");
+m.text = "Hello Ada";
+m.html = "<p>Hello <b>Ada</b></p>";
+let r = smtp.send(cfg, m, deadline);
+```
+
+- `config(host, port)` uses STARTTLS, or implicit TLS on port 465. A
+  server that does not offer STARTTLS is refused before any password is
+  sent; `security: "none"` is for a local relay only.
+- A `Message` has `from`, `to`, `cc`, `bcc` (sent to, never shown),
+  `reply_to`, `subject`, `text`, `html`, `attachments` and extra
+  `headers`. Text and HTML go in `multipart/alternative`, and
+  attachments make it `multipart/mixed`. Parts are base64 in 76-column
+  lines, and non-ASCII names and subjects use RFC 2047 encoded words.
+- `build(m)` gives the message bytes, and `send_raw` sends prepared
+  ones. Lines starting with `.` are dot-stuffed. A CR or LF in a header
+  value is replaced, so a subject cannot add headers.
+#### `trace`
+
+Distributed tracing: spans with W3C trace context propagation
+(`traceparent`), exported to an OpenTelemetry collector over OTLP/HTTP
+with JSON bodies.
+
+```slang
+import "trace";
+
+let t = trace.tracer("checkout", "http://otel-collector:4318");
+
+// a request came in: continue the caller's trace if it sent one
+let parent = trace.parse_traceparent(incoming_traceparent);
+let span = trace.start(t, "POST /orders", parent);
+trace.set_str(span, "http.route", "/orders");
+let db = trace.child(span, "insert order");
+trace.end(db);
+outgoing_headers["traceparent"] = trace.traceparent(span);   // to the next service
+trace.end(span);
+```
+
+- `start(t, name, parent)` starts a span: a child of a caller's context
+  (from `parse_traceparent`, which refuses malformed values per the W3C
+  spec) or the root of a new trace. `child(span, name)` nests one.
+- `set_str`, `set_int`, `set_float`, `set_bool`, `set_kind`, `set_error`
+  and `set_ok` describe it; `end` queues it for export.
+- Ended spans are sent in batches by a background task: when
+  `max_batch` are queued, and every `flush_ns` otherwise. The queue is
+  bounded by `max_queue`; spans past it, or lost in a failed send, are
+  counted in `counts(t).dropped`, so a dead collector costs bounded
+  memory. `flush(t, deadline)` sends now.
+- `sample_ratio` decides new traces; a continued trace follows the
+  caller's sampled flag. An unsampled span records nothing.
+- A tracer with endpoint `""` sends nothing and keeps spans for
+  `drain(t)`, for tests.
+#### `metrics`
+
+Prometheus metrics: counters, gauges and histograms with labels, and the
+text exposition format a Prometheus server scrapes.
+
+```slang
+import "metrics";
+
+let reg = metrics.registry();
+let reqs = metrics.counter(reg, "http_requests_total", "Requests served.",
+                           ["method", "code"]);
+let lat = metrics.histogram(reg, "http_request_duration_seconds",
+                            "Request latency.", ["route"],
+                            metrics.default_buckets());
+
+metrics.inc(metrics.with(reqs, ["GET", "200"]));
+let users = metrics.with(lat, ["/users"]);   // keep it: no lookup per update
+metrics.observe(users, 0.012);
+
+// GET /metrics: answer metrics.expose(reg), Content-Type metrics.CONTENT_TYPE
+```
+
+- `counter` (`inc`, `add`; a decrease panics), `gauge` (`set`, `add`,
+  `inc`, `dec`) and `histogram` (`observe`) register a family by name;
+  `with(family, label_values)` gives a series. Keeping the series makes
+  an update one lock, with no label lookup. `remove` drops a series whose
+  label value will not come back, so memory does not grow without bound.
+- Histograms are classic fixed-bucket ones, which Prometheus scrapes:
+  a few ints a series and a binary search per observation.
+  `default_buckets()` are Prometheus's latency buckets in seconds;
+  `exponential_buckets(start, factor, count)` makes others.
+- `expose(reg)` sorts families and series, so two scrapes of an idle
+  program are identical. Names and label names are checked at
+  registration, and label values and help text are escaped.
+#### `proxyproto`
+
+The PROXY protocol, versions 1 and 2: the header HAProxy, AWS NLB and
+other balancers put in front of a connection so the server sees the
+real client address instead of the balancer's.
+
+```slang
+import "net";
+import "proxyproto";
+import "time";
+
+let hr = proxyproto.read_until(fd, until_of(time.mono() + 5000000000));
+guard let h = hr else let e = err_of(hr) { net.close(fd); return; }
+println(h.src_addr + ":" + to_str(h.src_port));   // the real client
+// h.rest: bytes that came after the header, the start of the stream
+```
+
+- `parse(b)` reads a header from the start of `b`: `some(header)`,
+  `none` when `b` is a prefix of one and more bytes are needed, or an
+  error when `b` is not a PROXY header. `header.size` is its length.
+- `read_until(fd, deadline)` reads one off a socket and keeps any bytes
+  that arrived after it in `header.rest`.
+- A `Header` has `version`, `family` (`tcp4`, `tcp6`, `udp4`, `udp6`,
+  `unix`, `unknown`), the source and destination addresses and ports, and
+  v2's `tlvs` (`kind`, `value`): ALPN, the TLS server name (0x02), AWS's
+  VPC endpoint id (0xEA) and so on. `local` is true for a v2 LOCAL
+  header, a balancer's health check, which carries no addresses.
+- `encode_v1(h)` and `encode_v2(h)` build headers, for a proxy written
+  in slang or a test. IPv6 addresses are printed in RFC 5952 form.
+
+The header is only bytes the peer sent. Require it on a listener that
+only the balancer can reach, or check the peer address first: otherwise
+any client can claim any address. The header comes before any TLS
+handshake, and `net.tls_accept` does its own accept on the listener, so
+a PROXY header in front of TLS needs a server-side TLS upgrade of an
+accepted fd, which `net` does not have yet.
+#### `protobuf`
+
+The Protocol Buffers wire format, written and read field by field
+without generated code: for talking to a gRPC or protobuf service whose
+messages are few, or for building a codec on top.
+
+```slang
+import "protobuf";
+
+// message User { int64 id = 1; string name = 2; repeated sint32 deltas = 3; }
+let w = protobuf.writer();
+protobuf.write_int64(w, 1, 42);
+protobuf.write_string(w, 2, "ada");
+protobuf.write_packed_sint(w, 3, [-1, 5, -9]);
+let data = protobuf.finish(w);
+
+let r = protobuf.reader(data);
+while protobuf.more(r) {
+    let fr = protobuf.next(r);              // field number and wire type
+    guard let f = fr else { break; }
+    if f.num == 2 {
+        name = protobuf.read_string(r) ?? "";
+    } else {
+        protobuf.skip(r, f.wire);           // a field this reader does not use
+    }
+}
+```
+
+There are writers for every scalar type (`write_int64`,
+`write_uint64`, `write_sint` with zigzag, `write_bool`, `write_fixed64`,
+`write_fixed32`, `write_double`, `write_float`), plus `write_bytes`,
+`write_string` and packed repeated fields. A nested message is its own
+`Writer`, passed to `write_bytes`. The readers mirror them;
+`read_packed_*` also accept an unpacked element, as parsers must. Lengths
+are checked against the input and varints against their ten-byte limit.
+Groups (wire types 3 and 4) are not read.
+#### `pool`
+
+A bounded pool of connections (or any costly resource) shared by many
+tasks, for clients that have no pool of their own. It is the design of
+`pg`'s and `mysql`'s pools, made generic over the connection type.
+
+```slang
+import "net";
+import "pool";
+
+fn dial_cache(deadline: until) -> result[i32, str] {
+    return net.dial_until("cache.internal", 11211, deadline);
+}
+fn close_cache(fd: i32) { net.close(fd); }
+fn alive(fd: i32) -> bool { return net.idle_alive(fd); }
+
+let p = pool.new(pool.options(64), dial_cache, close_cache, alive);
+let lr = pool.acquire(p, deadline);
+guard let lease = lr else let e = err_of(lr) { return; }   // "timeout"
+let _s = net.send(lease.v, b"version\r\n");
+pool.release(p, lease);        // pool.discard(p, lease) if it broke
+```
+
+- `acquire` hands out an idle connection, dials one while fewer than
+  `max_open` are open, or waits. Waiting is first come, first served: a
+  release goes straight to the task that has waited longest, which wakes
+  once, so the slowest waiter's latency is its place in the queue.
+- An idle connection is probed (the `probe` function) before reuse only
+  after `probe_after` idle, 1 s by default; one released moments ago is
+  handed out as is.
+- `options(max_open)` also sets `max_idle` (default `max_open`),
+  `idle_timeout` (5 minutes), `max_lifetime` (none; set it behind a
+  balancer so new connections reach new backends) and `probe_after`.
+- `stats(p)`: open, idle and waiting now; dials, reuses, waits, total
+  and longest wait, and timeouts.
+- `close(p)` closes idle connections and fails waiters; leased ones close
+  as they come back. Releasing a lease twice panics.
+#### `context`
+
+Cancellation and deadlines that flow from a request through everything
+it starts, so one timeout or one cancel stops all the work under it.
+
+```slang
+import "context";
+import "net";
+
+let req = context.with_timeout(context.background(), 2000000000);  // 2 s
+let db = context.with_cancel(req);          // ends when req ends
+context.watch_fd(db, fd);                   // a cancel closes fd
+let rr = net.recv_until(fd, 4096, context.deadline(db));
+context.cancel(req, "client went away");    // ends req and db
+println(context.cause(db) ?? "live");       // "client went away"
+context.release(db);
+```
+
+- `background()` is the root. `with_cancel(parent)`,
+  `with_timeout(parent, ns)` and `with_deadline_at(parent, mono_ns)` make
+  children; a child's deadline is the earlier of its own and its
+  parent's, and cancelling a context cancels everything made from it.
+- `deadline(c)` is an `until` for any API that waits; `remaining(c)` is
+  the nanoseconds left (-1 without a deadline), for a timeout another
+  protocol carries.
+- `cancel(c, reason)` (the first reason wins) and `release(c)`, for a
+  context whose work is done. Call one of them, as with Go's contexts:
+  until then a child stays in its parent's list.
+- `is_done(c)` and `cause(c)`: the cancel reason, `"deadline exceeded"`,
+  or `none` while live.
+- `watch_fd(c, fd)` closes `fd` on cancel, waking a task parked on it
+  with `"closed"`; `unwatch_fd` before closing it yourself. `done_chan(c)`
+  is closed on cancel, for a `select`.
+
+There are no timers: a deadline passing does not close watched fds. The
+operations given `deadline(c)` end at it on their own.
 
 #### `websocket`
 
@@ -7072,21 +7788,29 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 
 ## All packages
 
+- [acme](packages/acme.md) -- source package, 12 public items
+- [balance](packages/balance.md) -- source package, 17 public items
 - [builder](packages/builder.md) -- source package, 20 public items
 - [byteutil](packages/byteutil.md) -- source package, 6 public items
 - [cache](packages/cache.md) -- source package, 14 public items
+- [cbor](packages/cbor.md) -- source package, 68 public items
 - [compress](packages/compress.md) -- compiler-provided, 10 public items
+- [context](packages/context.md) -- source package, 14 public items
+- [crdt](packages/crdt.md) -- source package, 26 public items
 - [crypto](packages/crypto.md) -- compiler-provided, 54 public items
 - [csv](packages/csv.md) -- source package, 18 public items
 - [decimal](packages/decimal.md) -- source package, 37 public items
 - [encoding](packages/encoding.md) -- compiler-provided, 23 public items
+- [envelope](packages/envelope.md) -- source package, 9 public items
 - [flags](packages/flags.md) -- source package, 23 public items
 - [fs](packages/fs.md) -- compiler-provided, 9 public items
-- [http](packages/http.md) -- source package, 58 public items
+- [http](packages/http.md) -- source package, 61 public items
 - [http2](packages/http2.md) -- source package, 133 public items
 - [httpc](packages/httpc.md) -- source package, 35 public items
+- [idempotency](packages/idempotency.md) -- source package, 8 public items
 - [io](packages/io.md) -- compiler-provided, 12 public items
 - [json](packages/json.md) -- compiler-provided, 0 public items
+- [lease](packages/lease.md) -- source package, 14 public items
 - [log](packages/log.md) -- compiler-provided, 4 public items
 - [math](packages/math.md) -- compiler-provided, 131 public items
 - [math/big](packages/math/big.md) -- source package, 59 public items
@@ -7099,25 +7823,41 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [math/sketch](packages/math/sketch.md) -- source package, 105 public items
 - [math/stats](packages/math/stats.md) -- source package, 128 public items
 - [math/vec](packages/math/vec.md) -- compiler-provided, 23 public items
+- [memcache](packages/memcache.md) -- source package, 15 public items
+- [metrics](packages/metrics.md) -- source package, 19 public items
+- [msgpack](packages/msgpack.md) -- source package, 60 public items
+- [multipart](packages/multipart.md) -- source package, 19 public items
 - [mysql](packages/mysql.md) -- source package, 49 public items
 - [nats](packages/nats.md) -- source package, 31 public items
 - [net](packages/net.md) -- compiler-provided, 46 public items
+- [oidc](packages/oidc.md) -- source package, 15 public items
 - [os](packages/os.md) -- compiler-provided, 18 public items
+- [otp](packages/otp.md) -- source package, 10 public items
+- [outbox](packages/outbox.md) -- source package, 5 public items
 - [pg](packages/pg.md) -- source package, 58 public items
-- [proc](packages/proc.md) -- compiler-provided, 9 public items
+- [pool](packages/pool.md) -- source package, 11 public items
+- [proc](packages/proc.md) -- compiler-provided, 10 public items
+- [protobuf](packages/protobuf.md) -- source package, 40 public items
+- [proxyproto](packages/proxyproto.md) -- source package, 6 public items
 - [rand](packages/rand.md) -- source package, 15 public items
 - [redis](packages/redis.md) -- source package, 161 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
+- [resilience](packages/resilience.md) -- source package, 32 public items
+- [runtime](packages/runtime.md) -- source package, 2 public items
 - [s3](packages/s3.md) -- source package, 23 public items
 - [sigv4](packages/sigv4.md) -- source package, 14 public items
+- [singleflight](packages/singleflight.md) -- source package, 7 public items
+- [smtp](packages/smtp.md) -- source package, 9 public items
 - [sort](packages/sort.md) -- source package, 9 public items
 - [sql](packages/sql.md) -- compiler-provided, 20 public items
+- [sse](packages/sse.md) -- source package, 9 public items
 - [strings](packages/strings.md) -- compiler-provided, 28 public items
 - [tar](packages/tar.md) -- source package, 12 public items
 - [template](packages/template.md) -- source package, 7 public items
 - [time](packages/time.md) -- compiler-provided, 5 public items
 - [timez](packages/timez.md) -- source package, 144 public items
 - [toml](packages/toml.md) -- source package, 2 public items
+- [trace](packages/trace.md) -- source package, 30 public items
 - [unicode](packages/unicode.md) -- compiler-provided, 11 public items
 - [uuid](packages/uuid.md) -- source package, 11 public items
 - [websocket](packages/websocket.md) -- source package, 16 public items
@@ -7575,6 +8315,166 @@ slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://
 
 
 
+# acme
+
+# acme
+
+> Package acme.
+
+Certificates from Let's Encrypt or any ACME CA (RFC 8555), obtained and
+renewed by the program itself with http-01 challenges.
+
+```slang
+import "acme";
+import "crypto";
+
+let store = acme.challenges();
+// in the port-80 handler: answer acme.http01(store, path) when it is some(body)
+
+let key = crypto.ecdsa_p256_generate() ?? b"";      // keep it: it is the account
+let ar = acme.account(acme.LETSENCRYPT, key, ["mailto:ops@example.com"], deadline);
+guard let acct = ar else { return err("acme account"); }
+let cr = acme.obtain(acct, store, ["example.com", "www.example.com"], deadline);
+guard let cert = cr else { return err("acme order"); }
+// cert.chain_pem and cert.key_pem: serve them with net.tls_ctx_add_sni
+if acme.renew_due(cert.chain_pem, 30) { /* obtain again */ }
+```
+
+- `account` registers (or finds) the account for a P-256 key and agrees
+  to the CA's terms.
+- `obtain` orders the names, publishes each http-01 key authorization in
+  the store while the CA checks it, finalizes with a CSR for a fresh
+  P-256 key, and downloads the chain.
+- Requests are JWS-signed (ES256) with the replay-nonce protocol, and
+  retried once on `badNonce`.
+- `LETSENCRYPT_STAGING` is for trying it out without production rate
+  limits.
+
+## API
+
+### `let LETSENCRYPT = "https://acme-v02.api.letsencrypt.org/directory";`
+
+### `let LETSENCRYPT_STAGING = "https://acme-staging-v02.api.letsencrypt.org/directory";`
+
+### `gc struct Account`
+
+### `struct Dir`
+
+### `struct Certificate`
+
+### `gc struct Challenges`
+
+### `fn challenges() -> Challenges`
+
+### `fn http01(c: Challenges, path: str) -> opt[str]`
+
+The body to answer a GET for path with, if it is a pending http-01 challenge ("/.well-known/acme-challenge/<token>").
+
+### `fn account(directory_url: str, key: bytes, contact: [str], deadline: until) -> result[Account, str]`
+
+Registers (or finds) the account for key at the CA, agreeing to its terms of service.
+
+### `fn obtain(a: Account, store: Challenges, names: [str], deadline: until) -> result[Certificate, str]`
+
+Orders a certificate for names (DNS names), answers their http-01 challenges through store, and returns the issued chain with its new key.
+
+### `fn renew_due(chain_pem: str, days: int) -> bool`
+
+Whether a certificate expires within days.
+
+### `gc struct JValue`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# balance
+
+# balance
+
+> Package balance.
+
+Client-side load balancing: pick a backend per request, spread load,
+steer away from slow backends and stop sending to failing ones.
+
+```slang
+import "balance";
+import "time";
+
+let lb = balance.new(["10.0.0.1:8080", "10.0.0.2:8080"], balance.P2C);
+let pr = balance.pick(lb, "");
+guard let p = pr else { return err("no backend up"); }
+let t0 = time.mono();
+let r = call(p.addr);
+let worked = false;
+if let _v = r { worked = true; }
+balance.done(lb, p, worked, (time.mono() - t0) as int);
+```
+
+| Strategy | Picks |
+|---|---|
+| `ROUND_ROBIN` | each backend in turn |
+| `RANDOM` | uniformly at random |
+| `LEAST` | the fewest requests in flight |
+| `P2C` | two at random, the one with fewer in flight, then the lower latency (an EWMA): nearly `LEAST`'s spread without herding every client onto one backend |
+| `HASH` | the backend a key maps to (rendezvous hashing via `math/shard`), and the key's next backend while that one is ejected |
+
+A backend that fails `eject_after` times in a row (5) is ejected for
+`eject_ns` (10 s), doubling for each ejection in a row up to
+`eject_max_ns` (5 minutes); a success resets it. `set_backends` replaces
+the list from service discovery and keeps the state of backends that
+stay. `status` reports each backend.
+
+## API
+
+### `let ROUND_ROBIN = 0;`
+
+### `let RANDOM = 1;`
+
+### `let LEAST = 2;`
+
+### `let P2C = 3;`
+
+### `let HASH = 4;`
+
+### `struct Options`
+
+### `fn options(strategy: int) -> Options`
+
+### `gc struct Backend`
+
+### `struct Pick`
+
+### `gc struct Balancer`
+
+### `fn new(addrs: [str], strategy: int) -> Balancer`
+
+### `fn with_options(addrs: [str], o: Options) -> Balancer`
+
+### `fn set_backends(lb: Balancer, addrs: [str])`
+
+Replaces the backend list (from service discovery, say). Backends that stay keep their state.
+
+### `fn pick(lb: Balancer, key: str) -> result[Pick, str]`
+
+A backend for one request (key is used by HASH only). Report how it went with done. An error when every backend is ejected.
+
+### `fn done(lb: Balancer, p: Pick, ok: bool, latency_ns: int)`
+
+Reports a pick's outcome and how long it took.
+
+### `struct Status`
+
+### `fn status(lb: Balancer) -> [Status]`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
 # builder
 
 # builder
@@ -7857,6 +8757,221 @@ slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://
 
 
 
+# cbor
+
+# cbor
+
+> Package cbor.
+
+MessagePack and CBOR (RFC 8949), the two common binary forms of JSON's
+data model, with binary strings added. CBOR also has tags; COSE,
+WebAuthn and CWT are built on it.
+
+```slang
+import "cbor";
+import "msgpack";
+
+// streaming: nothing allocated but the output
+let w = msgpack.writer();
+msgpack.write_map(w, 1);
+msgpack.write_str(w, "id");
+msgpack.write_int(w, 42);
+let data = msgpack.finish(w);
+
+let r = msgpack.reader(data);
+let pairs = msgpack.read_map(r) ?? 0;
+let key = msgpack.read_str(r) ?? "";
+let id = msgpack.read_int(r) ?? 0;
+
+// or as a tree
+let v = cbor.decode(bytes_in) ?? cbor.null_value();
+let temp = cbor.get(v, "temp");
+```
+
+- **Writers** (`write_int`, `write_str`/`write_text`, `write_bin`/
+  `write_bytes`, `write_float`, `write_array`, `write_map`, and so on)
+  always use the shortest form. CBOR writes a float in the smallest of
+  half, single or double precision that holds it exactly, its preferred
+  serialization. MessagePack has `write_ext` and `write_timestamp`; CBOR
+  has `write_tag`.
+- **Readers** read one value at a time (`peek`/`peek_major` says what
+  comes next) and `skip` past what is not needed. CBOR reads
+  indefinite-length strings and containers (`-1` from `read_array` /
+  `read_map`, then items until `at_break`).
+- **Values:** `decode`/`encode` and `read_value`/`write_value` work on a
+  `Value` tree; `get(v, key)` finds a map entry.
+- **Untrusted input:** every length is checked against the bytes left
+  before anything is allocated, so a five-byte "array of 4 billion"
+  fails at once. Nesting is limited to `MAX_DEPTH` (512), and CBOR text
+  must be UTF-8. Both are checked against the specifications' example
+  vectors.
+
+## API
+
+### `let MAX_DEPTH = 512;`
+
+### `let M_UINT = 0;`
+
+### `let M_NEG = 1;`
+
+### `let M_BYTES = 2;`
+
+### `let M_TEXT = 3;`
+
+### `let M_ARRAY = 4;`
+
+### `let M_MAP = 5;`
+
+### `let M_TAG = 6;`
+
+### `let M_SIMPLE = 7; // false, true, null, undefined, floats, break`
+
+### `gc struct Writer`
+
+### `fn writer() -> Writer`
+
+### `fn finish(w: Writer) -> bytes`
+
+### `fn write_uint(w: Writer, v: u64)`
+
+### `fn write_int(w: Writer, v: int)`
+
+### `fn write_bytes(w: Writer, b: bytes)`
+
+### `fn write_text(w: Writer, s: str)`
+
+### `fn write_array(w: Writer, n: int)`
+
+### `fn write_map(w: Writer, n: int)`
+
+### `fn write_tag(w: Writer, tag: u64)`
+
+A tag on the next item (1: epoch time, 2/3: bignums, 32: URI, ...).
+
+### `fn write_bool(w: Writer, v: bool)`
+
+### `fn write_null(w: Writer)`
+
+### `fn write_undefined(w: Writer)`
+
+### `fn write_float(w: Writer, v: float)`
+
+The smallest of half, single and double precision that holds v exactly.
+
+### `gc struct Reader`
+
+### `fn reader(b: bytes) -> Reader`
+
+### `fn remaining(r: Reader) -> int`
+
+### `fn peek_major(r: Reader) -> int`
+
+The major type of the next item, -1 at the end of the input.
+
+### `fn at_break(r: Reader) -> bool`
+
+Whether the next byte is the break that ends an indefinite-length item.
+
+### `fn read_break(r: Reader) -> result[bool, str]`
+
+### `fn read_uint(r: Reader) -> result[u64, str]`
+
+### `fn read_int(r: Reader) -> result[int, str]`
+
+An unsigned or negative integer that fits int.
+
+### `fn read_bytes(r: Reader) -> result[bytes, str]`
+
+### `fn read_text(r: Reader) -> result[str, str]`
+
+### `fn read_array(r: Reader) -> result[int, str]`
+
+An array header: its count, or -1 for an indefinite array (read items until at_break, then read_break).
+
+### `fn read_map(r: Reader) -> result[int, str]`
+
+A map header: its pair count, or -1 for an indefinite map.
+
+### `fn read_tag(r: Reader) -> result[u64, str]`
+
+### `fn read_bool(r: Reader) -> result[bool, str]`
+
+### `fn read_null(r: Reader) -> result[bool, str]`
+
+null or undefined.
+
+### `fn read_float(r: Reader) -> result[float, str]`
+
+A half, single or double float; an integer is read as its float too.
+
+### `fn skip(r: Reader) -> result[bool, str]`
+
+### `let K_UINT = 0;`
+
+### `let K_NEG = 1; // n is -1 - u (beyond int's range: read u)`
+
+### `let K_BYTES = 2;`
+
+### `let K_TEXT = 3;`
+
+### `let K_ARRAY = 4;`
+
+### `let K_MAP = 5;`
+
+### `let K_TAG = 6; // tag, with the tagged item as items[0]`
+
+### `let K_BOOL = 7;`
+
+### `let K_NULL = 8;`
+
+### `let K_UNDEFINED = 9;`
+
+### `let K_FLOAT = 10;`
+
+### `let K_SIMPLE = 11; // another simple value, in u`
+
+### `gc struct Value`
+
+### `fn int_value(v: int) -> Value`
+
+### `fn text_value(s: str) -> Value`
+
+### `fn bytes_value(b: bytes) -> Value`
+
+### `fn float_value(f: float) -> Value`
+
+### `fn bool_value(b: bool) -> Value`
+
+### `fn null_value() -> Value`
+
+### `fn array_value(items: [Value]) -> Value`
+
+### `fn map_value(keys: [Value], vals: [Value]) -> Value`
+
+### `fn tag_value(tag: u64, item: Value) -> Value`
+
+### `fn as_int(v: Value) -> opt[int]`
+
+An integer value as int, if it fits.
+
+### `fn get(v: Value, key: str) -> opt[Value]`
+
+The value of a map entry whose key is the text key.
+
+### `fn decode(b: bytes) -> result[Value, str]`
+
+### `fn read_value(r: Reader, depth: int) -> result[Value, str]`
+
+### `fn encode(v: Value) -> bytes`
+
+### `fn write_value(w: Writer, v: Value)`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
 # compress
 
 # compress
@@ -7942,6 +9057,222 @@ attacker-controlled input.
 ### `compress.inflate(bytes, int) -> result[bytes,str]`
 
 ### `compress.inflate_raw(bytes, int) -> result[bytes,str]`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# context
+
+# context
+
+> Package context.
+
+Cancellation and deadlines that flow from a request through everything
+it starts, so one timeout or one cancel stops all the work under it.
+
+```slang
+import "context";
+import "net";
+
+let req = context.with_timeout(context.background(), 2000000000);  // 2 s
+let db = context.with_cancel(req);          // ends when req ends
+context.watch_fd(db, fd);                   // a cancel closes fd
+let rr = net.recv_until(fd, 4096, context.deadline(db));
+context.cancel(req, "client went away");    // ends req and db
+println(context.cause(db) ?? "live");       // "client went away"
+context.release(db);
+```
+
+- `background()` is the root. `with_cancel(parent)`,
+  `with_timeout(parent, ns)` and `with_deadline_at(parent, mono_ns)` make
+  children; a child's deadline is the earlier of its own and its
+  parent's, and cancelling a context cancels everything made from it.
+- `deadline(c)` is an `until` for any API that waits; `remaining(c)` is
+  the nanoseconds left (-1 without a deadline), for a timeout another
+  protocol carries.
+- `cancel(c, reason)` (the first reason wins) and `release(c)`, for a
+  context whose work is done. Call one of them, as with Go's contexts:
+  until then a child stays in its parent's list.
+- `is_done(c)` and `cause(c)`: the cancel reason, `"deadline exceeded"`,
+  or `none` while live.
+- `watch_fd(c, fd)` closes `fd` on cancel, waking a task parked on it
+  with `"closed"`; `unwatch_fd` before closing it yourself. `done_chan(c)`
+  is closed on cancel, for a `select`.
+
+There are no timers: a deadline passing does not close watched fds. The
+operations given `deadline(c)` end at it on their own.
+
+## API
+
+### `gc struct Context`
+
+### `fn background() -> Context`
+
+The root: no deadline, never cancelled unless cancel is called on it.
+
+### `fn with_cancel(parent: Context) -> Context`
+
+A child of parent that can be cancelled on its own.
+
+### `fn with_timeout(parent: Context, ns: int) -> Context`
+
+A child of parent that ends ns nanoseconds from now (or at the parent's deadline, if that is sooner). ns <= 0 is already past.
+
+### `fn with_deadline_at(parent: Context, mono_ns: int) -> Context`
+
+A child of parent that ends at mono_ns, an absolute time.mono() value.
+
+### `fn cancel(c: Context, reason: str)`
+
+Cancels c and every context made from it, with reason as cause's text. The first cancel wins; later ones do nothing.
+
+### `fn release(c: Context)`
+
+Cancel with the reason "released": for a context whose work finished.
+
+### `fn is_done(c: Context) -> bool`
+
+Whether c was cancelled or its deadline has passed.
+
+### `fn cause(c: Context) -> opt[str]`
+
+Why c is done: the cancel reason, or "deadline exceeded"; none while it is live.
+
+### `fn deadline(c: Context) -> until`
+
+c's deadline as an `until` for any API that waits: never for a context without one, already passed for a cancelled one.
+
+### `fn remaining(c: Context) -> int`
+
+Nanoseconds until c's deadline (0 once passed or cancelled), or -1 for a context without one: for a timeout another protocol carries, such as a database statement timeout.
+
+### `fn watch_fd(c: Context, fd: i32)`
+
+Closes fd when c is cancelled, waking any task parked on it with "closed". If c is already cancelled, closes it now. Call unwatch_fd before closing fd yourself, so a later cancel cannot close a reused fd number.
+
+### `fn unwatch_fd(c: Context, fd: i32) -> bool`
+
+Stops watching fd. Returns false if c had already been cancelled (and fd closed by it).
+
+### `fn done_chan(c: Context) -> chan[bool]`
+
+A channel that is closed when c is cancelled, for a `select` that should also end on cancellation. Nothing is ever sent on it.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# crdt
+
+# crdt
+
+> Package crdt.
+
+Conflict-free replicated data types: state that replicas update on their
+own and merge in any order, any number of times, and then agree on.
+They suit counters, sets and maps shared between nodes without a
+coordinator.
+
+```slang
+import "crdt";
+
+let a = crdt.gcounter();
+let b = crdt.gcounter();
+crdt.gc_inc(a, "node-a", 3);
+crdt.gc_inc(b, "node-b", 4);
+crdt.gc_merge(a, b);
+crdt.gc_value(a)            // 7, on whichever node merges both
+```
+
+- `gcounter` (grow-only) and `pncounter` (up and down).
+- `orset`: a set where an add the remover had not seen survives the
+  remove. It is the optimized OR-set, with no tombstones: its size follows
+  the elements present plus one counter per node, however many adds and
+  removes it has seen.
+- `lwwmap`: last writer wins per key, by timestamp, with ties going to
+  the larger node id so every replica picks the same winner. Deletes
+  are tombstones; `map_compact` drops old ones once every replica is
+  known to have merged past them.
+
+Each node passes its own id with its updates. The state is plain data, so
+`json.encode`/`json.decode` ship it.
+
+## API
+
+### `gc struct GCounter`
+
+### `fn gcounter() -> GCounter`
+
+### `fn gc_inc(c: GCounter, node: str, n: int)`
+
+Adds n (n >= 0) to node's count.
+
+### `fn gc_value(c: GCounter) -> int`
+
+### `fn gc_merge(c: GCounter, other: GCounter)`
+
+c takes in everything other has seen.
+
+### `gc struct PNCounter`
+
+### `fn pncounter() -> PNCounter`
+
+### `fn pn_add(c: PNCounter, node: str, delta: int)`
+
+### `fn pn_value(c: PNCounter) -> int`
+
+### `fn pn_merge(c: PNCounter, other: PNCounter)`
+
+### `gc struct ORSet`
+
+Each element carries the dots ("node:n") of the adds that are still live; clock holds the highest n seen from each node. A dot the clock has seen but the element lacks was removed.
+
+### `fn orset() -> ORSet`
+
+### `fn set_add(s: ORSet, node: str, elem: str)`
+
+### `fn set_remove(s: ORSet, elem: str)`
+
+Removes elem as this replica sees it; an add elsewhere that this replica has not seen survives the merge (add wins).
+
+### `fn set_has(s: ORSet, elem: str) -> bool`
+
+### `fn set_items(s: ORSet) -> [str]`
+
+The elements, sorted.
+
+### `fn set_merge(s: ORSet, other: ORSet)`
+
+### `struct Entry`
+
+A value with the time it was written and by whom. A delete is a tombstone, so a merge cannot bring the value back.
+
+### `gc struct LWWMap`
+
+### `fn lwwmap() -> LWWMap`
+
+### `fn map_set(m: LWWMap, node: str, key: str, value: str, ts: int)`
+
+Sets key at time ts (any clock that only moves forward on each node, such as time.wall()); ties go to the larger node id, so every replica picks the same winner.
+
+### `fn map_delete(m: LWWMap, node: str, key: str, ts: int)`
+
+### `fn map_get(m: LWWMap, key: str) -> opt[str]`
+
+### `fn map_keys(m: LWWMap) -> [str]`
+
+The live keys, sorted.
+
+### `fn map_merge(m: LWWMap, other: LWWMap)`
+
+### `fn map_compact(m: LWWMap, before_ts: int)`
+
+Drops tombstones older than before_ts, once every replica has merged past it (a caller's knowledge: merging an older replica afterwards could bring a deleted value back).
 
 ---
 
@@ -8676,6 +10007,17 @@ Percent-escapes are emitted uppercase (RFC 3986 §2.1) and hex digests
 lowercase (what `sha256sum`, git and every API that returns one use).
 Both decoders accept either case.
 
+##### Range requests
+
+`http.parse_range(header, size)` reads a `Range` header for a resource of
+`size` bytes. It gives `ok([])` to send the whole resource (no header, or
+one worth ignoring: malformed, a unit other than bytes, more than 16
+ranges), `ok(ranges)` to answer 206 with those ranges (clipped to the
+end, suffix ranges like `bytes=-500` resolved), or an error to answer 416
+with `Content-Range: bytes */size`. `http.content_range(r, size)` gives
+the `Content-Range` value. With `net.send_file`, a range of a file goes
+straight from the page cache.
+
 ## API
 
 ### `encoding.hex_encode(bytes) -> str`
@@ -8723,6 +10065,72 @@ Both decoders accept either case.
 ### `encoding.crockford_decode(str) -> result[bytes,str]`
 
 ### `encoding.csv_record(bytes, int, int, int, int) -> [int]`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# envelope
+
+# envelope
+
+> Package envelope.
+
+Envelope encryption for stored data: each value gets its own random data
+key, stored wrapped by a key-encryption key named by an id. Rotating the
+key-encryption key then rewrites a few dozen bytes per value, not the
+value, and old keys can stay for reading.
+
+```slang
+import "envelope";
+
+let kr = envelope.keyring();
+envelope.add_key(kr, "2026-11", key_from_kms);         // 32 bytes
+let box = envelope.seal(kr, to_bytes(ssn), to_bytes("user:42"));
+let back = envelope.open(kr, box ?? b"", to_bytes("user:42"));
+
+envelope.add_key(kr, "2027-01", next_key);              // now the sealing key
+let moved = envelope.rewrap(kr, box ?? b"");            // value untouched
+```
+
+Both layers are AES-256-GCM through `crypto.seal`, so nonces are always
+fresh. The aad binds a value to its context, so a box sealed for
+`"user:42"` will not open as `"user:43"`. The wrapped data key is bound
+to its key id. `key_id(box)` says which key sealed a box, `use_key`
+picks the sealing key, and `remove_key` drops an old one (never the
+current one).
+
+## API
+
+### `gc struct Keyring`
+
+### `fn keyring() -> Keyring`
+
+### `fn add_key(kr: Keyring, id: str, key: bytes) -> result[bool, str]`
+
+Adds a 32-byte key-encryption key under id (1 to 255 bytes) and makes it the one new values are sealed with.
+
+### `fn use_key(kr: Keyring, id: str) -> result[bool, str]`
+
+Makes an already added key the one new values are sealed with.
+
+### `fn remove_key(kr: Keyring, id: str) -> result[bool, str]`
+
+Forgets a key: values sealed with it no longer open. Refused for the current key.
+
+### `fn seal(kr: Keyring, plaintext: bytes, aad: bytes) -> result[bytes, str]`
+
+### `fn open(kr: Keyring, box: bytes, aad: bytes) -> result[bytes, str]`
+
+### `fn key_id(box: bytes) -> result[str, str]`
+
+The id of the key a box was sealed with.
+
+### `fn rewrap(kr: Keyring, box: bytes) -> result[bytes, str]`
+
+The box with its data key wrapped by the current key instead; the sealed value itself is unchanged. For rotating keys over stored data.
 
 ---
 
@@ -9268,6 +10676,18 @@ The answer to a HEAD request: the head `write` would send for `r0` -- Content-Le
 ### `fn not_found() -> Response`
 
 ### `fn method_not_allowed() -> Response`
+
+### `struct ByteRange`
+
+One satisfiable byte range, both ends included.
+
+### `fn parse_range(header: str, size: int) -> result[[ByteRange], str]`
+
+The ranges a Range header asks for, out of a resource of `size` bytes: "bytes=0-499", "bytes=500-", "bytes=-500" (the last 500), or several separated by commas. Ranges past the end are clipped; ranges that cannot be satisfied are dropped. ok([])       no Range header worth honouring: send the whole thing (200) ok(ranges)   send 206 with these err(...)     every range unsatisfiable: send 416 with Content-Range: bytes */size A malformed header is treated as absent (ok([])), as RFC 9110 lets a server ignore it. More than 16 ranges are refused as absent too: many small overlapping ranges are a known amplification trick.
+
+### `fn content_range(r: ByteRange, size: int) -> str`
+
+The Content-Range value for one range of a size-byte resource: "bytes 0-499/1234".
 
 ---
 
@@ -10245,6 +11665,85 @@ slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://
 
 
 
+# idempotency
+
+# idempotency
+
+> Package idempotency.
+
+Two patterns for doing a thing exactly once in effect.
+
+**Idempotency keys** (the `Idempotency-Key` header): a retried request
+with the same key gets the first one's response instead of running
+twice.
+
+```slang
+import "idempotency";
+
+let br = idempotency.begin(redis_conn, key, request_fingerprint, 30000, deadline);
+guard let b = br else { return unavailable(); }
+if b.state == idempotency.DONE { return replay(b.response); }
+if b.state == idempotency.IN_PROGRESS { return conflict(); }          // 409
+if b.state == idempotency.MISMATCH { return unprocessable(); }        // 422
+let resp = handle();                                                  // NEW: run it
+idempotency.complete(redis_conn, key, b, resp, 86400000, deadline);   // keep a day
+```
+
+The reservation is one atomic `SET NX`, so two copies of a request
+arriving together cannot both run. It expires after `lock_ms` if the
+process dies, so the key does not stay stuck. `complete` and `abandon`
+act only on the caller's own reservation, and the fingerprint catches a
+key reused for a different request.
+
+**The transactional outbox:** write an event in the same Postgres
+transaction as the change it describes, and let a relay publish it.
+The event goes out if and only if the change commits.
+
+```slang
+import "outbox";
+
+pg.exec(conn, outbox.schema(), deadline);                  // in a migration
+// inside the business transaction:
+outbox.add(conn, "orders.created", payload, deadline);
+// in a relay task, in a loop (publish is fn(outbox.Message) -> bool):
+let n = outbox.relay(conn, 100, publish_to_kafka, deadline);
+```
+
+`relay` claims a batch with `FOR UPDATE SKIP LOCKED`, so several relays
+can share the table. Published rows are deleted, and failed ones are
+retried after 2, 4, 8, ... seconds (at most an hour). Delivery is at
+least once, so consumers should be idempotent too.
+
+## API
+
+### `let NEW = 0;`
+
+### `let IN_PROGRESS = 1;`
+
+### `let DONE = 2;`
+
+### `let MISMATCH = 3;`
+
+### `struct Begin`
+
+### `fn begin(c: redis.Conn, key: str, fingerprint: str, lock_ms: int, deadline: until) -> result[Begin, str]`
+
+Reserves key for this request, or reports what an earlier one did.
+
+### `fn complete(c: redis.Conn, key: str, b: Begin, response: bytes, keep_ms: int, deadline: until) -> result[bool, str]`
+
+Stores the response of a NEW request for keep_ms: false if the reservation was lost (it expired and another request took the key).
+
+### `fn abandon(c: redis.Conn, key: str, b: Begin, deadline: until) -> result[bool, str]`
+
+Gives the key up after a failure that should let a retry run again.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
 # io
 
 # io
@@ -10520,6 +12019,100 @@ with a fraction or exponent is still an integer (`1e3` is 1000, `5.0`
 is 5); `1.5` or `1e-1` is `expected an integer`, and a value outside
 the target type's range is `value … out of range for i8` (or `int`,
 `u64`, …). Floats decode through a `double`, as before.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# lease
+
+# lease
+
+> Package lease.
+
+Leases and leader election: one process at a time holds a named lease,
+for running a scheduled job once across replicas, or for electing one
+leader.
+
+```slang
+import "lease";
+
+let e = lease.elector("jobs:nightly-report", 10000);   // a 10 s lease
+// every ~3 seconds:
+if lease.elect(e, redis_conn, deadline) ?? false {
+    // leading: pass lease.fence(e) with the writes made, so storage can
+    // refuse a stale leader's late ones
+}
+```
+
+- **Redis:** `redis_acquire(conn, name, ttl_ms, deadline)` is
+  `SET name token NX PX ttl`. `redis_renew` and `redis_release` are
+  scripts that check the token first, so a process can never renew or
+  release a lease it lost. Each acquisition takes a fencing token
+  (`INCR name:fence`) that only grows: a leader that stalled past its
+  lease and wakes up still believing it leads carries an older fence
+  than the real leader, and storage that checks fences refuses it. A
+  lease is safe to act on while `remaining_ms(l) > 0`.
+- **Leader election:** `elector(name, ttl_ms)`, `elect` (renew while
+  leading, try to acquire otherwise), `leading`, `fence` and `resign`,
+  which hands over at once instead of after the ttl.
+- **Postgres:** `pg_try_lock` and `pg_unlock` are session advisory
+  locks on `key_of(name)`. They are held while the connection lives, so
+  use a connection of its own, never a pooled one.
+
+## API
+
+### `struct Lease`
+
+### `fn remaining_ms(l: Lease) -> int`
+
+Milliseconds the lease is certainly still held for, by this process's clock (0 once it may have run out).
+
+### `fn redis_acquire(c: redis.Conn, name: str, ttl_ms: int, deadline: until) -> result[opt[Lease], str]`
+
+Takes the lease name for ttl_ms if nobody holds it: some(lease), or none while another process does.
+
+### `fn redis_renew(c: redis.Conn, l: Lease, ttl_ms: int, deadline: until) -> result[bool, str]`
+
+Extends a held lease to ttl_ms from now: false if it was lost (it ran out and someone else took it, or it was released).
+
+### `fn redis_release(c: redis.Conn, l: Lease, deadline: until) -> result[bool, str]`
+
+Gives the lease up: false if it was no longer ours.
+
+### `gc struct Elector`
+
+### `fn elector(name: str, ttl_ms: int) -> Elector`
+
+### `fn elect(e: Elector, c: redis.Conn, deadline: until) -> result[bool, str]`
+
+One round: renew the lease if this process leads, try to take it if not. Call every third of the ttl or so. Whether this process leads now; on an error it does not.
+
+### `fn leading(e: Elector) -> bool`
+
+Whether this process led at its last round and the lease has not run out since.
+
+### `fn fence(e: Elector) -> int`
+
+The fencing token of the current lease (0 when not leading).
+
+### `fn resign(e: Elector, c: redis.Conn, deadline: until)`
+
+Stops leading and releases the lease, so another process can take over at once instead of after the ttl.
+
+### `fn key_of(name: str) -> int`
+
+A stable 63-bit lock key for a name (FNV-1a), for the advisory locks.
+
+### `fn pg_try_lock(c: pg.Conn, name: str, deadline: until) -> result[bool, str]`
+
+Takes the session advisory lock for name without waiting: false while another session holds it.
+
+### `fn pg_unlock(c: pg.Conn, name: str, deadline: until) -> result[bool, str]`
+
+Releases it: false if this session did not hold it.
 
 ---
 
@@ -13038,6 +14631,511 @@ slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://
 
 
 
+# memcache
+
+# memcache
+
+> Package memcache.
+
+A memcached client over the text protocol, across one or more servers.
+
+```slang
+import "memcache";
+
+let mc = memcache.new(["cache-1:11211", "cache-2:11211"]);
+memcache.set(mc, "user:42", to_bytes(body), 300, deadline);   // 5 minutes
+let gr = memcache.get(mc, "user:42", deadline);
+guard let found = gr else let e = err_of(gr) { return err(e); }  // I/O error
+if let v = found { use(v); } else { /* a miss */ }
+```
+
+The client has `get`, `gets` (with the cas token), `get_multi` (one
+request per server), `set`, `add`, `replace`, `cas`, `delete`, `incr`,
+`decr`, `touch` and `close`. Keys spread over servers by rendezvous
+hashing, so adding or removing a server moves only its share. Up to
+`max_idle` connections per server are kept and reused, and a connection
+that saw any error is closed rather than reused. Keys are checked (1 to
+250 bytes, no spaces or control characters) and values are limited to
+`max_value` (1 MB, memcached's default item size).
+
+## API
+
+### `gc struct Client`
+
+### `fn new(servers: [str]) -> Client`
+
+### `struct Item`
+
+### `fn get(c: Client, key: str, deadline: until) -> result[opt[bytes], str]`
+
+The value for key, or none on a miss.
+
+### `fn gets(c: Client, key: str, deadline: until) -> result[opt[Item], str]`
+
+The item for key with its cas token, or none on a miss.
+
+### `fn get_multi(c: Client, keys: [str], deadline: until) -> result[map[str]bytes, str]`
+
+The values of every key found, one request per server.
+
+### `fn set(c: Client, key: str, value: bytes, ttl: int, deadline: until) -> result[bool, str]`
+
+Stores value for ttl seconds (0: no expiry; over 30 days is read by memcached as a unix time).
+
+### `fn add(c: Client, key: str, value: bytes, ttl: int, deadline: until) -> result[bool, str]`
+
+Stores only if the key is absent: false if it was there.
+
+### `fn replace(c: Client, key: str, value: bytes, ttl: int, deadline: until) -> result[bool, str]`
+
+Stores only if the key is present: false if it was not.
+
+### `fn cas(c: Client, key: str, value: bytes, ttl: int, cas_token: int, deadline: until) -> result[bool, str]`
+
+Stores only if the item is unchanged since gets returned cas: false if another writer got there first (or the key is gone).
+
+### `fn delete(c: Client, key: str, deadline: until) -> result[bool, str]`
+
+Deletes key: false if it was not there.
+
+### `fn incr(c: Client, key: str, delta: int, deadline: until) -> result[opt[int], str]`
+
+Adds delta to a numeric value: the new value, or none if the key is absent.
+
+### `fn decr(c: Client, key: str, delta: int, deadline: until) -> result[opt[int], str]`
+
+Subtracts delta, stopping at 0 as memcached does.
+
+### `fn touch(c: Client, key: str, ttl: int, deadline: until) -> result[bool, str]`
+
+Gives key a new ttl: false if it was not there.
+
+### `fn close(c: Client)`
+
+Closes every idle connection.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# metrics
+
+# metrics
+
+> Package metrics.
+
+Prometheus metrics: counters, gauges and histograms with labels, and the
+text exposition format a Prometheus server scrapes.
+
+```slang
+import "metrics";
+
+let reg = metrics.registry();
+let reqs = metrics.counter(reg, "http_requests_total", "Requests served.",
+                           ["method", "code"]);
+let lat = metrics.histogram(reg, "http_request_duration_seconds",
+                            "Request latency.", ["route"],
+                            metrics.default_buckets());
+
+metrics.inc(metrics.with(reqs, ["GET", "200"]));
+let users = metrics.with(lat, ["/users"]);   // keep it: no lookup per update
+metrics.observe(users, 0.012);
+
+// GET /metrics: answer metrics.expose(reg), Content-Type metrics.CONTENT_TYPE
+```
+
+- `counter` (`inc`, `add`; a decrease panics), `gauge` (`set`, `add`,
+  `inc`, `dec`) and `histogram` (`observe`) register a family by name;
+  `with(family, label_values)` gives a series. Keeping the series makes
+  an update one lock, with no label lookup. `remove` drops a series whose
+  label value will not come back, so memory does not grow without bound.
+- Histograms are classic fixed-bucket ones, which Prometheus scrapes:
+  a few ints a series and a binary search per observation.
+  `default_buckets()` are Prometheus's latency buckets in seconds;
+  `exponential_buckets(start, factor, count)` makes others.
+- `expose(reg)` sorts families and series, so two scrapes of an idle
+  program are identical. Names and label names are checked at
+  registration, and label values and help text are escaped.
+
+## API
+
+### `let CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8";`
+
+### `gc struct Series`
+
+### `gc struct Family`
+
+### `gc struct Registry`
+
+### `fn registry() -> Registry`
+
+### `fn default_buckets() -> [float]`
+
+Prometheus's default latency buckets, in seconds.
+
+### `fn exponential_buckets(start: float, factor: float, count: int) -> [float]`
+
+count bounds from start, each factor times the last.
+
+### `fn counter(r: Registry, name: str, help: str, labels: [str]) -> Family`
+
+A counter family: a value that only goes up (inc, add).
+
+### `fn gauge(r: Registry, name: str, help: str, labels: [str]) -> Family`
+
+A gauge family: a value that goes up and down (set, add, inc, dec).
+
+### `fn histogram(r: Registry, name: str, help: str, labels: [str], bounds: [float]) -> Family`
+
+A histogram family with these upper bounds (ascending; +Inf is added).
+
+### `fn with(f: Family, values: [str]) -> Series`
+
+The series for these label values (one per label name, in order), made on first use. Keep it to skip this lookup on every update.
+
+### `fn remove(f: Family, values: [str])`
+
+Drops a series (a label value that will not come back, such as a finished job's id), so a family's memory does not grow without bound.
+
+### `fn inc(s: Series)`
+
+### `fn add(s: Series, v: float)`
+
+Adds v. A counter panics on a negative v: counters only go up, and a decrease reads as a reset to every rate() over it.
+
+### `fn dec(s: Series)`
+
+### `fn set(s: Series, v: float)`
+
+### `fn observe(s: Series, v: float)`
+
+Records one value into a histogram.
+
+### `fn value(s: Series) -> float`
+
+A counter's or gauge's value now.
+
+### `fn expose(r: Registry) -> str`
+
+Every family in the text exposition format, families by name and series by labels, so two scrapes of an idle program are identical.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# msgpack
+
+# msgpack
+
+> Package msgpack.
+
+MessagePack and CBOR (RFC 8949), the two common binary forms of JSON's
+data model, with binary strings added. CBOR also has tags; COSE,
+WebAuthn and CWT are built on it.
+
+```slang
+import "cbor";
+import "msgpack";
+
+// streaming: nothing allocated but the output
+let w = msgpack.writer();
+msgpack.write_map(w, 1);
+msgpack.write_str(w, "id");
+msgpack.write_int(w, 42);
+let data = msgpack.finish(w);
+
+let r = msgpack.reader(data);
+let pairs = msgpack.read_map(r) ?? 0;
+let key = msgpack.read_str(r) ?? "";
+let id = msgpack.read_int(r) ?? 0;
+
+// or as a tree
+let v = cbor.decode(bytes_in) ?? cbor.null_value();
+let temp = cbor.get(v, "temp");
+```
+
+- **Writers** (`write_int`, `write_str`/`write_text`, `write_bin`/
+  `write_bytes`, `write_float`, `write_array`, `write_map`, and so on)
+  always use the shortest form. CBOR writes a float in the smallest of
+  half, single or double precision that holds it exactly, its preferred
+  serialization. MessagePack has `write_ext` and `write_timestamp`; CBOR
+  has `write_tag`.
+- **Readers** read one value at a time (`peek`/`peek_major` says what
+  comes next) and `skip` past what is not needed. CBOR reads
+  indefinite-length strings and containers (`-1` from `read_array` /
+  `read_map`, then items until `at_break`).
+- **Values:** `decode`/`encode` and `read_value`/`write_value` work on a
+  `Value` tree; `get(v, key)` finds a map entry.
+- **Untrusted input:** every length is checked against the bytes left
+  before anything is allocated, so a five-byte "array of 4 billion"
+  fails at once. Nesting is limited to `MAX_DEPTH` (512), and CBOR text
+  must be UTF-8. Both are checked against the specifications' example
+  vectors.
+
+## API
+
+### `let MAX_DEPTH = 512;`
+
+### `gc struct Writer`
+
+### `fn writer() -> Writer`
+
+### `fn finish(w: Writer) -> bytes`
+
+The bytes written so far; the writer is empty again afterwards.
+
+### `fn write_nil(w: Writer)`
+
+### `fn write_bool(w: Writer, v: bool)`
+
+### `fn write_int(w: Writer, v: int)`
+
+### `fn write_uint(w: Writer, v: u64)`
+
+An unsigned value beyond int's range (up to 2^64 - 1).
+
+### `fn write_float(w: Writer, v: float)`
+
+### `fn write_float32(w: Writer, v: float)`
+
+A float32: half the size, for values that fit one.
+
+### `fn write_str(w: Writer, s: str)`
+
+### `fn write_bin(w: Writer, b: bytes)`
+
+### `fn write_array(w: Writer, n: int)`
+
+The header of an array of n values; write the n values next.
+
+### `fn write_map(w: Writer, n: int)`
+
+The header of a map of n pairs; write key, value, key, value, ... next.
+
+### `fn write_ext(w: Writer, kind: int, data: bytes)`
+
+An extension value: an application type -128..127 and its bytes.
+
+### `fn write_timestamp(w: Writer, secs: int, nanos: int)`
+
+A timestamp (extension type -1) for unix seconds and nanoseconds, in the shortest of its three forms.
+
+### `let K_NIL = 0;`
+
+### `let K_BOOL = 1;`
+
+### `let K_INT = 2; // fits int`
+
+### `let K_UINT = 3; // above int's range: read_uint`
+
+### `let K_FLOAT = 4;`
+
+### `let K_STR = 5;`
+
+### `let K_BIN = 6;`
+
+### `let K_ARRAY = 7;`
+
+### `let K_MAP = 8;`
+
+### `let K_EXT = 9;`
+
+### `let K_END = 10; // no bytes left`
+
+### `let K_BAD = 11; // 0xc1, never used`
+
+### `gc struct Reader`
+
+### `fn reader(b: bytes) -> Reader`
+
+### `fn remaining(r: Reader) -> int`
+
+Bytes not yet read.
+
+### `fn peek(r: Reader) -> int`
+
+The kind of the next value, without reading it.
+
+### `fn read_nil(r: Reader) -> result[bool, str]`
+
+### `fn read_bool(r: Reader) -> result[bool, str]`
+
+### `fn read_int(r: Reader) -> result[int, str]`
+
+Any integer encoding that fits int.
+
+### `fn read_uint(r: Reader) -> result[u64, str]`
+
+An unsigned integer, the full u64 range.
+
+### `fn read_float(r: Reader) -> result[float, str]`
+
+A float32 or float64; an integer is read as its float too.
+
+### `fn read_str(r: Reader) -> result[str, str]`
+
+### `fn read_bin(r: Reader) -> result[bytes, str]`
+
+### `fn read_array(r: Reader) -> result[int, str]`
+
+An array header: how many values follow.
+
+### `fn read_map(r: Reader) -> result[int, str]`
+
+A map header: how many key-value pairs follow.
+
+### `struct Ext`
+
+### `fn read_ext(r: Reader) -> result[Ext, str]`
+
+### `struct Timestamp`
+
+### `fn read_timestamp(r: Reader) -> result[Timestamp, str]`
+
+Reads extension type -1 in any of its three forms.
+
+### `fn skip(r: Reader) -> result[bool, str]`
+
+Skips the next value, containers and all.
+
+### `gc struct Value`
+
+Any MessagePack value. kind is one of the K_ constants; the field for it holds the value (items for an array, keys and vals for a map).
+
+### `fn nil_value() -> Value`
+
+### `fn bool_value(v: bool) -> Value`
+
+### `fn int_value(v: int) -> Value`
+
+### `fn float_value(v: float) -> Value`
+
+### `fn str_value(v: str) -> Value`
+
+### `fn bin_value(v: bytes) -> Value`
+
+### `fn array_value(items: [Value]) -> Value`
+
+### `fn map_value(keys: [Value], vals: [Value]) -> Value`
+
+### `fn get(v: Value, key: str) -> opt[Value]`
+
+The value of a map entry whose key is the string key.
+
+### `fn decode(b: bytes) -> result[Value, str]`
+
+One whole value; trailing bytes are an error.
+
+### `fn read_value(r: Reader, depth: int) -> result[Value, str]`
+
+The next value from r as a tree.
+
+### `fn encode(v: Value) -> bytes`
+
+### `fn write_value(w: Writer, v: Value)`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# multipart
+
+# multipart
+
+> Package multipart.
+
+`multipart/form-data` (RFC 7578), the body of HTML file uploads, read as a
+stream so a large upload never has to fit in memory.
+
+```slang
+import "multipart";
+
+let b = multipart.boundary_of(content_type) ?? "";
+let p = multipart.parser(b);
+// as each chunk of the body arrives:
+let er = multipart.feed(p, chunk);
+guard let evs = er else { return bad_request(); }
+for e in evs {
+    if e.kind == multipart.PART { /* e.part.name, filename, content_type */ }
+    else if e.kind == multipart.DATA { /* the next e.data bytes of the part */ }
+    else if e.kind == multipart.PART_END { /* the part is complete */ }
+}
+// when the body ends: multipart.finish(p) is an error if it was cut short
+```
+
+Part data comes out as it arrives; the parser holds back only the bytes
+that could start a boundary. Part headers are limited to
+`max_header_bytes` (8 KB) and parts to `max_parts` (1000). `filename*`
+(RFC 5987) is decoded. `parse(body, boundary)` reads a body already in
+memory. `body(boundary)`, `add_field`, `add_file`, `close` and
+`content_type` build one for an upload.
+
+## API
+
+### `let PART = 0; // a part starts: see Event.part`
+
+### `let DATA = 1; // part data: Event.data`
+
+### `let PART_END = 2; // the current part is complete`
+
+### `let DONE = 3; // the closing boundary: nothing more`
+
+### `struct Part`
+
+### `struct Event`
+
+### `gc struct Parser`
+
+### `fn boundary_of(content_type: str) -> opt[str]`
+
+The boundary parameter of a multipart Content-Type.
+
+### `fn parser(boundary: str) -> Parser`
+
+### `fn feed(p: Parser, chunk: bytes) -> result[[Event], str]`
+
+Takes the next bytes of the body; returns what they completed.
+
+### `fn finish(p: Parser) -> result[bool, str]`
+
+The body has ended: an error unless the closing boundary was seen.
+
+### `struct Item`
+
+A whole part with its data, from parse.
+
+### `fn parse(body: bytes, boundary: str) -> result[[Item], str]`
+
+Every part of a body already in memory.
+
+### `gc struct Body`
+
+### `fn body(boundary: str) -> Body`
+
+A body to fill with fields and files; boundary should be random and not occur in the data (a 32-character hex token from a CSPRNG does).
+
+### `fn add_field(w: Body, name: str, value: str)`
+
+### `fn add_file(w: Body, name: str, filename: str, content_type: str, data: bytes)`
+
+### `fn close(w: Body) -> bytes`
+
+The finished body and the Content-Type to send it with.
+
+### `fn content_type(w: Body) -> str`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
 # mysql
 
 # mysql
@@ -13892,6 +15990,101 @@ slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://
 
 
 
+# oidc
+
+# oidc
+
+> Package oidc.
+
+OAuth 2.0 and OpenID Connect for a client: sign users in with Google,
+Microsoft, Okta, Auth0, Keycloak and the like, and get tokens for
+service-to-service calls.
+
+```slang
+import "oidc";
+
+let pr = oidc.discover("https://accounts.google.com", deadline);
+guard let provider = pr else { return err("no provider"); }
+let o = oidc.client(provider, client_id, client_secret, "https://app.example/callback");
+
+// 1. send the browser off; keep state, nonce and pk.verifier in the session
+let pk = oidc.pkce() ?? fail();
+let state = oidc.random_token() ?? "";
+let nonce = oidc.random_token() ?? "";
+redirect(oidc.authorize_url(o, ["openid", "email"], state, nonce, pk));
+
+// 2. on the callback, after checking state: trade the code
+let tr = oidc.exchange(o, code, pk.verifier, deadline);
+guard let tokens = tr else { return err("sign-in failed"); }
+let cr = oidc.verify_id_token(o, tokens.id_token, nonce, deadline);
+guard let who = cr else { return err("bad ID token"); }     // who.sub, who.email
+```
+
+`discover` checks that the document's issuer is the one asked for and
+that the endpoints are HTTPS. `exchange`, `refresh` and
+`client_credentials` authenticate with `client_secret_basic`.
+`verify_id_token` follows OpenID Connect Core 3.1.3.7:
+
+- the signature is checked against the provider's published keys, RS256
+  or ES256 only (`none` and HMAC are refused);
+- the issuer, the audience (and `azp` when there are several), expiry
+  with a minute of leeway, and the nonce are checked.
+
+Keys are cached by `kid` and refetched, at most once a minute, when a
+token names one not seen yet. `Claims.raw` holds every claim.
+
+## API
+
+### `gc struct JValue`
+
+### `struct Provider`
+
+### `gc struct Client`
+
+### `struct Pkce`
+
+### `struct Tokens`
+
+### `struct Claims`
+
+### `fn discover(issuer: str, deadline: until) -> result[Provider, str]`
+
+The provider's configuration from its discovery document. Its issuer must equal the one asked for, and endpoints must be https (http is allowed only on localhost, for tests).
+
+### `fn client(p: Provider, client_id: str, client_secret: str, redirect_uri: str) -> Client`
+
+### `fn pkce() -> result[Pkce, str]`
+
+A PKCE verifier (keep it in the session) and its S256 challenge.
+
+### `fn random_token() -> result[str, str]`
+
+32 random bytes, base64url: for state and nonce.
+
+### `fn authorize_url(o: Client, scopes: [str], state: str, nonce: str, pk: Pkce) -> str`
+
+Where to send the browser to sign in.
+
+### `fn exchange(o: Client, code: str, verifier: str, deadline: until) -> result[Tokens, str]`
+
+Trades an authorization code (with its PKCE verifier) for tokens.
+
+### `fn refresh(o: Client, refresh_token: str, deadline: until) -> result[Tokens, str]`
+
+### `fn client_credentials(o: Client, scopes: [str], deadline: until) -> result[Tokens, str]`
+
+Tokens for the client itself (service to service).
+
+### `fn verify_id_token(o: Client, token: str, nonce: str, deadline: until) -> result[Claims, str]`
+
+Checks an ID token and returns its claims.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
 # os
 
 # os
@@ -13985,6 +16178,155 @@ what `proc` has no answer for rather than duplicating it.
 ### `os.watch_next(int, until) -> result[[str],str]`
 
 ### `os.watch_close(int) -> result[bool,str]`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# otp
+
+# otp
+
+> Package otp.
+
+One-time passwords for two-factor sign-in: HOTP (RFC 4226) and TOTP
+(RFC 6238), the codes authenticator apps show.
+
+```slang
+import "otp";
+
+// enrolment: keep the secret, show the URI as a QR code
+let secret = otp.new_secret() ?? b"";
+let uri = otp.uri(secret, "Acme", "ada@example.com", otp.totp_options());
+
+// sign-in: accept each code once
+let matched = otp.verify_totp(secret, code, now_unix_secs, otp.totp_options());
+guard let step = matched else { return deny(); }
+if step <= user.last_otp_step { return deny(); }   // a replay
+user.last_otp_step = step;
+```
+
+`totp_options()` gives 6 digits, 30-second steps, one step of skew either
+side, and SHA-1 (what apps assume; `"SHA256"` and `"SHA512"` also work).
+`verify_totp` compares in constant time and returns the time step that
+matched, so a code cannot be used twice: within its 30 seconds it is
+otherwise valid for anyone who saw it. There are also `hotp`, `totp`,
+`verify_hotp` (with a look-ahead window), `parse_secret` (base32 as apps
+show it) and `new_secret` (160 random bits). Checked against both RFCs'
+test vectors.
+
+## API
+
+### `struct Options`
+
+### `fn totp_options() -> Options`
+
+### `fn new_secret() -> result[bytes, str]`
+
+A random 160-bit secret, the size RFC 4226 recommends for SHA-1.
+
+### `fn hotp(secret: bytes, counter: int, o: Options) -> str`
+
+The HOTP code for a counter value.
+
+### `fn totp(secret: bytes, unix_secs: int, o: Options) -> str`
+
+The TOTP code for a moment, in unix seconds.
+
+### `fn step_of(unix_secs: int, o: Options) -> int`
+
+The time step (counter) a TOTP code at unix_secs belongs to.
+
+### `fn verify_totp(secret: bytes, code: str, unix_secs: int, o: Options) -> opt[int]`
+
+The time step code is valid for, within o.skew steps of unix_secs; none if it matches none. Compare the step with the last one accepted for the user to refuse replays.
+
+### `fn verify_hotp(secret: bytes, code: str, counter: int, window: int, o: Options) -> opt[int]`
+
+The counter value code matches, looking ahead up to window counters from counter (HOTP resynchronisation); none if none does.
+
+### `fn uri(secret: bytes, issuer: str, account: str, o: Options) -> str`
+
+The otpauth:// URI authenticator apps read (usually from a QR code).
+
+### `fn parse_secret(b32: str) -> result[bytes, str]`
+
+A secret typed or pasted as base32 (spaces, lower case and missing padding allowed), as apps display it.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# outbox
+
+# outbox
+
+> Package outbox.
+
+Two patterns for doing a thing exactly once in effect.
+
+**Idempotency keys** (the `Idempotency-Key` header): a retried request
+with the same key gets the first one's response instead of running
+twice.
+
+```slang
+import "idempotency";
+
+let br = idempotency.begin(redis_conn, key, request_fingerprint, 30000, deadline);
+guard let b = br else { return unavailable(); }
+if b.state == idempotency.DONE { return replay(b.response); }
+if b.state == idempotency.IN_PROGRESS { return conflict(); }          // 409
+if b.state == idempotency.MISMATCH { return unprocessable(); }        // 422
+let resp = handle();                                                  // NEW: run it
+idempotency.complete(redis_conn, key, b, resp, 86400000, deadline);   // keep a day
+```
+
+The reservation is one atomic `SET NX`, so two copies of a request
+arriving together cannot both run. It expires after `lock_ms` if the
+process dies, so the key does not stay stuck. `complete` and `abandon`
+act only on the caller's own reservation, and the fingerprint catches a
+key reused for a different request.
+
+**The transactional outbox:** write an event in the same Postgres
+transaction as the change it describes, and let a relay publish it.
+The event goes out if and only if the change commits.
+
+```slang
+import "outbox";
+
+pg.exec(conn, outbox.schema(), deadline);                  // in a migration
+// inside the business transaction:
+outbox.add(conn, "orders.created", payload, deadline);
+// in a relay task, in a loop (publish is fn(outbox.Message) -> bool):
+let n = outbox.relay(conn, 100, publish_to_kafka, deadline);
+```
+
+`relay` claims a batch with `FOR UPDATE SKIP LOCKED`, so several relays
+can share the table. Published rows are deleted, and failed ones are
+retried after 2, 4, 8, ... seconds (at most an hour). Delivery is at
+least once, so consumers should be idempotent too.
+
+## API
+
+### `fn schema() -> str`
+
+### `fn add(c: pg.Conn, topic: str, payload: bytes, deadline: until) -> result[int, str]`
+
+Queues an event; call it inside the transaction that makes the change. Returns the event's id.
+
+### `struct Message`
+
+### `fn relay(c: pg.Conn, batch: int, publish: fn(Message) -> bool, deadline: until) -> result[int, str]`
+
+Publishes up to batch ready events with publish (true: it went out), deleting those that did and pushing back those that did not (by 2^attempts seconds, at most an hour). Returns how many were published. Uses its own transaction: call it on a connection that is not in one.
+
+### `fn pending(c: pg.Conn, deadline: until) -> result[int, str]`
+
+Events waiting, ready or not.
 
 ---
 
@@ -14535,6 +16877,94 @@ slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://
 
 
 
+# pool
+
+# pool
+
+> Package pool.
+
+A bounded pool of connections (or any costly resource) shared by many
+tasks, for clients that have no pool of their own. It is the design of
+`pg`'s and `mysql`'s pools, made generic over the connection type.
+
+```slang
+import "net";
+import "pool";
+
+fn dial_cache(deadline: until) -> result[i32, str] {
+    return net.dial_until("cache.internal", 11211, deadline);
+}
+fn close_cache(fd: i32) { net.close(fd); }
+fn alive(fd: i32) -> bool { return net.idle_alive(fd); }
+
+let p = pool.new(pool.options(64), dial_cache, close_cache, alive);
+let lr = pool.acquire(p, deadline);
+guard let lease = lr else let e = err_of(lr) { return; }   // "timeout"
+let _s = net.send(lease.v, b"version\r\n");
+pool.release(p, lease);        // pool.discard(p, lease) if it broke
+```
+
+- `acquire` hands out an idle connection, dials one while fewer than
+  `max_open` are open, or waits. Waiting is first come, first served: a
+  release goes straight to the task that has waited longest, which wakes
+  once, so the slowest waiter's latency is its place in the queue.
+- An idle connection is probed (the `probe` function) before reuse only
+  after `probe_after` idle, 1 s by default; one released moments ago is
+  handed out as is.
+- `options(max_open)` also sets `max_idle` (default `max_open`),
+  `idle_timeout` (5 minutes), `max_lifetime` (none; set it behind a
+  balancer so new connections reach new backends) and `probe_after`.
+- `stats(p)`: open, idle and waiting now; dials, reuses, waits, total
+  and longest wait, and timeouts.
+- `close(p)` closes idle connections and fails waiters; leased ones close
+  as they come back. Releasing a lease twice panics.
+
+## API
+
+### `struct Options`
+
+### `fn options(max_open: int) -> Options`
+
+Options with the defaults above for a pool of max_open connections.
+
+### `gc struct Lease[T]`
+
+One connection, on loan from acquire until release or discard.
+
+### `struct Stats`
+
+### `gc struct Pool[T]`
+
+### `fn new[T](o: Options, dial: fn(until) -> result[T, str], close: fn(T), probe: fn(T) -> bool) -> Pool[T]`
+
+A pool that opens nothing until the first acquire. dial makes a connection by a deadline, close ends one, probe says whether an idle one still works (one cheap check, such as net.idle_alive).
+
+### `fn acquire[T](p: Pool[T], deadline: until) -> result[Lease[T], str]`
+
+A connection for the caller's use until release or discard: an idle one, a new one if fewer than max_open are open, or else the next one released, in arrival order. "timeout" if deadline passes first, "pool is closed" after close.
+
+### `fn release[T](p: Pool[T], l: Lease[T])`
+
+Gives a connection back: to the task that has waited longest, else to the idle list. Closed instead once past max_lifetime, beyond max_idle, or after close. Releasing a lease twice panics: two tasks would then share one connection.
+
+### `fn discard[T](p: Pool[T], l: Lease[T])`
+
+Closes a connection the caller found broken, freeing its slot for the next waiter to dial.
+
+### `fn close[T](p: Pool[T])`
+
+Closes every idle connection and fails every waiting acquire; connections in use are closed as they come back. acquire fails from now on.
+
+### `fn stats[T](p: Pool[T]) -> Stats`
+
+A snapshot of the counters.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
 # proc
 
 # proc
@@ -14611,9 +17041,243 @@ working directory as `result[str, str]`.
 
 ### `proc.spawn([str], [str], str, int) -> result[int,str]`
 
+### `proc.runtime_stats() -> [int]`
+
 ### `proc.kill(int, int) -> result[bool,str]`
 
 ### `proc.wait(int, until) -> result[int,str]`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# protobuf
+
+# protobuf
+
+> Package protobuf.
+
+The Protocol Buffers wire format, written and read field by field
+without generated code: for talking to a gRPC or protobuf service whose
+messages are few, or for building a codec on top.
+
+```slang
+import "protobuf";
+
+// message User { int64 id = 1; string name = 2; repeated sint32 deltas = 3; }
+let w = protobuf.writer();
+protobuf.write_int64(w, 1, 42);
+protobuf.write_string(w, 2, "ada");
+protobuf.write_packed_sint(w, 3, [-1, 5, -9]);
+let data = protobuf.finish(w);
+
+let r = protobuf.reader(data);
+while protobuf.more(r) {
+    let fr = protobuf.next(r);              // field number and wire type
+    guard let f = fr else { break; }
+    if f.num == 2 {
+        name = protobuf.read_string(r) ?? "";
+    } else {
+        protobuf.skip(r, f.wire);           // a field this reader does not use
+    }
+}
+```
+
+There are writers for every scalar type (`write_int64`,
+`write_uint64`, `write_sint` with zigzag, `write_bool`, `write_fixed64`,
+`write_fixed32`, `write_double`, `write_float`), plus `write_bytes`,
+`write_string` and packed repeated fields. A nested message is its own
+`Writer`, passed to `write_bytes`. The readers mirror them;
+`read_packed_*` also accept an unpacked element, as parsers must. Lengths
+are checked against the input and varints against their ten-byte limit.
+Groups (wire types 3 and 4) are not read.
+
+## API
+
+### `let WIRE_VARINT = 0;`
+
+### `let WIRE_I64 = 1;`
+
+### `let WIRE_LEN = 2;`
+
+### `let WIRE_I32 = 5;`
+
+### `gc struct Writer`
+
+### `fn writer() -> Writer`
+
+### `fn finish(w: Writer) -> bytes`
+
+### `fn size(w: Writer) -> int`
+
+The bytes written so far, without emptying the writer.
+
+### `fn write_int64(w: Writer, field: int, v: int)`
+
+int32, int64, uint32, uint64 and enum fields. A negative int32 or int64 takes ten bytes, as the format says; use write_sint for fields declared sint32/sint64.
+
+### `fn write_uint64(w: Writer, field: int, v: u64)`
+
+### `fn write_sint(w: Writer, field: int, v: int)`
+
+sint32 and sint64 fields: zigzag, so small negatives stay small.
+
+### `fn write_bool(w: Writer, field: int, v: bool)`
+
+### `fn write_fixed64(w: Writer, field: int, v: u64)`
+
+fixed64, sfixed64.
+
+### `fn write_fixed32(w: Writer, field: int, v: int)`
+
+fixed32, sfixed32 (the low 32 bits of v).
+
+### `fn write_double(w: Writer, field: int, v: float)`
+
+### `fn write_float(w: Writer, field: int, v: float)`
+
+### `fn write_bytes(w: Writer, field: int, b: bytes)`
+
+bytes fields and nested messages (a finished Writer's bytes).
+
+### `fn write_string(w: Writer, field: int, s: str)`
+
+### `fn write_packed_int(w: Writer, field: int, vs: [int])`
+
+repeated int32/int64/uint32/uint64/enum/bool, packed.
+
+### `fn write_packed_sint(w: Writer, field: int, vs: [int])`
+
+repeated sint32/sint64, packed.
+
+### `fn write_packed_double(w: Writer, field: int, vs: [float])`
+
+repeated double, packed.
+
+### `gc struct Reader`
+
+### `fn reader(b: bytes) -> Reader`
+
+### `fn more(r: Reader) -> bool`
+
+### `struct Field`
+
+### `fn next(r: Reader) -> result[Field, str]`
+
+The next field's number and wire type; read its value next with the reader for that type, or skip it.
+
+### `fn read_varint(r: Reader) -> result[int, str]`
+
+A varint field: int32/int64/uint*/enum read as int (uint64 values above int's range come back negative; read_uvarint keeps them).
+
+### `fn read_uvarint(r: Reader) -> result[u64, str]`
+
+### `fn read_sint(r: Reader) -> result[int, str]`
+
+A zigzag (sint32/sint64) field.
+
+### `fn read_bool(r: Reader) -> result[bool, str]`
+
+### `fn read_fixed64(r: Reader) -> result[u64, str]`
+
+### `fn read_fixed32(r: Reader) -> result[int, str]`
+
+A fixed32 field as an unsigned value; sfixed32 is read_sfixed32.
+
+### `fn read_sfixed32(r: Reader) -> result[int, str]`
+
+### `fn read_double(r: Reader) -> result[float, str]`
+
+### `fn read_float(r: Reader) -> result[float, str]`
+
+### `fn read_bytes(r: Reader) -> result[bytes, str]`
+
+A length-delimited field: bytes, a string, a nested message, or packed repeated values.
+
+### `fn read_string(r: Reader) -> result[str, str]`
+
+### `fn read_packed_int(r: Reader, wire: int) -> result[[int], str]`
+
+A packed repeated varint field (or a single unpacked element, which a parser must also accept for repeated scalars).
+
+### `fn read_packed_sint(r: Reader, wire: int) -> result[[int], str]`
+
+### `fn skip(r: Reader, wire: int) -> result[bool, str]`
+
+Skips a field's value of the given wire type.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# proxyproto
+
+# proxyproto
+
+> Package proxyproto.
+
+The PROXY protocol, versions 1 and 2: the header HAProxy, AWS NLB and
+other balancers put in front of a connection so the server sees the
+real client address instead of the balancer's.
+
+```slang
+import "net";
+import "proxyproto";
+import "time";
+
+let hr = proxyproto.read_until(fd, until_of(time.mono() + 5000000000));
+guard let h = hr else let e = err_of(hr) { net.close(fd); return; }
+println(h.src_addr + ":" + to_str(h.src_port));   // the real client
+// h.rest: bytes that came after the header, the start of the stream
+```
+
+- `parse(b)` reads a header from the start of `b`: `some(header)`,
+  `none` when `b` is a prefix of one and more bytes are needed, or an
+  error when `b` is not a PROXY header. `header.size` is its length.
+- `read_until(fd, deadline)` reads one off a socket and keeps any bytes
+  that arrived after it in `header.rest`.
+- A `Header` has `version`, `family` (`tcp4`, `tcp6`, `udp4`, `udp6`,
+  `unix`, `unknown`), the source and destination addresses and ports, and
+  v2's `tlvs` (`kind`, `value`): ALPN, the TLS server name (0x02), AWS's
+  VPC endpoint id (0xEA) and so on. `local` is true for a v2 LOCAL
+  header, a balancer's health check, which carries no addresses.
+- `encode_v1(h)` and `encode_v2(h)` build headers, for a proxy written
+  in slang or a test. IPv6 addresses are printed in RFC 5952 form.
+
+The header is only bytes the peer sent. Require it on a listener that
+only the balancer can reach, or check the peer address first: otherwise
+any client can claim any address. The header comes before any TLS
+handshake, and `net.tls_accept` does its own accept on the listener, so
+a PROXY header in front of TLS needs a server-side TLS upgrade of an
+accepted fd, which `net` does not have yet.
+
+## API
+
+### `struct Tlv`
+
+One v2 type-length-value field: ALPN (0x01), authority (0x02, the TLS SNI name), unique id (0x05), SSL details (0x20), AWS VPC endpoint id (0xEA), and so on.
+
+### `struct Header`
+
+### `fn parse(b: bytes) -> result[opt[Header], str]`
+
+The header at the start of b; none if b is a prefix of one and more bytes are needed; an error if b does not start with a PROXY header.
+
+### `fn read_until(fd: i32, deadline: until) -> result[Header, str]`
+
+Reads a header from fd, then stops: whatever arrived after it is in rest. Bounded by deadline as a whole.
+
+### `fn encode_v1(h: Header) -> bytes`
+
+The v1 (text) header for h: "PROXY TCP4 1.2.3.4 5.6.7.8 1111 443\r\n". Families other than tcp4 and tcp6 are sent as UNKNOWN.
+
+### `fn encode_v2(h: Header) -> result[bytes, str]`
+
+The v2 (binary) header for h, TLVs included. An error for an address that does not match h.family.
 
 ---
 
@@ -15447,6 +18111,199 @@ slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://
 
 
 
+# resilience
+
+# resilience
+
+> Package resilience.
+
+Ways to fail well under load, each safe to share between tasks.
+
+```slang
+import "resilience";
+
+let b = resilience.breaker(resilience.breaker_options());
+if resilience.allow(b) {
+    let r = call_upstream();
+    let worked = false;
+    if let _v = r { worked = true; }
+    resilience.record(b, worked);
+}
+
+let per_ip = resilience.gcra(100.0, 20);        // 100/s per key, bursts of 20
+let d = resilience.gcra_allow(per_ip, client_ip);
+if !d.allowed { /* 429 with Retry-After from d.retry_after_ns */ }
+```
+
+- **Circuit breaker:** `breaker(o)`, `allow`, `record`. It opens when
+  failures reach `failure_ratio` of the last `window` calls (once
+  `min_calls` have been seen), refuses calls for `open_ns`, then lets
+  `probes` trial calls through: that many successes close it, one failure
+  opens it again. `breaker_state` and `trips` report it.
+- **Bulkhead:** `bulkhead(limit)`, `try_enter`, `leave`. At most `limit`
+  calls at once; the rest are turned away at once rather than queued.
+- **Retry budget:** `retry_budget(ratio, min_per_sec)`. Each request
+  `deposit`s `ratio` of a retry and each retry (`can_retry`) takes one,
+  so retries cannot multiply the load in an outage.
+- **Retry:** `retry(f, arg, options, budget, rng, deadline)` calls
+  `f(arg, deadline)` with full-jitter backoff until it succeeds, the
+  attempts run out, the budget refuses, or the deadline passes. An error
+  starting with `"permanent:"` is not retried.
+- **Token bucket:** `token_bucket(rate, burst)`, `take`, `take_n`,
+  `wait_ns`.
+- **Keyed GCRA:** `gcra(rate, burst)` and `gcra_allow(g, key)` give a
+  `Decision` with `allowed`, `retry_after_ns` and `remaining`. State is
+  one int per key; keys whose bucket is full again are dropped as the map
+  grows, so memory follows the keys active within one burst period.
+- **Hedging:** `hedge(f, arg, delay_ns, deadline)` calls `f` and, if it
+  has not answered within `delay_ns`, calls it again and returns the
+  first success. Use it for idempotent reads only. The slower call runs
+  to its end in the background.
+
+## API
+
+### `struct BreakerOptions`
+
+### `fn breaker_options() -> BreakerOptions`
+
+### `gc struct Breaker`
+
+### `fn breaker(o: BreakerOptions) -> Breaker`
+
+### `fn allow(b: Breaker) -> bool`
+
+Whether a call may go ahead. Every allowed call must be followed by record(b, ok) once it finishes.
+
+### `fn record(b: Breaker, ok: bool)`
+
+The outcome of a call allow let through.
+
+### `fn breaker_state(b: Breaker) -> str`
+
+"closed", "open" or "half-open".
+
+### `fn trips(b: Breaker) -> int`
+
+How many times the breaker has opened.
+
+### `gc struct Bulkhead`
+
+At most `limit` calls at once; the rest are turned away at once rather than queued, so one slow dependency cannot take every task with it.
+
+### `fn bulkhead(limit: int) -> Bulkhead`
+
+### `fn try_enter(b: Bulkhead) -> bool`
+
+Takes a place if there is one. Every true must be followed by leave.
+
+### `fn leave(b: Bulkhead)`
+
+### `fn bulkhead_active(b: Bulkhead) -> int`
+
+Calls in progress, and calls turned away so far.
+
+### `fn bulkhead_rejected(b: Bulkhead) -> int`
+
+### `gc struct RetryBudget`
+
+Retries as a share of requests (Finagle's and gRPC's budget): each request deposits `ratio` of a retry, each retry withdraws one, and `min_per_sec` retries a second are always allowed. During an outage retries cannot multiply the load beyond 1 + ratio.
+
+### `fn retry_budget(ratio: float, min_per_sec: int) -> RetryBudget`
+
+### `fn deposit(b: RetryBudget)`
+
+An original request (not a retry) was made.
+
+### `fn can_retry(b: RetryBudget) -> bool`
+
+Whether a retry may go ahead; takes one from the budget if so.
+
+### `struct RetryOptions`
+
+### `fn retry_options() -> RetryOptions`
+
+### `fn retry[A, T](f: fn(A, until) -> result[T, str], a: A, o: RetryOptions, budget: RetryBudget, r: rand.Rng, deadline: until) -> result[T, str]`
+
+Calls f(a, deadline) until it succeeds, the attempts run out, the budget refuses a retry, or the deadline passes. The last error is returned. budget may be shared by every caller of one dependency. Errors reported as "permanent: ..." by f are not retried.
+
+### `gc struct TokenBucket`
+
+rate tokens a second, holding at most burst: allow takes one.
+
+### `fn token_bucket(rate_per_sec: float, burst: int) -> TokenBucket`
+
+### `fn take(tb: TokenBucket) -> bool`
+
+### `fn take_n(tb: TokenBucket, n: int) -> bool`
+
+Takes n tokens if there are that many; none otherwise.
+
+### `fn wait_ns(tb: TokenBucket, n: int) -> int`
+
+Nanoseconds until n tokens are there (0 if they are now; -1 if n is more than the bucket holds).
+
+### `gc struct Gcra`
+
+The generic cell rate algorithm, per key: `rate` a second per key with bursts of `burst`, one int of state per key (its theoretical arrival time) -- the limiter Redis's redis-cell and many gateways use. Keys idle long enough to be full again are dropped as the map grows, so memory follows the keys active within one burst period.
+
+### `struct Decision`
+
+### `fn gcra(rate_per_sec: float, burst: int) -> Gcra`
+
+### `fn gcra_allow(g: Gcra, key: str) -> Decision`
+
+### `fn gcra_keys(g: Gcra) -> int`
+
+Keys tracked now.
+
+### `fn hedge[A, T](f: fn(A, until) -> result[T, str], a: A, delay_ns: int, deadline: until) -> result[T, str]`
+
+Calls f(a, deadline); if it has not answered within delay_ns, calls it again and takes whichever answers first with a success. Cuts tail latency for idempotent reads at the cost of at most one extra call. The slower call is not stopped: it runs to its end in the background and its answer is dropped.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# runtime
+
+# runtime
+
+> Package runtime.
+
+What the program's runtime is doing, for a `/debug` endpoint or metrics.
+
+```slang
+import "runtime";
+
+let s = runtime.stats();
+println(to_str(s.rss_bytes / 1048576) + " MB resident, " + to_str(s.tasks) +
+        " tasks, longest GC pause " + to_str(s.gc_pause_max_ns / 1000) + " us");
+```
+
+`runtime.stats()` returns `gc_majors` and `gc_minors` (collections so
+far), `gc_pause_total_ns` and `gc_pause_max_ns` (time the program was
+stopped for them), `heap_live_bytes` (live after the last full
+collection), `heap_new_bytes` (allocated since), `rss_bytes` and
+`rss_peak_bytes` (resident memory now and at most), `tasks` (spawned
+tasks running, the caller included if it is one) and `workers` (OS
+threads running tasks). The counters are kept whether or not anything
+reads them, at a few atomic adds per collection; reading them is a few
+loads and one system call.
+
+## API
+
+### `struct Stats`
+
+### `fn stats() -> Stats`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
 # s3
 
 # s3
@@ -15680,6 +18537,128 @@ slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://
 
 
 
+# singleflight
+
+# singleflight
+
+> Package singleflight.
+
+Concurrent identical calls share one execution: while a call for a key
+is running, more calls for that key wait for its answer instead of
+running again. It is the cure for a cache stampede, where a popular key
+expires and a thousand requests reach the database at once.
+
+```slang
+import "singleflight";
+
+fn load_user(id: str, deadline: until) -> result[User, str] { ... }
+
+let users = singleflight.group(load_user);     // one group per loader
+let r = singleflight.call(users, "user:" + id, id, deadline);
+```
+
+The first caller for a key runs the function; the others get its result
+or its error. A call that panics answers every waiter with an error.
+Waiters wait for the running call, which ends at the first caller's
+deadline, not theirs. `forget(g, key)` makes the next call run anew, and
+`runs`/`joins` count calls that ran and calls that shared.
+
+## API
+
+### `gc struct Flight[T]`
+
+### `gc struct Group[A, T]`
+
+### `fn group[A, T](f: fn(A, until) -> result[T, str]) -> Group[A, T]`
+
+A group whose calls run f.
+
+### `fn call[A, T](g: Group[A, T], key: str, a: A, deadline: until) -> result[T, str]`
+
+g's function on a, once per key at a time; concurrent calls for the key share its result.
+
+### `fn forget[A, T](g: Group[A, T], key: str)`
+
+Makes the next call for key run anew, even while one is in flight (those already waiting still get the running call's answer).
+
+### `fn runs[A, T](g: Group[A, T]) -> int`
+
+Calls that ran f, and calls that shared another's run.
+
+### `fn joins[A, T](g: Group[A, T]) -> int`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# smtp
+
+# smtp
+
+> Package smtp.
+
+Sending mail: an SMTP client (RFC 5321) with STARTTLS or implicit TLS and
+AUTH PLAIN, and a MIME builder for text, HTML and attachments.
+
+```slang
+import "proc";
+import "smtp";
+
+let cfg = smtp.config("smtp.example.com", 587);      // STARTTLS on 587
+cfg.username = "app@example.com";
+cfg.password = proc.getenv("SMTP_PASSWORD") ?? "";
+let m = smtp.message("App <app@example.com>", ["ada@example.com"], "Welcome");
+m.text = "Hello Ada";
+m.html = "<p>Hello <b>Ada</b></p>";
+let r = smtp.send(cfg, m, deadline);
+```
+
+- `config(host, port)` uses STARTTLS, or implicit TLS on port 465. A
+  server that does not offer STARTTLS is refused before any password is
+  sent; `security: "none"` is for a local relay only.
+- A `Message` has `from`, `to`, `cc`, `bcc` (sent to, never shown),
+  `reply_to`, `subject`, `text`, `html`, `attachments` and extra
+  `headers`. Text and HTML go in `multipart/alternative`, and
+  attachments make it `multipart/mixed`. Parts are base64 in 76-column
+  lines, and non-ASCII names and subjects use RFC 2047 encoded words.
+- `build(m)` gives the message bytes, and `send_raw` sends prepared
+  ones. Lines starting with `.` are dot-stuffed. A CR or LF in a header
+  value is replaced, so a subject cannot add headers.
+
+## API
+
+### `struct Config`
+
+### `fn config(host: str, port: int) -> Config`
+
+### `struct Attachment`
+
+### `struct Message`
+
+### `fn message(from: str, to: [str], subject: str) -> Message`
+
+### `fn send(cfg: Config, m: Message, deadline: until) -> result[bool, str]`
+
+Sends m: one SMTP transaction to every recipient in to, cc and bcc.
+
+### `fn build(m: Message) -> bytes`
+
+The RFC 5322 message for m, with CRLF line endings: what send puts after DATA (before dot-stuffing).
+
+### `fn send_raw(cfg: Config, from: str, rcpts: [str], data: bytes, deadline: until) -> result[bool, str]`
+
+### `fn address_of(a: str) -> str`
+
+The bare address of "Name <addr>" or "addr".
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
 # sort
 
 # sort
@@ -15881,6 +18860,73 @@ they don't recurse. Exceeding a cap is a normal error through
 ### `sql.col_text(rawptr, int) -> str`
 
 ### `sql.col_blob(rawptr, int) -> bytes`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# sse
+
+# sse
+
+> Package sse.
+
+Server-Sent Events: a server pushing events to a browser's `EventSource`
+over one long response, and a client reading such a stream.
+
+```slang
+import "sse";
+
+// server, on a link after reading the request
+c.send_bytes(sse.head(), deadline);
+c.send_bytes(sse.event("tick", "{\"n\":1}", "1"), deadline);
+c.send_bytes(sse.comment("keep-alive"), deadline);     // every ~15 seconds
+
+// client
+let p = sse.parser();
+for e in sse.feed(p, chunk) { println(e.kind + ": " + e.data); }
+```
+
+`head()` sends no Content-Length (the stream ends when the server closes
+the connection) and tells buffering proxies not to hold events back.
+`event` splits multi-line data into data lines. The parser follows the
+HTML specification: CR, LF and CRLF line endings even when split between
+chunks, the last event id (for `Last-Event-ID` on reconnect), `retry_ms`,
+comments, and a leading byte-order mark.
+
+## API
+
+### `fn head() -> bytes`
+
+The response head for an event stream.
+
+### `fn event(kind: str, data: str, id: str) -> bytes`
+
+One event. kind "" means the default "message"; id "" sends none. Data with newlines becomes several data lines, as the format requires.
+
+### `fn comment(text: str) -> bytes`
+
+A comment line, which clients ignore: a heartbeat that keeps idle proxies from closing the stream.
+
+### `fn retry(ms: int) -> bytes`
+
+Tells the client how long to wait before reconnecting.
+
+### `struct Event`
+
+### `gc struct Parser`
+
+### `fn parser() -> Parser`
+
+### `fn feed(p: Parser, chunk: bytes) -> [Event]`
+
+The events completed by the next bytes of the stream.
+
+### `fn retry_ms(p: Parser) -> int`
+
+The reconnection delay the server last asked for, or -1.
 
 ---
 
@@ -16874,6 +19920,136 @@ The document as JSON.
 ### `fn decode[T](text: str) -> result[T, str]`
 
 The document decoded into T, as json.decode would decode its JSON.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# trace
+
+# trace
+
+> Package trace.
+
+Distributed tracing: spans with W3C trace context propagation
+(`traceparent`), exported to an OpenTelemetry collector over OTLP/HTTP
+with JSON bodies.
+
+```slang
+import "trace";
+
+let t = trace.tracer("checkout", "http://otel-collector:4318");
+
+// a request came in: continue the caller's trace if it sent one
+let parent = trace.parse_traceparent(incoming_traceparent);
+let span = trace.start(t, "POST /orders", parent);
+trace.set_str(span, "http.route", "/orders");
+let db = trace.child(span, "insert order");
+trace.end(db);
+outgoing_headers["traceparent"] = trace.traceparent(span);   // to the next service
+trace.end(span);
+```
+
+- `start(t, name, parent)` starts a span: a child of a caller's context
+  (from `parse_traceparent`, which refuses malformed values per the W3C
+  spec) or the root of a new trace. `child(span, name)` nests one.
+- `set_str`, `set_int`, `set_float`, `set_bool`, `set_kind`, `set_error`
+  and `set_ok` describe it; `end` queues it for export.
+- Ended spans are sent in batches by a background task: when
+  `max_batch` are queued, and every `flush_ns` otherwise. The queue is
+  bounded by `max_queue`; spans past it, or lost in a failed send, are
+  counted in `counts(t).dropped`, so a dead collector costs bounded
+  memory. `flush(t, deadline)` sends now.
+- `sample_ratio` decides new traces; a continued trace follows the
+  caller's sampled flag. An unsampled span records nothing.
+- A tracer with endpoint `""` sends nothing and keeps spans for
+  `drain(t)`, for tests.
+
+## API
+
+### `struct Options`
+
+### `fn options() -> Options`
+
+### `struct SpanContext`
+
+A span's place in a trace, as traceparent carries it.
+
+### `struct Attr`
+
+### `gc struct Span`
+
+### `gc struct Tracer`
+
+### `let KIND_INTERNAL = 1;`
+
+### `let KIND_SERVER = 2;`
+
+### `let KIND_CLIENT = 3;`
+
+### `let KIND_PRODUCER = 4;`
+
+### `let KIND_CONSUMER = 5;`
+
+### `fn tracer(service: str, endpoint: str) -> Tracer`
+
+A tracer for one service. endpoint is the collector's base URL (spans go to endpoint + "/v1/traces"); "" exports nothing and keeps ended spans for drain(), for tests.
+
+### `fn tracer_with(service: str, endpoint: str, o: Options) -> Tracer`
+
+### `fn start(t: Tracer, name: str, parent: opt[SpanContext]) -> Span`
+
+A new span: a child of parent (a caller's context, from parse_traceparent) or the root of a new trace.
+
+### `fn child(s: Span, name: str) -> Span`
+
+A span inside s, in the same trace.
+
+### `fn set_kind(s: Span, kind: int)`
+
+### `fn set_str(s: Span, key: str, v: str)`
+
+### `fn set_int(s: Span, key: str, v: int)`
+
+### `fn set_float(s: Span, key: str, v: float)`
+
+### `fn set_bool(s: Span, key: str, v: bool)`
+
+### `fn set_error(s: Span, msg: str)`
+
+Marks the span failed, with a message.
+
+### `fn set_ok(s: Span)`
+
+### `fn end(s: Span)`
+
+Ends the span and queues it for export. A second end does nothing.
+
+### `fn traceparent(s: Span) -> str`
+
+The traceparent header value for s: "00-<trace>-<span>-<flags>".
+
+### `fn parse_traceparent(h: str) -> opt[SpanContext]`
+
+The caller's span context from a traceparent header; none if the value is missing or malformed (start a new trace then).
+
+### `fn flush(t: Tracer, deadline: until) -> result[int, str]`
+
+Sends every queued span now. Returns how many were sent.
+
+### `fn drain(t: Tracer) -> [Span]`
+
+Ended spans not yet sent, removed from the queue: for a tracer with no endpoint, as in tests.
+
+### `struct Counts`
+
+### `fn counts(t: Tracer) -> Counts`
+
+### `fn encode_otlp(t: Tracer, spans: [Span]) -> bytes`
+
+The OTLP/HTTP JSON body for spans (ExportTraceServiceRequest).
 
 ---
 

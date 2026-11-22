@@ -72,6 +72,8 @@ working directory as `result[str, str]`.
 
 ### `proc.spawn([str], [str], str, int) -> result[int,str]`
 
+### `proc.runtime_stats() -> [int]`
+
 ### `proc.kill(int, int) -> result[bool,str]`
 
 ### `proc.wait(int, until) -> result[int,str]`

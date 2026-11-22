@@ -207,7 +207,7 @@ static sl_res_str_str *sl_fs_realpath(const char *path) {
  * is not open. Of the file already opened, so what is served is what
  * was checked. */
 static sl_arr *sl_fs_fstat(int fd) {
-    sl_arr *a = sl_arr_new(sizeof(long long), 4);
+    sl_arr *a = sl_arr_new(sizeof(long long), SL_ELEM_NOPTR);
     struct stat st;
     if (fstat(fd, &st) != 0)
         return a;
