@@ -1,5 +1,12 @@
 # todo
 
+- [x] **`acme` (2026-11-22, feat/acme).** An RFC 8555 client: ES256 JWS
+  with replay nonces (badNonce retried), account registration, orders,
+  http-01 challenges served from a store the program's handler answers,
+  finalize with a CSR for a fresh P-256 key, chain download and
+  renew_due. Tested end to end against an in-test CA that verifies the
+  JWS signatures and the key authorization. Carries a copy of oidc's
+  small JSON reader; one shared package is a follow-up.
 - [x] **`lease` (2026-11-22, feat/lease).** Redis leases with
   token-checked renew/release and fencing tokens, a leader elector, and
   Postgres session advisory locks. Unit-tested against a fake Redis, run

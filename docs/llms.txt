@@ -18,6 +18,7 @@ Start with /llms-small.txt: the whole language on one page, about 3k tokens, eno
 - [C interop](interop/index.md): Calling C, and the safety rules that come with it.
 - [How it works](internals/index.md): The compiler pipeline, the collector, the scheduler.
 - [Limitations](limitations/index.md): What slang does not do, stated plainly.
+- [acme](packages/acme.md): Package acme.
 - [balance](packages/balance.md): Package balance.
 - [builder](packages/builder.md): Package builder.
 - [byteutil](packages/byteutil.md): Package byteutil.
