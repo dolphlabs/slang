@@ -18,9 +18,9 @@ standalone repo under `slangpackages/`.
 
 `net` has TCP and Unix stream sockets only.
 
-- [ ] **UDP** (stdlib, `net`): bind, `send_to`, `recv_from` with deadlines
+- [x] **UDP** (stdlib, `net`): bind, `send_to`, `recv_from` with deadlines
   on the reactor, connected UDP, and multicast join/leave. DNS, syslog,
-  StatsD, game and voice servers, and later QUIC need it.
+  StatsD, game and voice servers, and later QUIC need it. PR #600 (open).
 - [ ] **Socket options** (stdlib, `net`): `SO_REUSEPORT` listeners (one
   accept queue per core), `TCP_NODELAY`, keepalive idle/interval/count,
   listen backlog, and `TCP_FASTOPEN` where the OS has it.
@@ -31,7 +31,8 @@ standalone repo under `slangpackages/`.
   NLB put in front of a connection, so servers see the real client address.
 - [ ] **DNS resolver** (stdlib): A/AAAA/CNAME lookups over UDP with TCP
   fallback, `/etc/resolv.conf` and `/etc/hosts`, a TTL cache, timeouts,
-  and happy-eyeballs dialing (RFC 8305).
+  and happy-eyeballs dialing (RFC 8305). `net.dial` resolves IPv4 only
+  today, so it cannot reach an IPv6 address: this fixes that.
 - [ ] **Graceful restart and draining** (stdlib): hand listening sockets to
   a new process, stop accepting, and drain open connections with a
   deadline.
