@@ -8911,6 +8911,164 @@
         }
       ]
     },
+    "metrics": {
+      "name": "metrics",
+      "kind": "source",
+      "items": [
+        {
+          "name": "CONTENT_TYPE",
+          "decl": "let",
+          "sig": "let CONTENT_TYPE = \"text/plain; version=0.0.4; charset=utf-8\";",
+          "doc": "",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 28
+        },
+        {
+          "name": "Series",
+          "decl": "struct",
+          "sig": "gc struct Series",
+          "doc": "",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 34
+        },
+        {
+          "name": "Family",
+          "decl": "struct",
+          "sig": "gc struct Family",
+          "doc": "",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 45
+        },
+        {
+          "name": "Registry",
+          "decl": "struct",
+          "sig": "gc struct Registry",
+          "doc": "",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 55
+        },
+        {
+          "name": "registry",
+          "decl": "fn",
+          "sig": "fn registry() -> Registry",
+          "doc": "",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 60
+        },
+        {
+          "name": "default_buckets",
+          "decl": "fn",
+          "sig": "fn default_buckets() -> [float]",
+          "doc": "Prometheus's default latency buckets, in seconds.",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 66
+        },
+        {
+          "name": "exponential_buckets",
+          "decl": "fn",
+          "sig": "fn exponential_buckets(start: float, factor: float, count: int) -> [float]",
+          "doc": "count bounds from start, each factor times the last.",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 71
+        },
+        {
+          "name": "counter",
+          "decl": "fn",
+          "sig": "fn counter(r: Registry, name: str, help: str, labels: [str]) -> Family",
+          "doc": "A counter family: a value that only goes up (inc, add).",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 82
+        },
+        {
+          "name": "gauge",
+          "decl": "fn",
+          "sig": "fn gauge(r: Registry, name: str, help: str, labels: [str]) -> Family",
+          "doc": "A gauge family: a value that goes up and down (set, add, inc, dec).",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 87
+        },
+        {
+          "name": "histogram",
+          "decl": "fn",
+          "sig": "fn histogram(r: Registry, name: str, help: str, labels: [str], bounds: [float]) -> Family",
+          "doc": "A histogram family with these upper bounds (ascending; +Inf is added).",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 92
+        },
+        {
+          "name": "with",
+          "decl": "fn",
+          "sig": "fn with(f: Family, values: [str]) -> Series",
+          "doc": "The series for these label values (one per label name, in order), made on first use. Keep it to skip this lookup on every update.",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 104
+        },
+        {
+          "name": "remove",
+          "decl": "fn",
+          "sig": "fn remove(f: Family, values: [str])",
+          "doc": "Drops a series (a label value that will not come back, such as a finished job's id), so a family's memory does not grow without bound.",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 131
+        },
+        {
+          "name": "inc",
+          "decl": "fn",
+          "sig": "fn inc(s: Series)",
+          "doc": "",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 140
+        },
+        {
+          "name": "add",
+          "decl": "fn",
+          "sig": "fn add(s: Series, v: float)",
+          "doc": "Adds v. A counter panics on a negative v: counters only go up, and a decrease reads as a reset to every rate() over it.",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 146
+        },
+        {
+          "name": "dec",
+          "decl": "fn",
+          "sig": "fn dec(s: Series)",
+          "doc": "",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 158
+        },
+        {
+          "name": "set",
+          "decl": "fn",
+          "sig": "fn set(s: Series, v: float)",
+          "doc": "",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 167
+        },
+        {
+          "name": "observe",
+          "decl": "fn",
+          "sig": "fn observe(s: Series, v: float)",
+          "doc": "Records one value into a histogram.",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 177
+        },
+        {
+          "name": "value",
+          "decl": "fn",
+          "sig": "fn value(s: Series) -> float",
+          "doc": "A counter's or gauge's value now.",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 196
+        },
+        {
+          "name": "expose",
+          "decl": "fn",
+          "sig": "fn expose(r: Registry) -> str",
+          "doc": "Every family in the text exposition format, families by name and series by labels, so two scrapes of an idle program are identical.",
+          "file": "stdlib/metrics/metrics.sl",
+          "line": 205
+        }
+      ]
+    },
     "mysql": {
       "name": "mysql",
       "kind": "source",
