@@ -1,5 +1,11 @@
 # todo
 
+- [x] **`resilience` (2026-11-22, feat/resilience).** Circuit breaker
+  (failure ratio over a call window, half-open probes), bulkhead, retry
+  budget (integer milli-tokens: in floats ten deposits of 0.1 made
+  0.999... and refused the retry they earned), `retry` with full jitter,
+  token bucket, keyed GCRA with sweeping of full keys, and `hedge`.
+
 - [x] **A leaf function could hold a safepoint (found 2026-11-21 when
   math/big's tests crashed after merging dev; fixed in
   fix/leaf-body-no-safepoint).** Callers skip their bracket around a call
