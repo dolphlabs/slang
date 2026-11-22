@@ -268,6 +268,7 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg mysql redis regex
 strings unicode encoding compress math math/vec decimal rand builder byteutil flags sort
+uuid http http2 httpc websocket singleflight template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 uuid http http2 httpc websocket resilience template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 uuid http http2 httpc websocket multipart sse template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 uuid http http2 httpc websocket smtp template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
@@ -490,6 +491,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - resilience: breaker_options, breaker, allow, record, breaker_state, trips, bulkhead, try_enter, leave, bulkhead_active, bulkhead_rejected, retry_budget (+12 more)
 - s3: new_client, from_env, put_object, get_object, get_range, head_object, delete_object, list_objects, create_multipart, upload_part, complete_multipart, abort_multipart (+8 more)
 - sigv4: new_signer, amz_date_now, payload_hash, derive_key, signing_key, scope, uri_encode, canonical_query, authorization, sign, presign_query, presign
+- singleflight: group, call, forget, runs, joins
 - smtp: config, message, send, build, send_raw, address_of
 - sort: ints, floats, strings, by, by_stable, search_ints, search_floats, search_strings, search_by
 - sql: open, close, exec, last_insert_id, prepare, finalize, reset, bind_int, bind_float, bind_text, bind_blob, bind_null (+8 more)

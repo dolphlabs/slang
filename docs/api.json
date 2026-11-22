@@ -13771,6 +13771,68 @@
         }
       ]
     },
+    "singleflight": {
+      "name": "singleflight",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Flight",
+          "decl": "struct",
+          "sig": "gc struct Flight[T]",
+          "doc": "",
+          "file": "stdlib/singleflight/singleflight.sl",
+          "line": 18
+        },
+        {
+          "name": "Group",
+          "decl": "struct",
+          "sig": "gc struct Group[A, T]",
+          "doc": "",
+          "file": "stdlib/singleflight/singleflight.sl",
+          "line": 25
+        },
+        {
+          "name": "group",
+          "decl": "fn",
+          "sig": "fn group[A, T](f: fn(A, until) -> result[T, str]) -> Group[A, T]",
+          "doc": "A group whose calls run f.",
+          "file": "stdlib/singleflight/singleflight.sl",
+          "line": 34
+        },
+        {
+          "name": "call",
+          "decl": "fn",
+          "sig": "fn call[A, T](g: Group[A, T], key: str, a: A, deadline: until) -> result[T, str]",
+          "doc": "g's function on a, once per key at a time; concurrent calls for the key share its result.",
+          "file": "stdlib/singleflight/singleflight.sl",
+          "line": 41
+        },
+        {
+          "name": "forget",
+          "decl": "fn",
+          "sig": "fn forget[A, T](g: Group[A, T], key: str)",
+          "doc": "Makes the next call for key run anew, even while one is in flight (those already waiting still get the running call's answer).",
+          "file": "stdlib/singleflight/singleflight.sl",
+          "line": 79
+        },
+        {
+          "name": "runs",
+          "decl": "fn",
+          "sig": "fn runs[A, T](g: Group[A, T]) -> int",
+          "doc": "Calls that ran f, and calls that shared another's run.",
+          "file": "stdlib/singleflight/singleflight.sl",
+          "line": 88
+        },
+        {
+          "name": "joins",
+          "decl": "fn",
+          "sig": "fn joins[A, T](g: Group[A, T]) -> int",
+          "doc": "",
+          "file": "stdlib/singleflight/singleflight.sl",
+          "line": 95
+        }
+      ]
+    },
     "smtp": {
       "name": "smtp",
       "kind": "source",

@@ -1,5 +1,9 @@
 # todo
 
+- [x] **`singleflight` (2026-11-22, feat/singleflight).** A group bound
+  to a loader function: concurrent calls for one key share a single run
+  and its result or error; a panicking call answers every waiter with an
+  error (the run is a spawned task, so `join_wait` catches it).
 - [x] **`resilience` (2026-11-22, feat/resilience).** Circuit breaker
   (failure ratio over a call window, half-open probes), bulkhead, retry
   budget (integer milli-tokens: in floats ten deposits of 0.1 made

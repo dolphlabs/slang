@@ -63,6 +63,7 @@ Start with /llms-small.txt: the whole language on one page, about 3k tokens, eno
 - [resilience](packages/resilience.md): Package resilience.
 - [s3](packages/s3.md): Package s3.
 - [sigv4](packages/sigv4.md): Package sigv4.
+- [singleflight](packages/singleflight.md): Package singleflight.
 - [smtp](packages/smtp.md): Package smtp.
 - [sort](packages/sort.md): Package sort.
 - [sql](packages/sql.md): Package sql.
