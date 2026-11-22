@@ -973,6 +973,7 @@ void force_native_result_types(CG *cg) {
         res_cname(cg, "bool", "str");
         res_cname(cg, "link", "fault");
         res_cname(cg, "int", "fault");
+        res_cname(cg, "[bytes]", "str"); /* net.recv_from */
         /* cg->want_tls is only known for certain after the dry run
          * has walked every statement (same "populate now, read back
          * on the real run" pattern as opts/res/spawns above) */

@@ -2,22 +2,20 @@
 #include <limits.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <sys/stat.h>
 #include <time.h>
 #include <sys/socket.h>
 #if defined(__linux__)
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
-#include <sys/sendfile.h>
 #define SL_REACTOR_EPOLL 1
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
 #include <sys/event.h>
-#include <sys/uio.h>
 #define SL_REACTOR_KQUEUE 1
 #else
 #error "slang net: need kqueue or epoll"
 #endif
 #include <netinet/in.h>
+#include <net/if.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <sys/un.h>
@@ -2301,6 +2299,381 @@ static sl_res_bool_str *sl_net_nonblock(int fd) {
        is what the side-table actually tracks. */
     sl_net_user_nonblock_insert((void *)(intptr_t)fd);
     return sl_net_ok_bool(true);
+}
+
+/* ---- UDP ---------------------------------------------------------------
+ *
+ * Datagram sockets on the same fds and reactor as TCP. A peer address is
+ * an opaque value: the raw sockaddr (sockaddr_in or sockaddr_in6) as
+ * bytes. recv_from hands it back and send_to takes it as is, so replying
+ * to a sender never resolves a name or formats a string; net.udp_addr
+ * resolves one ahead of time and net.addr_str prints it. The layout is
+ * this process's own (BSD sockaddrs carry a length byte), so it is not
+ * for storing or sending elsewhere. */
+
+#define SL_UDP_MAX 65535 /* the largest datagram: recv_from's default size */
+
+typedef struct {
+    struct sockaddr_storage ss;
+    socklen_t len;
+} sl_udp_addr;
+
+/* host as an IP literal ("" is any IPv4 address) into a, or -1. */
+static int sl_udp_parse_ip(const char *host, int port, sl_udp_addr *a) {
+    memset(a, 0, sizeof(*a));
+    if (port < 0 || port > 65535)
+        return -1;
+    if (!strchr(host, ':')) {
+        struct sockaddr_in *v4 = (struct sockaddr_in *)&a->ss;
+        v4->sin_family = AF_INET;
+        v4->sin_port = htons((uint16_t)port);
+        if (host[0] == '\0')
+            v4->sin_addr.s_addr = htonl(INADDR_ANY);
+        else if (inet_pton(AF_INET, host, &v4->sin_addr) != 1)
+            return -1;
+        a->len = sizeof(struct sockaddr_in);
+        return 0;
+    }
+    struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)&a->ss;
+    v6->sin6_family = AF_INET6;
+    v6->sin6_port = htons((uint16_t)port);
+    if (inet_pton(AF_INET6, host, &v6->sin6_addr) != 1)
+        return -1;
+    a->len = sizeof(struct sockaddr_in6);
+    return 0;
+}
+
+/* An IP literal as is, anything else through the resolver (IPv4, like
+ * net.dial), bounded by u. Returns 0, -1 with *msg set, or -2 for the
+ * deadline. */
+static int sl_udp_resolve(const char *host, int port, sl_until u,
+                          sl_udp_addr *a, const char **msg) {
+    if (port < 0 || port > 65535) {
+        *msg = "port out of range";
+        return -1;
+    }
+    if (sl_udp_parse_ip(host, port, a) == 0)
+        return 0;
+    char portstr[16];
+    sl_rt_preempt_disable();
+    snprintf(portstr, sizeof(portstr), "%d", port);
+    sl_rt_preempt_enable();
+    struct addrinfo *res = NULL;
+    int timed_out = 0;
+    int rc = sl_dns_lookup_until(host, portstr, &res, u, &timed_out);
+    if (timed_out)
+        return -2;
+    if (rc != 0 || !res) {
+        *msg = gai_strerror(rc);
+        return -1;
+    }
+    memset(a, 0, sizeof(*a));
+    memcpy(&a->ss, res->ai_addr, res->ai_addrlen);
+    a->len = (socklen_t)res->ai_addrlen;
+    freeaddrinfo(res);
+    return 0;
+}
+
+static sl_bytes *sl_udp_addr_bytes(const struct sockaddr_storage *ss,
+                                   socklen_t len) {
+    sl_bytes *b = sl_bytes_alloc_uninit(len);
+    memcpy(b->ptr, ss, len);
+    return b;
+}
+
+/* An address from net.udp_addr / recv_from back into a, or -1. */
+static int sl_udp_addr_of(sl_bytes *b, sl_udp_addr *a) {
+    if (!b || (b->len != (long long)sizeof(struct sockaddr_in) &&
+               b->len != (long long)sizeof(struct sockaddr_in6)))
+        return -1;
+    memset(a, 0, sizeof(*a));
+    memcpy(&a->ss, b->ptr, (size_t)b->len);
+    a->len = (socklen_t)b->len;
+    int fam = ((struct sockaddr *)&a->ss)->sa_family;
+    if ((fam == AF_INET && a->len != sizeof(struct sockaddr_in)) ||
+        (fam == AF_INET6 && a->len != sizeof(struct sockaddr_in6)) ||
+        (fam != AF_INET && fam != AF_INET6))
+        return -1;
+    return 0;
+}
+
+/* A new non-blocking datagram socket the reactor can park on. */
+static int sl_udp_socket(int family, int *err) {
+    int fd = socket(family, SOCK_DGRAM, 0);
+    if (fd < 0) { *err = errno; return -1; }
+    sl_net_set_nonblocking(fd);
+    return fd;
+}
+
+static sl_res_i32_str *sl_udp_ready(int fd) {
+    sl_rt_preempt_disable();
+    sl_reactor_clear_closing(fd);
+    sl_rt_preempt_enable();
+    sl_reactor_mark_persistent(fd);
+    return sl_net_ok_i32((int32_t)fd);
+}
+
+static sl_res_i32_str *sl_udp_bind_opt(const char *host, int port,
+                                       int shared) {
+    sl_udp_addr a;
+    if (sl_udp_parse_ip(host, port, &a) != 0)
+        return sl_net_err_i32(port < 0 || port > 65535
+                                  ? "port out of range"
+                                  : "udp_bind: host must be an IP address or \"\"");
+    int e = 0;
+    int fd = sl_udp_socket(a.ss.ss_family, &e);
+    if (fd < 0) return sl_net_err_i32(strerror(e));
+    if (shared) {
+        /* Several sockets on one port: multicast listeners, or one
+           socket per core with the kernel spreading datagrams. */
+        int one = 1;
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+#ifdef SO_REUSEPORT
+        setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one));
+#endif
+    }
+    if (bind(fd, (struct sockaddr *)&a.ss, a.len) != 0) {
+        e = errno; close(fd);
+        return sl_net_err_i32(strerror(e));
+    }
+    return sl_udp_ready(fd);
+}
+
+static sl_res_i32_str *sl_net_udp_bind(const char *host, int port) {
+    return sl_udp_bind_opt(host, port, 0);
+}
+
+static sl_res_i32_str *sl_net_udp_bind_shared(const char *host, int port) {
+    return sl_udp_bind_opt(host, port, 1);
+}
+
+/* A connected datagram socket: net.send and net.recv work on it and the
+ * kernel drops datagrams from any other sender. */
+static sl_res_i32_str *sl_net_udp_dial(const char *host, int port,
+                                       sl_until u) {
+    sl_udp_addr a;
+    const char *msg = "";
+    int rc = sl_udp_resolve(host, port, u, &a, &msg);
+    if (rc == -2) return sl_net_err_i32("timeout");
+    if (rc != 0) return sl_net_err_i32(msg);
+    int e = 0;
+    int fd = sl_udp_socket(a.ss.ss_family, &e);
+    if (fd < 0) return sl_net_err_i32(strerror(e));
+    /* connect on a datagram socket only records the peer: it never
+       blocks, so there is nothing to park on */
+    if (connect(fd, (struct sockaddr *)&a.ss, a.len) != 0) {
+        e = errno; close(fd);
+        return sl_net_err_i32(strerror(e));
+    }
+    return sl_udp_ready(fd);
+}
+
+static sl_res_bytes_str *sl_net_udp_addr(const char *host, int port,
+                                         sl_until u) {
+    sl_udp_addr a;
+    const char *msg = "";
+    int rc = sl_udp_resolve(host, port, u, &a, &msg);
+    if (rc == -2) return sl_net_err_bytes("timeout");
+    if (rc != 0) return sl_net_err_bytes(msg);
+    return sl_net_ok_bytes(sl_udp_addr_bytes(&a.ss, a.len));
+}
+
+/* "1.2.3.4:53" or "[::1]:53"; "" for bytes that are no address. */
+static const char *sl_net_addr_str(sl_bytes *b) {
+    sl_udp_addr a;
+    if (sl_udp_addr_of(b, &a) != 0)
+        return "";
+    char ip[INET6_ADDRSTRLEN];
+    char out[INET6_ADDRSTRLEN + 10];
+    sl_rt_preempt_disable();
+    if (a.ss.ss_family == AF_INET) {
+        struct sockaddr_in *v4 = (struct sockaddr_in *)&a.ss;
+        inet_ntop(AF_INET, &v4->sin_addr, ip, sizeof(ip));
+        snprintf(out, sizeof(out), "%s:%u", ip, ntohs(v4->sin_port));
+    } else {
+        struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)&a.ss;
+        inet_ntop(AF_INET6, &v6->sin6_addr, ip, sizeof(ip));
+        snprintf(out, sizeof(out), "[%s]:%u", ip, ntohs(v6->sin6_port));
+    }
+    sl_rt_preempt_enable();
+    return sl_strdup(out);
+}
+
+/* One datagram to addr. A datagram goes whole or not at all, so the
+ * count is always len(data). EAGAIN (a full socket buffer) parks. */
+static sl_res_i32_str *sl_net_send_to_u(int fd, sl_bytes *data, sl_bytes *to,
+                                        sl_until u) {
+    sl_udp_addr a;
+    if (sl_udp_addr_of(to, &a) != 0)
+        return sl_net_err_i32("send_to: not an address from udp_addr or recv_from");
+    if (u && sl_until_hit(u))
+        return sl_net_err_i32("timeout");
+    int epoch = sl_reactor_close_epoch(fd);
+    for (;;) {
+        ssize_t n = sendto(fd, data->ptr, (size_t)data->len, 0,
+                           (struct sockaddr *)&a.ss, a.len);
+        if (n >= 0)
+            return sl_net_ok_i32((int32_t)n);
+        if (errno == EINTR)
+            continue;
+        if (errno != EAGAIN && errno != EWOULDBLOCK && errno != ENOBUFS)
+            return sl_net_err_i32(strerror(errno));
+        if (sl_net_user_nonblock_contains((void *)(intptr_t)fd))
+            return sl_net_err_i32("would block");
+        int w = sl_reactor_wait_epoch(fd, SL_REACTOR_WRITE, 0, u, epoch);
+        if (w == -2)
+            return sl_net_err_i32("timeout");
+        if (w == SL_REACTOR_CLOSED)
+            return sl_net_err_i32("closed");
+    }
+}
+
+static sl_res_i32_str *sl_net_send_to(int fd, sl_bytes *data, sl_bytes *to) {
+    return sl_net_send_to_u(fd, data, to, 0);
+}
+
+static sl_res_i32_str *sl_net_send_to_until(int fd, sl_bytes *data,
+                                            sl_bytes *to, sl_until u) {
+    return sl_net_send_to_u(fd, data, to, u);
+}
+
+static sl_res__bytes__str *sl_net_dgram_err(const char *msg) {
+    sl_res__bytes__str *r = (sl_res__bytes__str *)sl_gc_alloc(
+        sizeof(sl_res__bytes__str), sl_gc_trace_sl_res__bytes__str);
+    r->ok = false;
+    r->e = sl_strdup(msg);
+    return r;
+}
+
+/* One datagram as [data, sender]. A datagram longer than max is an error
+ * ("truncated"), not a silent cut: the rest is gone either way, and a
+ * DNS client, say, must know to retry over TCP. Allocation happens only
+ * once the datagram is in (sl_net_recv_bytes says why). */
+static sl_res__bytes__str *sl_net_recv_from_u(int fd, int max, sl_until u) {
+    if (u && sl_until_hit(u))
+        return sl_net_dgram_err("timeout");
+    if (max <= 0 || max > SL_UDP_MAX) max = SL_UDP_MAX;
+    unsigned char *scratch = (unsigned char *)sl_recv_buf_get((size_t)max);
+    int epoch = sl_reactor_close_epoch(fd);
+    for (;;) {
+        struct sockaddr_storage from;
+        struct iovec iov = {scratch, (size_t)max};
+        struct msghdr mh;
+        memset(&mh, 0, sizeof(mh));
+        mh.msg_name = &from;
+        mh.msg_namelen = sizeof(from);
+        mh.msg_iov = &iov;
+        mh.msg_iovlen = 1;
+        ssize_t n = recvmsg(fd, &mh, 0);
+        if (n >= 0) {
+            if (mh.msg_flags & MSG_TRUNC) {
+                sl_recv_buf_put(scratch);
+                return sl_net_dgram_err("truncated");
+            }
+            sl_bytes *data = sl_net_recv_bytes(scratch, (long long)n);
+            sl_recv_buf_put(scratch);
+            sl_bytes *addr = sl_udp_addr_bytes(&from, mh.msg_namelen);
+            sl_arr *pair = sl_arr_new(sizeof(sl_bytes *), 1);
+            sl_arr_push(pair, &data, sizeof(sl_bytes *));
+            sl_arr_push(pair, &addr, sizeof(sl_bytes *));
+            sl_res__bytes__str *r = (sl_res__bytes__str *)sl_gc_alloc(
+                sizeof(sl_res__bytes__str), sl_gc_trace_sl_res__bytes__str);
+            r->ok = true;
+            r->v = pair;
+            return r;
+        }
+        if (errno == EINTR)
+            continue;
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            int e = errno;
+            sl_recv_buf_put(scratch);
+            return sl_net_dgram_err(strerror(e));
+        }
+        if (sl_net_user_nonblock_contains((void *)(intptr_t)fd)) {
+            sl_recv_buf_put(scratch);
+            return sl_net_dgram_err("would block");
+        }
+        int wr = sl_reactor_wait_epoch(fd, SL_REACTOR_READ, 1, u, epoch);
+        if (wr < 0) {
+            sl_recv_buf_put(scratch);
+            return sl_net_dgram_err(wr == -2 ? "timeout"
+                                    : wr == SL_REACTOR_CLOSED ? "closed"
+                                                              : "interrupted");
+        }
+    }
+}
+
+static sl_res__bytes__str *sl_net_recv_from(int fd, int max) {
+    return sl_net_recv_from_u(fd, max, 0);
+}
+
+static sl_res__bytes__str *sl_net_recv_from_until(int fd, int max,
+                                                  sl_until u) {
+    return sl_net_recv_from_u(fd, max, u);
+}
+
+/* Join or leave multicast group `group` on interface `iface` ("" lets the
+ * kernel choose), IPv4 or IPv6 by the group's form. */
+static sl_res_bool_str *sl_udp_membership(int fd, const char *group,
+                                          const char *iface, int join) {
+    struct in_addr g4;
+    struct in6_addr g6;
+    unsigned idx = 0;
+    if (iface[0] != '\0') {
+        idx = if_nametoindex(iface);
+        if (idx == 0)
+            return sl_net_err_bool("unknown interface");
+    }
+    if (inet_pton(AF_INET, group, &g4) == 1) {
+        struct ip_mreq m;
+        memset(&m, 0, sizeof(m));
+        m.imr_multiaddr = g4;
+        m.imr_interface.s_addr = htonl(INADDR_ANY);
+        if (idx != 0) {
+            /* IPv4 names the interface by an address; ip_mreqn takes an
+               index but is Linux-only */
+#ifdef __linux__
+            struct ip_mreqn mn;
+            memset(&mn, 0, sizeof(mn));
+            mn.imr_multiaddr = g4;
+            mn.imr_ifindex = (int)idx;
+            if (setsockopt(fd, IPPROTO_IP,
+                           join ? IP_ADD_MEMBERSHIP : IP_DROP_MEMBERSHIP,
+                           &mn, sizeof(mn)) != 0)
+                return sl_net_err_bool(strerror(errno));
+            return sl_net_ok_bool(true);
+#else
+            return sl_net_err_bool("udp_join: an IPv4 interface by name needs Linux; pass \"\"");
+#endif
+        }
+        if (setsockopt(fd, IPPROTO_IP,
+                       join ? IP_ADD_MEMBERSHIP : IP_DROP_MEMBERSHIP, &m,
+                       sizeof(m)) != 0)
+            return sl_net_err_bool(strerror(errno));
+        return sl_net_ok_bool(true);
+    }
+    if (inet_pton(AF_INET6, group, &g6) == 1) {
+        struct ipv6_mreq m;
+        memset(&m, 0, sizeof(m));
+        m.ipv6mr_multiaddr = g6;
+        m.ipv6mr_interface = idx;
+        if (setsockopt(fd, IPPROTO_IPV6,
+                       join ? IPV6_JOIN_GROUP : IPV6_LEAVE_GROUP, &m,
+                       sizeof(m)) != 0)
+            return sl_net_err_bool(strerror(errno));
+        return sl_net_ok_bool(true);
+    }
+    return sl_net_err_bool("not a multicast group address");
+}
+
+static sl_res_bool_str *sl_net_udp_join(int fd, const char *group,
+                                        const char *iface) {
+    return sl_udp_membership(fd, group, iface, 1);
+}
+
+static sl_res_bool_str *sl_net_udp_leave(int fd, const char *group,
+                                         const char *iface) {
+    return sl_udp_membership(fd, group, iface, 0);
 }
 
 /* ---- send_file ----------------------------------------------------------
