@@ -2403,17 +2403,6 @@ Percent-escapes are emitted uppercase (RFC 3986 §2.1) and hex digests
 lowercase (what `sha256sum`, git and every API that returns one use).
 Both decoders accept either case.
 
-##### Range requests
-
-`http.parse_range(header, size)` reads a `Range` header for a resource of
-`size` bytes. It gives `ok([])` to send the whole resource (no header, or
-one worth ignoring: malformed, a unit other than bytes, more than 16
-ranges), `ok(ranges)` to answer 206 with those ranges (clipped to the
-end, suffix ranges like `bytes=-500` resolved), or an error to answer 416
-with `Content-Range: bytes */size`. `http.content_range(r, size)` gives
-the `Content-Range` value. With `net.send_file`, a range of a file goes
-straight from the page cache.
-
 #### `httpc`
 
 An HTTP/1.1 **client** — the mirror of `http`, which serves. Speaks
@@ -2626,58 +2615,249 @@ that case.
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
 
-#### `multipart`
+#### `smtp`
 
-`multipart/form-data` (RFC 7578), the body of HTML file uploads, read as a
-stream so a large upload never has to fit in memory.
+Sending mail: an SMTP client (RFC 5321) with STARTTLS or implicit TLS and
+AUTH PLAIN, and a MIME builder for text, HTML and attachments.
 
 ```slang
-import "multipart";
+import "proc";
+import "smtp";
 
-let b = multipart.boundary_of(content_type) ?? "";
-let p = multipart.parser(b);
-// as each chunk of the body arrives:
-let er = multipart.feed(p, chunk);
-guard let evs = er else { return bad_request(); }
-for e in evs {
-    if e.kind == multipart.PART { /* e.part.name, filename, content_type */ }
-    else if e.kind == multipart.DATA { /* the next e.data bytes of the part */ }
-    else if e.kind == multipart.PART_END { /* the part is complete */ }
+let cfg = smtp.config("smtp.example.com", 587);      // STARTTLS on 587
+cfg.username = "app@example.com";
+cfg.password = proc.getenv("SMTP_PASSWORD") ?? "";
+let m = smtp.message("App <app@example.com>", ["ada@example.com"], "Welcome");
+m.text = "Hello Ada";
+m.html = "<p>Hello <b>Ada</b></p>";
+let r = smtp.send(cfg, m, deadline);
+```
+
+- `config(host, port)` uses STARTTLS, or implicit TLS on port 465. A
+  server that does not offer STARTTLS is refused before any password is
+  sent; `security: "none"` is for a local relay only.
+- A `Message` has `from`, `to`, `cc`, `bcc` (sent to, never shown),
+  `reply_to`, `subject`, `text`, `html`, `attachments` and extra
+  `headers`. Text and HTML go in `multipart/alternative`, and
+  attachments make it `multipart/mixed`. Parts are base64 in 76-column
+  lines, and non-ASCII names and subjects use RFC 2047 encoded words.
+- `build(m)` gives the message bytes, and `send_raw` sends prepared
+  ones. Lines starting with `.` are dot-stuffed. A CR or LF in a header
+  value is replaced, so a subject cannot add headers.
+#### `trace`
+
+Distributed tracing: spans with W3C trace context propagation
+(`traceparent`), exported to an OpenTelemetry collector over OTLP/HTTP
+with JSON bodies.
+
+```slang
+import "trace";
+
+let t = trace.tracer("checkout", "http://otel-collector:4318");
+
+// a request came in: continue the caller's trace if it sent one
+let parent = trace.parse_traceparent(incoming_traceparent);
+let span = trace.start(t, "POST /orders", parent);
+trace.set_str(span, "http.route", "/orders");
+let db = trace.child(span, "insert order");
+trace.end(db);
+outgoing_headers["traceparent"] = trace.traceparent(span);   // to the next service
+trace.end(span);
+```
+
+- `start(t, name, parent)` starts a span: a child of a caller's context
+  (from `parse_traceparent`, which refuses malformed values per the W3C
+  spec) or the root of a new trace. `child(span, name)` nests one.
+- `set_str`, `set_int`, `set_float`, `set_bool`, `set_kind`, `set_error`
+  and `set_ok` describe it; `end` queues it for export.
+- Ended spans are sent in batches by a background task: when
+  `max_batch` are queued, and every `flush_ns` otherwise. The queue is
+  bounded by `max_queue`; spans past it, or lost in a failed send, are
+  counted in `counts(t).dropped`, so a dead collector costs bounded
+  memory. `flush(t, deadline)` sends now.
+- `sample_ratio` decides new traces; a continued trace follows the
+  caller's sampled flag. An unsampled span records nothing.
+- A tracer with endpoint `""` sends nothing and keeps spans for
+  `drain(t)`, for tests.
+#### `metrics`
+
+Prometheus metrics: counters, gauges and histograms with labels, and the
+text exposition format a Prometheus server scrapes.
+
+```slang
+import "metrics";
+
+let reg = metrics.registry();
+let reqs = metrics.counter(reg, "http_requests_total", "Requests served.",
+                           ["method", "code"]);
+let lat = metrics.histogram(reg, "http_request_duration_seconds",
+                            "Request latency.", ["route"],
+                            metrics.default_buckets());
+
+metrics.inc(metrics.with(reqs, ["GET", "200"]));
+let users = metrics.with(lat, ["/users"]);   // keep it: no lookup per update
+metrics.observe(users, 0.012);
+
+// GET /metrics: answer metrics.expose(reg), Content-Type metrics.CONTENT_TYPE
+```
+
+- `counter` (`inc`, `add`; a decrease panics), `gauge` (`set`, `add`,
+  `inc`, `dec`) and `histogram` (`observe`) register a family by name;
+  `with(family, label_values)` gives a series. Keeping the series makes
+  an update one lock, with no label lookup. `remove` drops a series whose
+  label value will not come back, so memory does not grow without bound.
+- Histograms are classic fixed-bucket ones, which Prometheus scrapes:
+  a few ints a series and a binary search per observation.
+  `default_buckets()` are Prometheus's latency buckets in seconds;
+  `exponential_buckets(start, factor, count)` makes others.
+- `expose(reg)` sorts families and series, so two scrapes of an idle
+  program are identical. Names and label names are checked at
+  registration, and label values and help text are escaped.
+#### `proxyproto`
+
+The PROXY protocol, versions 1 and 2: the header HAProxy, AWS NLB and
+other balancers put in front of a connection so the server sees the
+real client address instead of the balancer's.
+
+```slang
+import "net";
+import "proxyproto";
+import "time";
+
+let hr = proxyproto.read_until(fd, until_of(time.mono() + 5000000000));
+guard let h = hr else let e = err_of(hr) { net.close(fd); return; }
+println(h.src_addr + ":" + to_str(h.src_port));   // the real client
+// h.rest: bytes that came after the header, the start of the stream
+```
+
+- `parse(b)` reads a header from the start of `b`: `some(header)`,
+  `none` when `b` is a prefix of one and more bytes are needed, or an
+  error when `b` is not a PROXY header. `header.size` is its length.
+- `read_until(fd, deadline)` reads one off a socket and keeps any bytes
+  that arrived after it in `header.rest`.
+- A `Header` has `version`, `family` (`tcp4`, `tcp6`, `udp4`, `udp6`,
+  `unix`, `unknown`), the source and destination addresses and ports, and
+  v2's `tlvs` (`kind`, `value`): ALPN, the TLS server name (0x02), AWS's
+  VPC endpoint id (0xEA) and so on. `local` is true for a v2 LOCAL
+  header, a balancer's health check, which carries no addresses.
+- `encode_v1(h)` and `encode_v2(h)` build headers, for a proxy written
+  in slang or a test. IPv6 addresses are printed in RFC 5952 form.
+
+The header is only bytes the peer sent. Require it on a listener that
+only the balancer can reach, or check the peer address first: otherwise
+any client can claim any address. The header comes before any TLS
+handshake, and `net.tls_accept` does its own accept on the listener, so
+a PROXY header in front of TLS needs a server-side TLS upgrade of an
+accepted fd, which `net` does not have yet.
+#### `protobuf`
+
+The Protocol Buffers wire format, written and read field by field
+without generated code: for talking to a gRPC or protobuf service whose
+messages are few, or for building a codec on top.
+
+```slang
+import "protobuf";
+
+// message User { int64 id = 1; string name = 2; repeated sint32 deltas = 3; }
+let w = protobuf.writer();
+protobuf.write_int64(w, 1, 42);
+protobuf.write_string(w, 2, "ada");
+protobuf.write_packed_sint(w, 3, [-1, 5, -9]);
+let data = protobuf.finish(w);
+
+let r = protobuf.reader(data);
+while protobuf.more(r) {
+    let fr = protobuf.next(r);              // field number and wire type
+    guard let f = fr else { break; }
+    if f.num == 2 {
+        name = protobuf.read_string(r) ?? "";
+    } else {
+        protobuf.skip(r, f.wire);           // a field this reader does not use
+    }
 }
-// when the body ends: multipart.finish(p) is an error if it was cut short
 ```
 
-Part data comes out as it arrives; the parser holds back only the bytes
-that could start a boundary. Part headers are limited to
-`max_header_bytes` (8 KB) and parts to `max_parts` (1000). `filename*`
-(RFC 5987) is decoded. `parse(body, boundary)` reads a body already in
-memory. `body(boundary)`, `add_field`, `add_file`, `close` and
-`content_type` build one for an upload.
+There are writers for every scalar type (`write_int64`,
+`write_uint64`, `write_sint` with zigzag, `write_bool`, `write_fixed64`,
+`write_fixed32`, `write_double`, `write_float`), plus `write_bytes`,
+`write_string` and packed repeated fields. A nested message is its own
+`Writer`, passed to `write_bytes`. The readers mirror them;
+`read_packed_*` also accept an unpacked element, as parsers must. Lengths
+are checked against the input and varints against their ten-byte limit.
+Groups (wire types 3 and 4) are not read.
+#### `pool`
 
-#### `sse`
-
-Server-Sent Events: a server pushing events to a browser's `EventSource`
-over one long response, and a client reading such a stream.
+A bounded pool of connections (or any costly resource) shared by many
+tasks, for clients that have no pool of their own. It is the design of
+`pg`'s and `mysql`'s pools, made generic over the connection type.
 
 ```slang
-import "sse";
+import "net";
+import "pool";
 
-// server, on a link after reading the request
-c.send_bytes(sse.head(), deadline);
-c.send_bytes(sse.event("tick", "{\"n\":1}", "1"), deadline);
-c.send_bytes(sse.comment("keep-alive"), deadline);     // every ~15 seconds
+fn dial_cache(deadline: until) -> result[i32, str] {
+    return net.dial_until("cache.internal", 11211, deadline);
+}
+fn close_cache(fd: i32) { net.close(fd); }
+fn alive(fd: i32) -> bool { return net.idle_alive(fd); }
 
-// client
-let p = sse.parser();
-for e in sse.feed(p, chunk) { println(e.kind + ": " + e.data); }
+let p = pool.new(pool.options(64), dial_cache, close_cache, alive);
+let lr = pool.acquire(p, deadline);
+guard let lease = lr else let e = err_of(lr) { return; }   // "timeout"
+let _s = net.send(lease.v, b"version\r\n");
+pool.release(p, lease);        // pool.discard(p, lease) if it broke
 ```
 
-`head()` sends no Content-Length (the stream ends when the server closes
-the connection) and tells buffering proxies not to hold events back.
-`event` splits multi-line data into data lines. The parser follows the
-HTML specification: CR, LF and CRLF line endings even when split between
-chunks, the last event id (for `Last-Event-ID` on reconnect), `retry_ms`,
-comments, and a leading byte-order mark.
+- `acquire` hands out an idle connection, dials one while fewer than
+  `max_open` are open, or waits. Waiting is first come, first served: a
+  release goes straight to the task that has waited longest, which wakes
+  once, so the slowest waiter's latency is its place in the queue.
+- An idle connection is probed (the `probe` function) before reuse only
+  after `probe_after` idle, 1 s by default; one released moments ago is
+  handed out as is.
+- `options(max_open)` also sets `max_idle` (default `max_open`),
+  `idle_timeout` (5 minutes), `max_lifetime` (none; set it behind a
+  balancer so new connections reach new backends) and `probe_after`.
+- `stats(p)`: open, idle and waiting now; dials, reuses, waits, total
+  and longest wait, and timeouts.
+- `close(p)` closes idle connections and fails waiters; leased ones close
+  as they come back. Releasing a lease twice panics.
+#### `context`
+
+Cancellation and deadlines that flow from a request through everything
+it starts, so one timeout or one cancel stops all the work under it.
+
+```slang
+import "context";
+import "net";
+
+let req = context.with_timeout(context.background(), 2000000000);  // 2 s
+let db = context.with_cancel(req);          // ends when req ends
+context.watch_fd(db, fd);                   // a cancel closes fd
+let rr = net.recv_until(fd, 4096, context.deadline(db));
+context.cancel(req, "client went away");    // ends req and db
+println(context.cause(db) ?? "live");       // "client went away"
+context.release(db);
+```
+
+- `background()` is the root. `with_cancel(parent)`,
+  `with_timeout(parent, ns)` and `with_deadline_at(parent, mono_ns)` make
+  children; a child's deadline is the earlier of its own and its
+  parent's, and cancelling a context cancels everything made from it.
+- `deadline(c)` is an `until` for any API that waits; `remaining(c)` is
+  the nanoseconds left (-1 without a deadline), for a timeout another
+  protocol carries.
+- `cancel(c, reason)` (the first reason wins) and `release(c)`, for a
+  context whose work is done. Call one of them, as with Go's contexts:
+  until then a child stays in its parent's list.
+- `is_done(c)` and `cause(c)`: the cancel reason, `"deadline exceeded"`,
+  or `none` while live.
+- `watch_fd(c, fd)` closes `fd` on cancel, waking a task parked on it
+  with `"closed"`; `unwatch_fd` before closing it yourself. `done_chan(c)`
+  is closed on cancel, for a `select`.
+
+There are no timers: a deadline passing does not close watched fds. The
+operations given `deadline(c)` end at it on their own.
 
 #### `websocket`
 
@@ -4257,13 +4437,14 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [byteutil](packages/byteutil.md) -- source package, 6 public items
 - [cache](packages/cache.md) -- source package, 14 public items
 - [compress](packages/compress.md) -- compiler-provided, 10 public items
+- [context](packages/context.md) -- source package, 14 public items
 - [crypto](packages/crypto.md) -- compiler-provided, 54 public items
 - [csv](packages/csv.md) -- source package, 18 public items
 - [decimal](packages/decimal.md) -- source package, 37 public items
 - [encoding](packages/encoding.md) -- compiler-provided, 23 public items
 - [flags](packages/flags.md) -- source package, 23 public items
 - [fs](packages/fs.md) -- compiler-provided, 9 public items
-- [http](packages/http.md) -- source package, 61 public items
+- [http](packages/http.md) -- source package, 58 public items
 - [http2](packages/http2.md) -- source package, 133 public items
 - [httpc](packages/httpc.md) -- source package, 35 public items
 - [io](packages/io.md) -- compiler-provided, 12 public items
@@ -4280,27 +4461,31 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [math/sketch](packages/math/sketch.md) -- source package, 105 public items
 - [math/stats](packages/math/stats.md) -- source package, 128 public items
 - [math/vec](packages/math/vec.md) -- compiler-provided, 23 public items
-- [multipart](packages/multipart.md) -- source package, 19 public items
+- [metrics](packages/metrics.md) -- source package, 19 public items
 - [mysql](packages/mysql.md) -- source package, 49 public items
 - [nats](packages/nats.md) -- source package, 31 public items
 - [net](packages/net.md) -- compiler-provided, 46 public items
 - [os](packages/os.md) -- compiler-provided, 18 public items
 - [pg](packages/pg.md) -- source package, 58 public items
+- [pool](packages/pool.md) -- source package, 11 public items
 - [proc](packages/proc.md) -- compiler-provided, 9 public items
+- [protobuf](packages/protobuf.md) -- source package, 40 public items
+- [proxyproto](packages/proxyproto.md) -- source package, 6 public items
 - [rand](packages/rand.md) -- source package, 15 public items
 - [redis](packages/redis.md) -- source package, 161 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
 - [s3](packages/s3.md) -- source package, 23 public items
 - [sigv4](packages/sigv4.md) -- source package, 14 public items
+- [smtp](packages/smtp.md) -- source package, 9 public items
 - [sort](packages/sort.md) -- source package, 9 public items
 - [sql](packages/sql.md) -- compiler-provided, 20 public items
-- [sse](packages/sse.md) -- source package, 9 public items
 - [strings](packages/strings.md) -- compiler-provided, 28 public items
 - [tar](packages/tar.md) -- source package, 12 public items
 - [template](packages/template.md) -- source package, 7 public items
 - [time](packages/time.md) -- compiler-provided, 5 public items
 - [timez](packages/timez.md) -- source package, 144 public items
 - [toml](packages/toml.md) -- source package, 2 public items
+- [trace](packages/trace.md) -- source package, 30 public items
 - [unicode](packages/unicode.md) -- compiler-provided, 11 public items
 - [uuid](packages/uuid.md) -- source package, 11 public items
 - [websocket](packages/websocket.md) -- source package, 16 public items
