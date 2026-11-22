@@ -73,8 +73,8 @@ standalone repo under `slangpackages/`.
   decode; zstd and brotli as HTTP `Content-Encoding`, lz4 for Kafka.
   Status: needs a decision. The libraries are not on the build machines;
   system dependencies or vendored sources?
-- [ ] **MessagePack and CBOR** (stdlib): encode and decode, structs
-  included, with size limits.
+- [x] **MessagePack and CBOR** (stdlib): encode and decode, structs
+  included, with size limits. PR #615 (open).
 - [x] **Protobuf codec** (stdlib or package): wire-format encode and decode
   outside gRPC. PR #605 (open).
 - [x] **HTTP extras** (stdlib, `http`): Server-Sent Events, streaming
