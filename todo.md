@@ -1,5 +1,13 @@
 # todo
 
+- [x] **`dns` (2026-11-22, feat/dns).** A wire-protocol DNS client:
+  A/AAAA/CNAME/MX/TXT/SRV/NS/PTR over UDP with TCP on truncation,
+  resolv.conf and hosts, search domains and ndots, CNAME chains, a TTL
+  and negative cache, and spoofed or malformed replies ignored. Tested
+  against an in-test name server (UDP and TCP on one port). Also folds
+  the 21 duplicated package-list lines in www/llms-small.md into one
+  list.
+
 - [x] **`until_min(a, b)` (2026-11-22, feat/until-min).** An `until` is
   opaque, so code holding a caller's deadline and its own timeout had no
   way to wait for whichever comes first. The builtin returns the earlier
