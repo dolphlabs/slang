@@ -50,6 +50,7 @@ Start with /llms-small.txt: the whole language on one page, about 3k tokens, eno
 - [math/sketch](packages/math/sketch.md): Package math/sketch.
 - [math/stats](packages/math/stats.md): Package math/stats.
 - [math/vec](packages/math/vec.md): Package math/vec.
+- [memcache](packages/memcache.md): Package memcache.
 - [metrics](packages/metrics.md): Package metrics.
 - [msgpack](packages/msgpack.md): Package msgpack.
 - [multipart](packages/multipart.md): Package multipart.
