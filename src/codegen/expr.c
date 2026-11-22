@@ -824,6 +824,12 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         char *inner = xstrdup("sl_until_never()");
         return wrap_safepoint(cg, e, ctype_of(cg, "until"), NULL, inner);
     }
+    if (!strcmp(name, "until_min")) {
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        char *b = gen_expr(cg, e->as.call.args[1]);
+        char *inner = xasprintf("(sl_until_min(%s, %s))", a, b);
+        return wrap_safepoint(cg, e, ctype_of(cg, "until"), NULL, inner);
+    }
     if (!strcmp(name, "until_hit")) {
         char *a = gen_expr(cg, e->as.call.args[0]);
         char *inner = xasprintf("(sl_until_hit(%s))", a);

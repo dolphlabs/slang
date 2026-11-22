@@ -1812,6 +1812,12 @@ static sl_until sl_until_never(void) { return 0; }
 static int sl_until_hit(sl_until u) {
     return u != 0 && sl_now_ns() >= u;
 }
+/* The earlier of two deadlines; never (0) is later than any instant. */
+static sl_until sl_until_min(sl_until a, sl_until b) {
+    if (a == 0) return b;
+    if (b == 0) return a;
+    return a < b ? a : b;
+}
 
 static sl_fault sl_fault_make(int kind, const char *d) {
     sl_fault f;

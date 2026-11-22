@@ -217,6 +217,9 @@ nothing is captured. Blocking calls (`chan_recv`, `net.*`, `time.sleep`) park
 the task, not the OS thread, so there is no async/await. `select { case let v
 = chan_recv(a) { .. } case chan_send(b, x) { .. } default { .. } }` waits on
 several channels.
+Waiting calls take an `until`, an absolute deadline:
+`until_of(time.mono() + ns)`, `until_never()`, `until_hit(u)` (passed?) and
+`until_min(a, b)` (the earlier; an `until` cannot be compared directly).
 
 ## Functions as values
 

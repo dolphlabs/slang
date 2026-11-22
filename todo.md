@@ -1,5 +1,11 @@
 # todo
 
+- [x] **`until_min(a, b)` (2026-11-22, feat/until-min).** An `until` is
+  opaque, so code holding a caller's deadline and its own timeout had no
+  way to wait for whichever comes first. The builtin returns the earlier
+  of two, with `until_never()` later than any instant. The DNS resolver's
+  per-try timeouts need it.
+
 - [x] **Listener handoff and bounded drain (2026-11-22,
   feat/listener-handoff).** `proc.spawn_fds(argv, env, dir, flags, fds)`
   passes fds to a child as 3, 4, ... with `LISTEN_FDS` (via numbers above
