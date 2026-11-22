@@ -90,8 +90,8 @@ standalone repo under `slangpackages/`.
 - [ ] **OAuth2 and OpenID Connect client** (stdlib or package):
   authorization code with PKCE, client credentials, refresh, discovery,
   ID-token checks against JWKS.
-- [ ] **ACME** (stdlib): automatic certificates from Let's Encrypt with
-  renewal, served through `tls_ctx_add_sni`.
+- [x] **ACME** (stdlib): automatic certificates from Let's Encrypt with
+  renewal, served through `tls_ctx_add_sni`. PR #622 (open).
 - [x] **TOTP and HOTP** (stdlib): RFC 6238/4226 codes and checks with skew. PR #617 (open).
 - [ ] **WebAuthn / passkeys** (package): registration and assertion.
   Status: waits for the CBOR PR (feat/msgpack-cbor) to merge.
