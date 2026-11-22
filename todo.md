@@ -1,5 +1,12 @@
 # todo
 
+- [x] **`webauthn` (2026-11-22, feat/webauthn).** Relying-party
+  registration and login: options JSON, client data, authenticator data
+  and COSE keys checked, ES256/EdDSA/RS256 signatures, the clone counter.
+  Tested with a software authenticator signing with real keys. Its JSON
+  reader is a third copy of oidc's (one shared package is a follow-up)
+  and refuses a `\u0000` that would cut a str short.
+
 - [x] **Listener handoff and bounded drain (2026-11-22,
   feat/listener-handoff).** `proc.spawn_fds(argv, env, dir, flags, fds)`
   passes fds to a child as 3, 4, ... with `LISTEN_FDS` (via numbers above
