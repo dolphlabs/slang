@@ -1,5 +1,10 @@
 # todo
 
+- [x] **`protobuf` (2026-11-22, feat/protobuf).** The wire format by
+  hand: tag/varint/zigzag/fixed/length-delimited writers and readers,
+  packed repeated fields, skip for unknown fields, checked against the
+  encoding guide's examples. Generating code from .proto files is not
+  part of it.
 - [x] **`pool` (2026-11-22, feat/pool).** A generic connection pool,
   `pool.Pool[T]` over `dial`/`close`/`probe` functions, with the FIFO
   hand-off, slot passing, waiter reuse and reaper of `pg`'s pool plus
