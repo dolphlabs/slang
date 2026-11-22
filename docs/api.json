@@ -8911,6 +8911,132 @@
         }
       ]
     },
+    "memcache": {
+      "name": "memcache",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Client",
+          "decl": "struct",
+          "sig": "gc struct Client",
+          "doc": "",
+          "file": "stdlib/memcache/memcache.sl",
+          "line": 23
+        },
+        {
+          "name": "new",
+          "decl": "fn",
+          "sig": "fn new(servers: [str]) -> Client",
+          "doc": "",
+          "file": "stdlib/memcache/memcache.sl",
+          "line": 32
+        },
+        {
+          "name": "Item",
+          "decl": "struct",
+          "sig": "struct Item",
+          "doc": "",
+          "file": "stdlib/memcache/memcache.sl",
+          "line": 38
+        },
+        {
+          "name": "get",
+          "decl": "fn",
+          "sig": "fn get(c: Client, key: str, deadline: until) -> result[opt[bytes], str]",
+          "doc": "The value for key, or none on a miss.",
+          "file": "stdlib/memcache/memcache.sl",
+          "line": 45
+        },
+        {
+          "name": "gets",
+          "decl": "fn",
+          "sig": "fn gets(c: Client, key: str, deadline: until) -> result[opt[Item], str]",
+          "doc": "The item for key with its cas token, or none on a miss.",
+          "file": "stdlib/memcache/memcache.sl",
+          "line": 53
+        },
+        {
+          "name": "get_multi",
+          "decl": "fn",
+          "sig": "fn get_multi(c: Client, keys: [str], deadline: until) -> result[map[str]bytes, str]",
+          "doc": "The values of every key found, one request per server.",
+          "file": "stdlib/memcache/memcache.sl",
+          "line": 70
+        },
+        {
+          "name": "set",
+          "decl": "fn",
+          "sig": "fn set(c: Client, key: str, value: bytes, ttl: int, deadline: until) -> result[bool, str]",
+          "doc": "Stores value for ttl seconds (0: no expiry; over 30 days is read by memcached as a unix time).",
+          "file": "stdlib/memcache/memcache.sl",
+          "line": 96
+        },
+        {
+          "name": "add",
+          "decl": "fn",
+          "sig": "fn add(c: Client, key: str, value: bytes, ttl: int, deadline: until) -> result[bool, str]",
+          "doc": "Stores only if the key is absent: false if it was there.",
+          "file": "stdlib/memcache/memcache.sl",
+          "line": 101
+        },
+        {
+          "name": "replace",
+          "decl": "fn",
+          "sig": "fn replace(c: Client, key: str, value: bytes, ttl: int, deadline: until) -> result[bool, str]",
+          "doc": "Stores only if the key is present: false if it was not.",
+          "file": "stdlib/memcache/memcache.sl",
+          "line": 106
+        },
+        {
+          "name": "cas",
+          "decl": "fn",
+          "sig": "fn cas(c: Client, key: str, value: bytes, ttl: int, cas_token: int, deadline: until) -> result[bool, str]",
+          "doc": "Stores only if the item is unchanged since gets returned cas: false if another writer got there first (or the key is gone).",
+          "file": "stdlib/memcache/memcache.sl",
+          "line": 112
+        },
+        {
+          "name": "delete",
+          "decl": "fn",
+          "sig": "fn delete(c: Client, key: str, deadline: until) -> result[bool, str]",
+          "doc": "Deletes key: false if it was not there.",
+          "file": "stdlib/memcache/memcache.sl",
+          "line": 118
+        },
+        {
+          "name": "incr",
+          "decl": "fn",
+          "sig": "fn incr(c: Client, key: str, delta: int, deadline: until) -> result[opt[int], str]",
+          "doc": "Adds delta to a numeric value: the new value, or none if the key is absent.",
+          "file": "stdlib/memcache/memcache.sl",
+          "line": 128
+        },
+        {
+          "name": "decr",
+          "decl": "fn",
+          "sig": "fn decr(c: Client, key: str, delta: int, deadline: until) -> result[opt[int], str]",
+          "doc": "Subtracts delta, stopping at 0 as memcached does.",
+          "file": "stdlib/memcache/memcache.sl",
+          "line": 133
+        },
+        {
+          "name": "touch",
+          "decl": "fn",
+          "sig": "fn touch(c: Client, key: str, ttl: int, deadline: until) -> result[bool, str]",
+          "doc": "Gives key a new ttl: false if it was not there.",
+          "file": "stdlib/memcache/memcache.sl",
+          "line": 138
+        },
+        {
+          "name": "close",
+          "decl": "fn",
+          "sig": "fn close(c: Client)",
+          "doc": "Closes every idle connection.",
+          "file": "stdlib/memcache/memcache.sl",
+          "line": 147
+        }
+      ]
+    },
     "mysql": {
       "name": "mysql",
       "kind": "source",
