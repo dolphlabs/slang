@@ -6,6 +6,108 @@
     "url": "https://dolphlabs.com"
   },
   "packages": {
+    "acme": {
+      "name": "acme",
+      "kind": "source",
+      "items": [
+        {
+          "name": "LETSENCRYPT",
+          "decl": "let",
+          "sig": "let LETSENCRYPT = \"https://acme-v02.api.letsencrypt.org/directory\";",
+          "doc": "",
+          "file": "stdlib/acme/acme.sl",
+          "line": 29
+        },
+        {
+          "name": "LETSENCRYPT_STAGING",
+          "decl": "let",
+          "sig": "let LETSENCRYPT_STAGING = \"https://acme-staging-v02.api.letsencrypt.org/directory\";",
+          "doc": "",
+          "file": "stdlib/acme/acme.sl",
+          "line": 30
+        },
+        {
+          "name": "Account",
+          "decl": "struct",
+          "sig": "gc struct Account",
+          "doc": "",
+          "file": "stdlib/acme/acme.sl",
+          "line": 32
+        },
+        {
+          "name": "Dir",
+          "decl": "struct",
+          "sig": "struct Dir",
+          "doc": "",
+          "file": "stdlib/acme/acme.sl",
+          "line": 42
+        },
+        {
+          "name": "Certificate",
+          "decl": "struct",
+          "sig": "struct Certificate",
+          "doc": "",
+          "file": "stdlib/acme/acme.sl",
+          "line": 48
+        },
+        {
+          "name": "Challenges",
+          "decl": "struct",
+          "sig": "gc struct Challenges",
+          "doc": "",
+          "file": "stdlib/acme/acme.sl",
+          "line": 54
+        },
+        {
+          "name": "challenges",
+          "decl": "fn",
+          "sig": "fn challenges() -> Challenges",
+          "doc": "",
+          "file": "stdlib/acme/acme.sl",
+          "line": 59
+        },
+        {
+          "name": "http01",
+          "decl": "fn",
+          "sig": "fn http01(c: Challenges, path: str) -> opt[str]",
+          "doc": "The body to answer a GET for path with, if it is a pending http-01 challenge (\"/.well-known/acme-challenge/<token>\").",
+          "file": "stdlib/acme/acme.sl",
+          "line": 66
+        },
+        {
+          "name": "account",
+          "decl": "fn",
+          "sig": "fn account(directory_url: str, key: bytes, contact: [str], deadline: until) -> result[Account, str]",
+          "doc": "Registers (or finds) the account for key at the CA, agreeing to its terms of service.",
+          "file": "stdlib/acme/acme.sl",
+          "line": 81
+        },
+        {
+          "name": "obtain",
+          "decl": "fn",
+          "sig": "fn obtain(a: Account, store: Challenges, names: [str], deadline: until) -> result[Certificate, str]",
+          "doc": "Orders a certificate for names (DNS names), answers their http-01 challenges through store, and returns the issued chain with its new key.",
+          "file": "stdlib/acme/acme.sl",
+          "line": 109
+        },
+        {
+          "name": "renew_due",
+          "decl": "fn",
+          "sig": "fn renew_due(chain_pem: str, days: int) -> bool",
+          "doc": "Whether a certificate expires within days.",
+          "file": "stdlib/acme/acme.sl",
+          "line": 165
+        },
+        {
+          "name": "JValue",
+          "decl": "struct",
+          "sig": "gc struct JValue",
+          "doc": "",
+          "file": "stdlib/acme/json.sl",
+          "line": 15
+        }
+      ]
+    },
     "builder": {
       "name": "builder",
       "kind": "source",
