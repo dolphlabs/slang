@@ -268,6 +268,7 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg mysql redis regex
 strings unicode encoding compress math math/vec decimal rand builder byteutil flags sort
+uuid http http2 httpc websocket resilience template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 uuid http http2 httpc websocket multipart sse template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 uuid http http2 httpc websocket smtp template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 uuid http http2 httpc websocket trace template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
@@ -486,6 +487,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - rand: new, from_os, fork, next_u64, below, between, unit, chance, shuffle, pick, backoff, jitter (+2 more)
 - redis: encode, decode, decode_at, slot, parse_url, connect_config, connect, do, close, usable, ping, echo (+132 more)
 - regex: compile, free, groups, is_match, is_match_bytes, find, find_at, find_bytes, find_bytes_at
+- resilience: breaker_options, breaker, allow, record, breaker_state, trips, bulkhead, try_enter, leave, bulkhead_active, bulkhead_rejected, retry_budget (+12 more)
 - s3: new_client, from_env, put_object, get_object, get_range, head_object, delete_object, list_objects, create_multipart, upload_part, complete_multipart, abort_multipart (+8 more)
 - sigv4: new_signer, amz_date_now, payload_hash, derive_key, signing_key, scope, uri_encode, canonical_query, authorization, sign, presign_query, presign
 - smtp: config, message, send, build, send_raw, address_of
