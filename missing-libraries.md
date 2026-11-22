@@ -50,8 +50,8 @@ standalone repo under `slangpackages/`.
 - [x] **Failure handling** (stdlib): circuit breaker, bulkhead, retry with a
   retry budget (over `rand.backoff`), token-bucket and GCRA rate limiters,
   and request hedging. PR #611 (open).
-- [ ] **Singleflight** (stdlib): concurrent identical calls share one
-  execution, for cache stampedes.
+- [x] **Singleflight** (stdlib): concurrent identical calls share one
+  execution, for cache stampedes. PR #612 (open).
 
 ## 3. Observability
 
