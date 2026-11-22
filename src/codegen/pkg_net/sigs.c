@@ -38,6 +38,9 @@ const NatSig NET_SIGS[] = {
      * which would call every dead connection alive. */
     {"net", "idle_alive", 1, {NA_INT}, "bool", 0},
     {"net", "nonblock", 1, {NA_INT}, "result[bool,str]", 0},
+    /* listeners passed in by proc.spawn_fds or systemd socket activation
+       (LISTEN_FDS); empty when there are none */
+    {"net", "inherited", 0, {0}, "[i32]", 0},
     /* A file's bytes (from fs.open) to a socket: count bytes from off, or
      * to the end of the file for a negative count. sendfile(2) on Linux
      * and macOS, so the bytes never pass through the program. Returns the

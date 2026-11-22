@@ -317,6 +317,7 @@ static const char *argkind_name(NatArgKind k) {
     case NA_BYTES: return "bytes";
     case NA_RAWPTR: return "rawptr";
     case NA_ARR_STR: return "[str]";
+    case NA_ARR_I32: return "[i32]";
     case NA_ARR_BYTES: return "[bytes]";
     case NA_WIRE: return "wire";
     case NA_UNTIL: return "until";

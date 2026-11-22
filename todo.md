@@ -1,5 +1,13 @@
 # todo
 
+- [x] **Listener handoff and bounded drain (2026-11-22,
+  feat/listener-handoff).** `proc.spawn_fds(argv, env, dir, flags, fds)`
+  passes fds to a child as 3, 4, ... with `LISTEN_FDS` (via numbers above
+  them all, so overlapping sources and targets are safe);
+  `net.inherited()` takes them (systemd socket activation too); and
+  `proc.wait_idle_until(deadline)` bounds a drain. Adds the `NA_ARR_I32`
+  native argument kind. Follow-up seen on the way: `fs.fstat` builds its
+  `[int]` with `elem_is_ptr` 4, so the collector scans it as pointers.
 - [x] **`net.send_file` (2026-11-22, feat/net-sendfile).** A file's bytes
   to a socket through `sendfile(2)` on Linux and macOS, with offset,
   count (negative: to the end) and deadline forms; `tls_send_file` for

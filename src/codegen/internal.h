@@ -595,6 +595,7 @@ typedef enum {
     NA_ARR_STR,   /* a [str] list, marshaled as sl_arr *. The only
                      aggregate a native function takes; strings.join
                      needs it to be the inverse of strings.split. */
+    NA_ARR_I32,   /* an [i32] list (fds), marshaled as sl_arr *. proc.spawn_fds */
     NA_ARR_BYTES, /* a [bytes] list, marshaled as sl_arr *. strings.join_bytes
                      is the bytes counterpart of strings.join. */
     NA_WIRE,      /* an arena `wire` view: passed as sl_wire by value, no

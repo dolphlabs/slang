@@ -661,6 +661,46 @@ while !proc.shutdown_requested() {
 proc.wait_idle();
 ```
 
+`proc.wait_idle_until(deadline)` is `wait_idle` with a limit: true once
+the program is idle, false if the deadline passed first, so a drain can
+give up on a stuck connection instead of holding the shutdown forever.
+
+##### Restarting without dropping connections
+
+A new version of a server can take over the old one's listening sockets,
+so the port never stops accepting. The old process starts the new one
+with `proc.spawn_fds`, which passes the listeners as fds 3, 4, ... and
+sets `LISTEN_FDS` to their count (the systemd socket-activation
+convention); the new process takes them with `net.inherited()`:
+
+```slang
+import "net";
+import "proc";
+import "time";
+
+// at startup: the parent's listeners if there are any, our own otherwise
+let inh = net.inherited();
+let lfd = -1 as i32;
+if len(inh) > 0 {
+    lfd = inh[0];
+} else {
+    lfd = net.listen(8080) ?? (-1 as i32);
+}
+
+// on a restart request: start the new binary on the same socket, stop
+// accepting, and drain what is in flight for up to 30 seconds
+let noenv: [str] = [];
+let sr = proc.spawn_fds(["/srv/app/bin/server"], noenv, "", 0, [lfd]);
+net.close(lfd);
+proc.wait_idle_until(until_of(time.mono() + 30000000000));
+exit(0);
+```
+
+`net.inherited()` returns `[]` when nothing was passed. It also accepts
+listeners from systemd itself (checking `LISTEN_PID` when set), and it
+clears the variables once read, so this program's own children do not
+take the fds for theirs. Every other fd stays out of the child: sockets
+and files are close-on-exec.
 A process started with `proc.spawn` inherits standard input, output and
 error and nothing else: every socket and file the runtime opens is
 close-on-exec, so a child cannot hold a listener's port or a client's
@@ -5010,14 +5050,14 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [multipart](packages/multipart.md) -- source package, 19 public items
 - [mysql](packages/mysql.md) -- source package, 49 public items
 - [nats](packages/nats.md) -- source package, 31 public items
-- [net](packages/net.md) -- compiler-provided, 53 public items
+- [net](packages/net.md) -- compiler-provided, 54 public items
 - [oidc](packages/oidc.md) -- source package, 15 public items
 - [os](packages/os.md) -- compiler-provided, 18 public items
 - [otp](packages/otp.md) -- source package, 10 public items
 - [outbox](packages/outbox.md) -- source package, 5 public items
 - [pg](packages/pg.md) -- source package, 58 public items
 - [pool](packages/pool.md) -- source package, 11 public items
-- [proc](packages/proc.md) -- compiler-provided, 10 public items
+- [proc](packages/proc.md) -- compiler-provided, 12 public items
 - [protobuf](packages/protobuf.md) -- source package, 40 public items
 - [proxyproto](packages/proxyproto.md) -- source package, 6 public items
 - [rand](packages/rand.md) -- source package, 15 public items
