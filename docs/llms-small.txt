@@ -498,7 +498,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - multipart: boundary_of, parser, feed, finish, parse, body, add_field, add_file, close, content_type
 - mysql: parse_url, connect, connect_config, close, usable, in_transaction, server_version, connection_id, last_insert_id, affected_rows, ping, sqlstate (+32 more)
 - nats: options, with_creds, connect, connect_with, publish, publish_reply, publish_headers, publish_full, subscribe, queue_subscribe, next_msg, unsubscribe (+15 more)
-- net: listen, port, accept, dial, dial_until, lookup_srv_until, lookup_txt_until, dial_unix, listen_unix, send, recv, recv_until (+34 more)
+- net: listen, port, accept, dial, dial_until, lookup_srv_until, lookup_txt_until, dial_unix, listen_unix, send, recv, recv_until (+37 more)
 - oidc: discover, client, pkce, random_token, authorize_url, exchange, refresh, client_credentials, verify_id_token
 - os: setenv, unsetenv, environ, pid, hostname, tmpdir, exists, is_dir, is_file, size, mtime, mtime_ns (+6 more)
 - otp: totp_options, new_secret, hotp, totp, step_of, verify_totp, verify_hotp, uri, parse_secret
