@@ -2575,6 +2575,39 @@ that case.
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
 
+#### `balance`
+
+Client-side load balancing: pick a backend per request, spread load,
+steer away from slow backends and stop sending to failing ones.
+
+```slang
+import "balance";
+import "time";
+
+let lb = balance.new(["10.0.0.1:8080", "10.0.0.2:8080"], balance.P2C);
+let pr = balance.pick(lb, "");
+guard let p = pr else { return err("no backend up"); }
+let t0 = time.mono();
+let r = call(p.addr);
+let worked = false;
+if let _v = r { worked = true; }
+balance.done(lb, p, worked, (time.mono() - t0) as int);
+```
+
+| Strategy | Picks |
+|---|---|
+| `ROUND_ROBIN` | each backend in turn |
+| `RANDOM` | uniformly at random |
+| `LEAST` | the fewest requests in flight |
+| `P2C` | two at random, the one with fewer in flight, then the lower latency (an EWMA): nearly `LEAST`'s spread without herding every client onto one backend |
+| `HASH` | the backend a key maps to (rendezvous hashing via `math/shard`), and the key's next backend while that one is ejected |
+
+A backend that fails `eject_after` times in a row (5) is ejected for
+`eject_ns` (10 s), doubling for each ejection in a row up to
+`eject_max_ns` (5 minutes); a success resets it. `set_backends` replaces
+the list from service discovery and keeps the state of backends that
+stay. `status` reports each backend.
+
 #### `websocket`
 
 A WebSocket client (RFC 6455) over `ws://` and `wss://`, with
@@ -4149,6 +4182,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 
 ## All packages
 
+- [balance](packages/balance.md) -- source package, 17 public items
 - [builder](packages/builder.md) -- source package, 20 public items
 - [byteutil](packages/byteutil.md) -- source package, 6 public items
 - [cache](packages/cache.md) -- source package, 14 public items
