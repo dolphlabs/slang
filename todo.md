@@ -1,5 +1,12 @@
 # todo
 
+- [x] **`idempotency` and `outbox` (2026-11-22, feat/outbox-idempotency).**
+  Redis idempotency keys (atomic reservation, replay, in-progress and
+  fingerprint-mismatch states, owner-checked complete/abandon) and a
+  Postgres transactional outbox with a SKIP LOCKED relay and backoff.
+  tests/live/outbox runs both against real servers in CI; the Redis
+  half was also run locally.
+
 - [x] **A leaf function could hold a safepoint (found 2026-11-21 when
   math/big's tests crashed after merging dev; fixed in
   fix/leaf-body-no-safepoint).** Callers skip their bracket around a call
