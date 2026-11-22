@@ -41,6 +41,7 @@
   <url><loc>https://slang.dolphlabs.com/packages/math/stats</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/math/vec</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/metrics</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/multipart</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/mysql</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/nats</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/net</loc></url>
@@ -58,6 +59,7 @@
   <url><loc>https://slang.dolphlabs.com/packages/smtp</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/sort</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/sql</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/sse</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/strings</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/tar</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/template</loc></url>
