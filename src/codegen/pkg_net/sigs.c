@@ -38,6 +38,13 @@ const NatSig NET_SIGS[] = {
      * which would call every dead connection alive. */
     {"net", "idle_alive", 1, {NA_INT}, "bool", 0},
     {"net", "nonblock", 1, {NA_INT}, "result[bool,str]", 0},
+    /* A file's bytes (from fs.open) to a socket: count bytes from off, or
+     * to the end of the file for a negative count. sendfile(2) on Linux
+     * and macOS, so the bytes never pass through the program. Returns the
+     * count sent, short only if the file ended first. */
+    {"net", "send_file", 4, {NA_INT, NA_INT, NA_I64, NA_I64}, "result[int,str]", 0},
+    {"net", "send_file_until", 5, {NA_INT, NA_INT, NA_I64, NA_I64, NA_UNTIL},
+     "result[int,str]", 0},
     /* A listener on one address with options: "reuseport" (one accept
      * queue per socket, the kernel spreading connections), "v6only",
      * "backlog=N", "fastopen=N". host is an IP literal or "" (any IPv4). */
@@ -86,6 +93,11 @@ const NatSig NET_SIGS[] = {
     {"net", "tls_close", 1, {NA_RAWPTR}, NULL, 1},
     /* idle_alive for a TLS connection: also false when OpenSSL already
        holds decrypted-but-unread bytes (a close_notify, or anything). */
+    /* send_file over TLS: through one pooled 64 KB chunk */
+    {"net", "tls_send_file", 4, {NA_RAWPTR, NA_INT, NA_I64, NA_I64},
+     "result[int,str]", 1},
+    {"net", "tls_send_file_until", 5,
+     {NA_RAWPTR, NA_INT, NA_I64, NA_I64, NA_UNTIL}, "result[int,str]", 1},
     {"net", "tls_idle_alive", 1, {NA_RAWPTR}, "bool", 1},
     {"net", "tls_ctx_require_client", 2, {NA_RAWPTR, NA_STR}, "result[bool,str]", 1},
     {"net", "tls_ctx_use_cert", 3, {NA_RAWPTR, NA_STR, NA_STR}, "result[bool,str]", 1},
