@@ -113,8 +113,8 @@ standalone repo under `slangpackages/`.
 
 ## 7. Distributed systems
 
-- [ ] **Leases and leader election** (stdlib): over Redis and Postgres
-  advisory locks.
+- [x] **Leases and leader election** (stdlib): over Redis and Postgres
+  advisory locks. PR #621 (open).
 - [x] **Outbox and idempotency keys** (stdlib): transactional outbox and a
   store for idempotent handlers. PR #616 (open).
 - [x] **CRDTs** (stdlib): G-counter, PN-counter, OR-set, LWW-map, mergeable
