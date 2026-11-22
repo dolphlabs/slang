@@ -9724,6 +9724,31 @@
           "sig": "net.nonblock(int) -> result[bool,str]"
         },
         {
+          "name": "send_file",
+          "params": [
+            "int",
+            "int",
+            "int",
+            "int"
+          ],
+          "ret": "result[int,str]",
+          "tls": false,
+          "sig": "net.send_file(int, int, int, int) -> result[int,str]"
+        },
+        {
+          "name": "send_file_until",
+          "params": [
+            "int",
+            "int",
+            "int",
+            "int",
+            "until"
+          ],
+          "ret": "result[int,str]",
+          "tls": false,
+          "sig": "net.send_file_until(int, int, int, int, until) -> result[int,str]"
+        },
+        {
           "name": "tls_server_ctx",
           "params": [
             "str",
@@ -9848,6 +9873,31 @@
           "ret": null,
           "tls": true,
           "sig": "net.tls_close(rawptr)"
+        },
+        {
+          "name": "tls_send_file",
+          "params": [
+            "rawptr",
+            "int",
+            "int",
+            "int"
+          ],
+          "ret": "result[int,str]",
+          "tls": true,
+          "sig": "net.tls_send_file(rawptr, int, int, int) -> result[int,str]"
+        },
+        {
+          "name": "tls_send_file_until",
+          "params": [
+            "rawptr",
+            "int",
+            "int",
+            "int",
+            "until"
+          ],
+          "ret": "result[int,str]",
+          "tls": true,
+          "sig": "net.tls_send_file_until(rawptr, int, int, int, until) -> result[int,str]"
         },
         {
           "name": "tls_idle_alive",
