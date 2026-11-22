@@ -30,8 +30,11 @@ fn run() {
     for fd in fds {
         list = list + " " + to_str(fd);
     }
-    // `true >&N` fails in the shell when N is not open.
-    let script = "for fd in" + list + "; do if { true >&$fd; } 2>/dev/null; then echo leaked; fi; done; echo checked";
+    // Is fd N open in the child? `[ -e /dev/fd/N ]` asks the shell's own
+    // fd table (test is a builtin, so no other process or fd is involved).
+    // Not `true >&N`: dash, Ubuntu's sh, takes only one-digit fds in a
+    // redirection, and on Linux the program's sockets are past 9.
+    let script = "for fd in" + list + "; do if [ -e /dev/fd/$fd ]; then echo leaked; fi; done; echo checked";
     let noenv: [str] = [];
     let r = proc.spawn(["sh", "-c", "{ " + script + "; } > /tmp/sl_spawn_no_fd_leak.out"], noenv, "", 0);
     guard let pid = r else let e = err_of(r) { die("spawn: " + e); }
