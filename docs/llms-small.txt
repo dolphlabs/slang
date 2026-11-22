@@ -268,6 +268,7 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg mysql redis regex
 strings unicode encoding compress math math/vec decimal rand builder byteutil flags sort
+uuid http http2 httpc websocket lease template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 uuid http http2 httpc websocket balance template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 uuid http http2 httpc websocket memcache template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 uuid http http2 httpc websocket envelope template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
@@ -474,6 +475,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - idempotency: begin, complete, abandon
 - io: read_line, read_all, eprint, eprintln, flush, is_tty, term_width, term_height, read_secret, raw_on, raw_off, read_key
 - json: see /packages/json.md
+- lease: remaining_ms, redis_acquire, redis_renew, redis_release, elector, elect, leading, fence, resign, key_of, pg_try_lock, pg_unlock
 - log: debug, info, warn, error
 - math: abs, min, max, clamp, sign, is_nan, is_inf, is_finite, is_normal, signbit, copysign, nextafter (+119 more)
 - math/big: zero, one, from_int, from_u64, parse, from_bytes_be, Int.sign, Int.is_zero, Int.cmp, Int.eq, Int.neg, Int.abs (+45 more)
