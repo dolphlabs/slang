@@ -1,5 +1,11 @@
 # todo
 
+- [x] **`protobuf` (2026-11-22, feat/protobuf).** The wire format by
+  hand: tag/varint/zigzag/fixed/length-delimited writers and readers,
+  packed repeated fields, skip for unknown fields, checked against the
+  encoding guide's examples. Generating code from .proto files is not
+  part of it.
+
 - [x] **A leaf function could hold a safepoint (found 2026-11-21 when
   math/big's tests crashed after merging dev; fixed in
   fix/leaf-body-no-safepoint).** Callers skip their bracket around a call
