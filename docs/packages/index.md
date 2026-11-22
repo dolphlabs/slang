@@ -2615,6 +2615,45 @@ that case.
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
 
+#### `oidc`
+
+OAuth 2.0 and OpenID Connect for a client: sign users in with Google,
+Microsoft, Okta, Auth0, Keycloak and the like, and get tokens for
+service-to-service calls.
+
+```slang
+import "oidc";
+
+let pr = oidc.discover("https://accounts.google.com", deadline);
+guard let provider = pr else { return err("no provider"); }
+let o = oidc.client(provider, client_id, client_secret, "https://app.example/callback");
+
+// 1. send the browser off; keep state, nonce and pk.verifier in the session
+let pk = oidc.pkce() ?? fail();
+let state = oidc.random_token() ?? "";
+let nonce = oidc.random_token() ?? "";
+redirect(oidc.authorize_url(o, ["openid", "email"], state, nonce, pk));
+
+// 2. on the callback, after checking state: trade the code
+let tr = oidc.exchange(o, code, pk.verifier, deadline);
+guard let tokens = tr else { return err("sign-in failed"); }
+let cr = oidc.verify_id_token(o, tokens.id_token, nonce, deadline);
+guard let who = cr else { return err("bad ID token"); }     // who.sub, who.email
+```
+
+`discover` checks that the document's issuer is the one asked for and
+that the endpoints are HTTPS. `exchange`, `refresh` and
+`client_credentials` authenticate with `client_secret_basic`.
+`verify_id_token` follows OpenID Connect Core 3.1.3.7:
+
+- the signature is checked against the provider's published keys, RS256
+  or ES256 only (`none` and HMAC are refused);
+- the issuer, the audience (and `azp` when there are several), expiry
+  with a minute of leeway, and the nonce are checked.
+
+Keys are cached by `kid` and refetched, at most once a minute, when a
+token names one not seen yet. `Claims.raw` holds every claim.
+
 #### `websocket`
 
 A WebSocket client (RFC 6455) over `ws://` and `wss://`, with
@@ -4219,6 +4258,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [mysql](packages/mysql.md) -- source package, 49 public items
 - [nats](packages/nats.md) -- source package, 31 public items
 - [net](packages/net.md) -- compiler-provided, 46 public items
+- [oidc](packages/oidc.md) -- source package, 15 public items
 - [os](packages/os.md) -- compiler-provided, 18 public items
 - [pg](packages/pg.md) -- source package, 58 public items
 - [proc](packages/proc.md) -- compiler-provided, 9 public items
