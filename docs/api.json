@@ -9882,6 +9882,123 @@
           "sig": "net.nonblock(int) -> result[bool,str]"
         },
         {
+          "name": "udp_bind",
+          "params": [
+            "str",
+            "int"
+          ],
+          "ret": "result[i32,str]",
+          "tls": false,
+          "sig": "net.udp_bind(str, int) -> result[i32,str]"
+        },
+        {
+          "name": "udp_bind_shared",
+          "params": [
+            "str",
+            "int"
+          ],
+          "ret": "result[i32,str]",
+          "tls": false,
+          "sig": "net.udp_bind_shared(str, int) -> result[i32,str]"
+        },
+        {
+          "name": "udp_dial",
+          "params": [
+            "str",
+            "int",
+            "until"
+          ],
+          "ret": "result[i32,str]",
+          "tls": false,
+          "sig": "net.udp_dial(str, int, until) -> result[i32,str]"
+        },
+        {
+          "name": "udp_addr",
+          "params": [
+            "str",
+            "int",
+            "until"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "net.udp_addr(str, int, until) -> result[bytes,str]"
+        },
+        {
+          "name": "addr_str",
+          "params": [
+            "bytes"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "net.addr_str(bytes) -> str"
+        },
+        {
+          "name": "send_to",
+          "params": [
+            "int",
+            "bytes",
+            "bytes"
+          ],
+          "ret": "result[i32,str]",
+          "tls": false,
+          "sig": "net.send_to(int, bytes, bytes) -> result[i32,str]"
+        },
+        {
+          "name": "send_to_until",
+          "params": [
+            "int",
+            "bytes",
+            "bytes",
+            "until"
+          ],
+          "ret": "result[i32,str]",
+          "tls": false,
+          "sig": "net.send_to_until(int, bytes, bytes, until) -> result[i32,str]"
+        },
+        {
+          "name": "recv_from",
+          "params": [
+            "int",
+            "int"
+          ],
+          "ret": "result[[bytes],str]",
+          "tls": false,
+          "sig": "net.recv_from(int, int) -> result[[bytes],str]"
+        },
+        {
+          "name": "recv_from_until",
+          "params": [
+            "int",
+            "int",
+            "until"
+          ],
+          "ret": "result[[bytes],str]",
+          "tls": false,
+          "sig": "net.recv_from_until(int, int, until) -> result[[bytes],str]"
+        },
+        {
+          "name": "udp_join",
+          "params": [
+            "int",
+            "str",
+            "str"
+          ],
+          "ret": "result[bool,str]",
+          "tls": false,
+          "sig": "net.udp_join(int, str, str) -> result[bool,str]"
+        },
+        {
+          "name": "udp_leave",
+          "params": [
+            "int",
+            "str",
+            "str"
+          ],
+          "ret": "result[bool,str]",
+          "tls": false,
+          "sig": "net.udp_leave(int, str, str) -> result[bool,str]"
+        },
+        {
           "name": "tls_server_ctx",
           "params": [
             "str",
