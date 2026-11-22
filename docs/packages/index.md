@@ -2575,6 +2575,42 @@ that case.
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
 
+#### `trace`
+
+Distributed tracing: spans with W3C trace context propagation
+(`traceparent`), exported to an OpenTelemetry collector over OTLP/HTTP
+with JSON bodies.
+
+```slang
+import "trace";
+
+let t = trace.tracer("checkout", "http://otel-collector:4318");
+
+// a request came in: continue the caller's trace if it sent one
+let parent = trace.parse_traceparent(incoming_traceparent);
+let span = trace.start(t, "POST /orders", parent);
+trace.set_str(span, "http.route", "/orders");
+let db = trace.child(span, "insert order");
+trace.end(db);
+outgoing_headers["traceparent"] = trace.traceparent(span);   // to the next service
+trace.end(span);
+```
+
+- `start(t, name, parent)` starts a span: a child of a caller's context
+  (from `parse_traceparent`, which refuses malformed values per the W3C
+  spec) or the root of a new trace. `child(span, name)` nests one.
+- `set_str`, `set_int`, `set_float`, `set_bool`, `set_kind`, `set_error`
+  and `set_ok` describe it; `end` queues it for export.
+- Ended spans are sent in batches by a background task: when
+  `max_batch` are queued, and every `flush_ns` otherwise. The queue is
+  bounded by `max_queue`; spans past it, or lost in a failed send, are
+  counted in `counts(t).dropped`, so a dead collector costs bounded
+  memory. `flush(t, deadline)` sends now.
+- `sample_ratio` decides new traces; a continued trace follows the
+  caller's sampled flag. An unsampled span records nothing.
+- A tracer with endpoint `""` sends nothing and keeps spans for
+  `drain(t)`, for tests.
+
 #### `websocket`
 
 A WebSocket client (RFC 6455) over `ws://` and `wss://`, with
@@ -4195,6 +4231,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [time](packages/time.md) -- compiler-provided, 5 public items
 - [timez](packages/timez.md) -- source package, 144 public items
 - [toml](packages/toml.md) -- source package, 2 public items
+- [trace](packages/trace.md) -- source package, 30 public items
 - [unicode](packages/unicode.md) -- compiler-provided, 11 public items
 - [uuid](packages/uuid.md) -- source package, 11 public items
 - [websocket](packages/websocket.md) -- source package, 16 public items

@@ -268,7 +268,7 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg mysql redis regex
 strings unicode encoding compress math math/vec decimal rand builder byteutil flags sort
-uuid http http2 httpc websocket template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
+uuid http http2 httpc websocket trace template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 `xml.parse(text)` gives the root `xml.Node` (`name`, `local`, `ns`, `attrs`, `children`);
 `n.find("a/b")`, `n.find_all(path)`, `n.child_text("link")`, `n.attr("id")`; DOCTYPE refused.
 `xml.element("a").set_attr("k", "v").add_text("t")` and `xml.write(n)` build one.
@@ -483,6 +483,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - time: mono, wall, sleep, http_date, put_http_date
 - timez: Time.rfc3339, Time.rfc3339_milli, Time.rfc3339_nano, Time.rfc3339_at, Time.http_date, Time.rfc2822, Time.format, parse_date, parse_rfc3339, parse_http_date, parse_rfc2822, relative (+116 more)
 - toml: to_json, decode
+- trace: options, tracer, tracer_with, start, child, set_kind, set_str, set_int, set_float, set_bool, set_error, set_ok (+7 more)
 - unicode: valid, valid_bytes, count, runes, encode, truncate, fold, equal_fold, nfc, nfd, is_nfc
 - uuid: v4, v7, v7_at, is_valid, parse, version, time_ms, to_binary, from_binary
 - websocket: options, dial, dial_with, send_text, send_text_bytes, send_binary, ping, recv, text, close, close_now, is_open (+1 more)
