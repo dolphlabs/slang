@@ -2615,43 +2615,42 @@ that case.
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
 
-#### `pool`
+#### `context`
 
-A bounded pool of connections (or any costly resource) shared by many
-tasks, for clients that have no pool of their own. It is the design of
-`pg`'s and `mysql`'s pools, made generic over the connection type.
+Cancellation and deadlines that flow from a request through everything
+it starts, so one timeout or one cancel stops all the work under it.
 
 ```slang
+import "context";
 import "net";
-import "pool";
 
-fn dial_cache(deadline: until) -> result[i32, str] {
-    return net.dial_until("cache.internal", 11211, deadline);
-}
-fn close_cache(fd: i32) { net.close(fd); }
-fn alive(fd: i32) -> bool { return net.idle_alive(fd); }
-
-let p = pool.new(pool.options(64), dial_cache, close_cache, alive);
-let lr = pool.acquire(p, deadline);
-guard let lease = lr else let e = err_of(lr) { return; }   // "timeout"
-let _s = net.send(lease.v, b"version\r\n");
-pool.release(p, lease);        // pool.discard(p, lease) if it broke
+let req = context.with_timeout(context.background(), 2000000000);  // 2 s
+let db = context.with_cancel(req);          // ends when req ends
+context.watch_fd(db, fd);                   // a cancel closes fd
+let rr = net.recv_until(fd, 4096, context.deadline(db));
+context.cancel(req, "client went away");    // ends req and db
+println(context.cause(db) ?? "live");       // "client went away"
+context.release(db);
 ```
 
-- `acquire` hands out an idle connection, dials one while fewer than
-  `max_open` are open, or waits. Waiting is first come, first served: a
-  release goes straight to the task that has waited longest, which wakes
-  once, so the slowest waiter's latency is its place in the queue.
-- An idle connection is probed (the `probe` function) before reuse only
-  after `probe_after` idle, 1 s by default; one released moments ago is
-  handed out as is.
-- `options(max_open)` also sets `max_idle` (default `max_open`),
-  `idle_timeout` (5 minutes), `max_lifetime` (none; set it behind a
-  balancer so new connections reach new backends) and `probe_after`.
-- `stats(p)`: open, idle and waiting now; dials, reuses, waits, total
-  and longest wait, and timeouts.
-- `close(p)` closes idle connections and fails waiters; leased ones close
-  as they come back. Releasing a lease twice panics.
+- `background()` is the root. `with_cancel(parent)`,
+  `with_timeout(parent, ns)` and `with_deadline_at(parent, mono_ns)` make
+  children; a child's deadline is the earlier of its own and its
+  parent's, and cancelling a context cancels everything made from it.
+- `deadline(c)` is an `until` for any API that waits; `remaining(c)` is
+  the nanoseconds left (-1 without a deadline), for a timeout another
+  protocol carries.
+- `cancel(c, reason)` (the first reason wins) and `release(c)`, for a
+  context whose work is done. Call one of them, as with Go's contexts:
+  until then a child stays in its parent's list.
+- `is_done(c)` and `cause(c)`: the cancel reason, `"deadline exceeded"`,
+  or `none` while live.
+- `watch_fd(c, fd)` closes `fd` on cancel, waking a task parked on it
+  with `"closed"`; `unwatch_fd` before closing it yourself. `done_chan(c)`
+  is closed on cancel, for a `select`.
+
+There are no timers: a deadline passing does not close watched fds. The
+operations given `deadline(c)` end at it on their own.
 
 #### `websocket`
 
@@ -4231,6 +4230,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [byteutil](packages/byteutil.md) -- source package, 6 public items
 - [cache](packages/cache.md) -- source package, 14 public items
 - [compress](packages/compress.md) -- compiler-provided, 10 public items
+- [context](packages/context.md) -- source package, 14 public items
 - [crypto](packages/crypto.md) -- compiler-provided, 54 public items
 - [csv](packages/csv.md) -- source package, 18 public items
 - [decimal](packages/decimal.md) -- source package, 37 public items
@@ -4259,7 +4259,6 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [net](packages/net.md) -- compiler-provided, 46 public items
 - [os](packages/os.md) -- compiler-provided, 18 public items
 - [pg](packages/pg.md) -- source package, 58 public items
-- [pool](packages/pool.md) -- source package, 11 public items
 - [proc](packages/proc.md) -- compiler-provided, 9 public items
 - [rand](packages/rand.md) -- source package, 15 public items
 - [redis](packages/redis.md) -- source package, 161 public items

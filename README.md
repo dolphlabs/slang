@@ -3711,6 +3711,42 @@ pool.release(p, lease);        // pool.discard(p, lease) if it broke
   and longest wait, and timeouts.
 - `close(p)` closes idle connections and fails waiters; leased ones close
   as they come back. Releasing a lease twice panics.
+#### `context`
+
+Cancellation and deadlines that flow from a request through everything
+it starts, so one timeout or one cancel stops all the work under it.
+
+```slang
+import "context";
+import "net";
+
+let req = context.with_timeout(context.background(), 2000000000);  // 2 s
+let db = context.with_cancel(req);          // ends when req ends
+context.watch_fd(db, fd);                   // a cancel closes fd
+let rr = net.recv_until(fd, 4096, context.deadline(db));
+context.cancel(req, "client went away");    // ends req and db
+println(context.cause(db) ?? "live");       // "client went away"
+context.release(db);
+```
+
+- `background()` is the root. `with_cancel(parent)`,
+  `with_timeout(parent, ns)` and `with_deadline_at(parent, mono_ns)` make
+  children; a child's deadline is the earlier of its own and its
+  parent's, and cancelling a context cancels everything made from it.
+- `deadline(c)` is an `until` for any API that waits; `remaining(c)` is
+  the nanoseconds left (-1 without a deadline), for a timeout another
+  protocol carries.
+- `cancel(c, reason)` (the first reason wins) and `release(c)`, for a
+  context whose work is done. Call one of them, as with Go's contexts:
+  until then a child stays in its parent's list.
+- `is_done(c)` and `cause(c)`: the cancel reason, `"deadline exceeded"`,
+  or `none` while live.
+- `watch_fd(c, fd)` closes `fd` on cancel, waking a task parked on it
+  with `"closed"`; `unwatch_fd` before closing it yourself. `done_chan(c)`
+  is closed on cancel, for a `select`.
+
+There are no timers: a deadline passing does not close watched fds. The
+operations given `deadline(c)` end at it on their own.
 
 #### `websocket`
 

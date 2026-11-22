@@ -22,6 +22,7 @@ Start with /llms-small.txt: the whole language on one page, about 3k tokens, eno
 - [byteutil](packages/byteutil.md): Package byteutil.
 - [cache](packages/cache.md): Package cache.
 - [compress](packages/compress.md): Package compress.
+- [context](packages/context.md): Package context.
 - [crypto](packages/crypto.md): Package crypto.
 - [csv](packages/csv.md): Package csv.
 - [decimal](packages/decimal.md): Package decimal.
