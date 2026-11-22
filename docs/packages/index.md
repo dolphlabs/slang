@@ -2575,6 +2575,38 @@ that case.
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
 
+#### `lease`
+
+Leases and leader election: one process at a time holds a named lease,
+for running a scheduled job once across replicas, or for electing one
+leader.
+
+```slang
+import "lease";
+
+let e = lease.elector("jobs:nightly-report", 10000);   // a 10 s lease
+// every ~3 seconds:
+if lease.elect(e, redis_conn, deadline) ?? false {
+    // leading: pass lease.fence(e) with the writes made, so storage can
+    // refuse a stale leader's late ones
+}
+```
+
+- **Redis:** `redis_acquire(conn, name, ttl_ms, deadline)` is
+  `SET name token NX PX ttl`. `redis_renew` and `redis_release` are
+  scripts that check the token first, so a process can never renew or
+  release a lease it lost. Each acquisition takes a fencing token
+  (`INCR name:fence`) that only grows: a leader that stalled past its
+  lease and wakes up still believing it leads carries an older fence
+  than the real leader, and storage that checks fences refuses it. A
+  lease is safe to act on while `remaining_ms(l) > 0`.
+- **Leader election:** `elector(name, ttl_ms)`, `elect` (renew while
+  leading, try to acquire otherwise), `leading`, `fence` and `resign`,
+  which hands over at once instead of after the ttl.
+- **Postgres:** `pg_try_lock` and `pg_unlock` are session advisory
+  locks on `key_of(name)`. They are held while the connection lives, so
+  use a connection of its own, never a pooled one.
+
 #### `websocket`
 
 A WebSocket client (RFC 6455) over `ws://` and `wss://`, with
@@ -4164,6 +4196,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [httpc](packages/httpc.md) -- source package, 35 public items
 - [io](packages/io.md) -- compiler-provided, 12 public items
 - [json](packages/json.md) -- compiler-provided, 0 public items
+- [lease](packages/lease.md) -- source package, 14 public items
 - [log](packages/log.md) -- compiler-provided, 4 public items
 - [math](packages/math.md) -- compiler-provided, 131 public items
 - [math/big](packages/math/big.md) -- source package, 59 public items

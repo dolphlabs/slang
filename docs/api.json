@@ -3886,6 +3886,124 @@
       "kind": "native",
       "items": []
     },
+    "lease": {
+      "name": "lease",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Lease",
+          "decl": "struct",
+          "sig": "struct Lease",
+          "doc": "",
+          "file": "stdlib/lease/lease.sl",
+          "line": 34
+        },
+        {
+          "name": "remaining_ms",
+          "decl": "fn",
+          "sig": "fn remaining_ms(l: Lease) -> int",
+          "doc": "Milliseconds the lease is certainly still held for, by this process's clock (0 once it may have run out).",
+          "file": "stdlib/lease/lease.sl",
+          "line": 43
+        },
+        {
+          "name": "redis_acquire",
+          "decl": "fn",
+          "sig": "fn redis_acquire(c: redis.Conn, name: str, ttl_ms: int, deadline: until) -> result[opt[Lease], str]",
+          "doc": "Takes the lease name for ttl_ms if nobody holds it: some(lease), or none while another process does.",
+          "file": "stdlib/lease/lease.sl",
+          "line": 56
+        },
+        {
+          "name": "redis_renew",
+          "decl": "fn",
+          "sig": "fn redis_renew(c: redis.Conn, l: Lease, ttl_ms: int, deadline: until) -> result[bool, str]",
+          "doc": "Extends a held lease to ttl_ms from now: false if it was lost (it ran out and someone else took it, or it was released).",
+          "file": "stdlib/lease/lease.sl",
+          "line": 76
+        },
+        {
+          "name": "redis_release",
+          "decl": "fn",
+          "sig": "fn redis_release(c: redis.Conn, l: Lease, deadline: until) -> result[bool, str]",
+          "doc": "Gives the lease up: false if it was no longer ours.",
+          "file": "stdlib/lease/lease.sl",
+          "line": 87
+        },
+        {
+          "name": "Elector",
+          "decl": "struct",
+          "sig": "gc struct Elector",
+          "doc": "",
+          "file": "stdlib/lease/lease.sl",
+          "line": 96
+        },
+        {
+          "name": "elector",
+          "decl": "fn",
+          "sig": "fn elector(name: str, ttl_ms: int) -> Elector",
+          "doc": "",
+          "file": "stdlib/lease/lease.sl",
+          "line": 102
+        },
+        {
+          "name": "elect",
+          "decl": "fn",
+          "sig": "fn elect(e: Elector, c: redis.Conn, deadline: until) -> result[bool, str]",
+          "doc": "One round: renew the lease if this process leads, try to take it if not. Call every third of the ttl or so. Whether this process leads now; on an error it does not.",
+          "file": "stdlib/lease/lease.sl",
+          "line": 109
+        },
+        {
+          "name": "leading",
+          "decl": "fn",
+          "sig": "fn leading(e: Elector) -> bool",
+          "doc": "Whether this process led at its last round and the lease has not run out since.",
+          "file": "stdlib/lease/lease.sl",
+          "line": 128
+        },
+        {
+          "name": "fence",
+          "decl": "fn",
+          "sig": "fn fence(e: Elector) -> int",
+          "doc": "The fencing token of the current lease (0 when not leading).",
+          "file": "stdlib/lease/lease.sl",
+          "line": 134
+        },
+        {
+          "name": "resign",
+          "decl": "fn",
+          "sig": "fn resign(e: Elector, c: redis.Conn, deadline: until)",
+          "doc": "Stops leading and releases the lease, so another process can take over at once instead of after the ttl.",
+          "file": "stdlib/lease/lease.sl",
+          "line": 141
+        },
+        {
+          "name": "key_of",
+          "decl": "fn",
+          "sig": "fn key_of(name: str) -> int",
+          "doc": "A stable 63-bit lock key for a name (FNV-1a), for the advisory locks.",
+          "file": "stdlib/lease/lease.sl",
+          "line": 151
+        },
+        {
+          "name": "pg_try_lock",
+          "decl": "fn",
+          "sig": "fn pg_try_lock(c: pg.Conn, name: str, deadline: until) -> result[bool, str]",
+          "doc": "Takes the session advisory lock for name without waiting: false while another session holds it.",
+          "file": "stdlib/lease/lease.sl",
+          "line": 162
+        },
+        {
+          "name": "pg_unlock",
+          "decl": "fn",
+          "sig": "fn pg_unlock(c: pg.Conn, name: str, deadline: until) -> result[bool, str]",
+          "doc": "Releases it: false if this session did not hold it.",
+          "file": "stdlib/lease/lease.sl",
+          "line": 169
+        }
+      ]
+    },
     "log": {
       "name": "log",
       "kind": "native",
