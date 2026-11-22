@@ -22,6 +22,7 @@ Start with /llms-small.txt: the whole language on one page, about 3k tokens, eno
 - [byteutil](packages/byteutil.md): Package byteutil.
 - [cache](packages/cache.md): Package cache.
 - [compress](packages/compress.md): Package compress.
+- [context](packages/context.md): Package context.
 - [crypto](packages/crypto.md): Package crypto.
 - [csv](packages/csv.md): Package csv.
 - [decimal](packages/decimal.md): Package decimal.
@@ -50,8 +51,9 @@ Start with /llms-small.txt: the whole language on one page, about 3k tokens, eno
 - [net](packages/net.md): Package net.
 - [os](packages/os.md): Package os.
 - [pg](packages/pg.md): Package pg.
+- [pool](packages/pool.md): Package pool.
 - [proc](packages/proc.md): Package proc.
-- [proxyproto](packages/proxyproto.md): Package proxyproto.
+- [protobuf](packages/protobuf.md): Package protobuf.
 - [rand](packages/rand.md): Package rand.
 - [redis](packages/redis.md): Package redis.
 - [regex](packages/regex.md): Package regex.

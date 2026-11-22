@@ -5493,42 +5493,115 @@ that case.
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
 
-#### `proxyproto`
+#### `protobuf`
 
-The PROXY protocol, versions 1 and 2: the header HAProxy, AWS NLB and
-other balancers put in front of a connection so the server sees the
-real client address instead of the balancer's.
+The Protocol Buffers wire format, written and read field by field
+without generated code: for talking to a gRPC or protobuf service whose
+messages are few, or for building a codec on top.
+
+```slang
+import "protobuf";
+
+// message User { int64 id = 1; string name = 2; repeated sint32 deltas = 3; }
+let w = protobuf.writer();
+protobuf.write_int64(w, 1, 42);
+protobuf.write_string(w, 2, "ada");
+protobuf.write_packed_sint(w, 3, [-1, 5, -9]);
+let data = protobuf.finish(w);
+
+let r = protobuf.reader(data);
+while protobuf.more(r) {
+    let fr = protobuf.next(r);              // field number and wire type
+    guard let f = fr else { break; }
+    if f.num == 2 {
+        name = protobuf.read_string(r) ?? "";
+    } else {
+        protobuf.skip(r, f.wire);           // a field this reader does not use
+    }
+}
+```
+
+There are writers for every scalar type (`write_int64`,
+`write_uint64`, `write_sint` with zigzag, `write_bool`, `write_fixed64`,
+`write_fixed32`, `write_double`, `write_float`), plus `write_bytes`,
+`write_string` and packed repeated fields. A nested message is its own
+`Writer`, passed to `write_bytes`. The readers mirror them;
+`read_packed_*` also accept an unpacked element, as parsers must. Lengths
+are checked against the input and varints against their ten-byte limit.
+Groups (wire types 3 and 4) are not read.
+#### `pool`
+
+A bounded pool of connections (or any costly resource) shared by many
+tasks, for clients that have no pool of their own. It is the design of
+`pg`'s and `mysql`'s pools, made generic over the connection type.
 
 ```slang
 import "net";
-import "proxyproto";
-import "time";
+import "pool";
 
-let hr = proxyproto.read_until(fd, until_of(time.mono() + 5000000000));
-guard let h = hr else let e = err_of(hr) { net.close(fd); return; }
-println(h.src_addr + ":" + to_str(h.src_port));   // the real client
-// h.rest: bytes that came after the header, the start of the stream
+fn dial_cache(deadline: until) -> result[i32, str] {
+    return net.dial_until("cache.internal", 11211, deadline);
+}
+fn close_cache(fd: i32) { net.close(fd); }
+fn alive(fd: i32) -> bool { return net.idle_alive(fd); }
+
+let p = pool.new(pool.options(64), dial_cache, close_cache, alive);
+let lr = pool.acquire(p, deadline);
+guard let lease = lr else let e = err_of(lr) { return; }   // "timeout"
+let _s = net.send(lease.v, b"version\r\n");
+pool.release(p, lease);        // pool.discard(p, lease) if it broke
 ```
 
-- `parse(b)` reads a header from the start of `b`: `some(header)`,
-  `none` when `b` is a prefix of one and more bytes are needed, or an
-  error when `b` is not a PROXY header. `header.size` is its length.
-- `read_until(fd, deadline)` reads one off a socket and keeps any bytes
-  that arrived after it in `header.rest`.
-- A `Header` has `version`, `family` (`tcp4`, `tcp6`, `udp4`, `udp6`,
-  `unix`, `unknown`), the source and destination addresses and ports, and
-  v2's `tlvs` (`kind`, `value`): ALPN, the TLS server name (0x02), AWS's
-  VPC endpoint id (0xEA) and so on. `local` is true for a v2 LOCAL
-  header, a balancer's health check, which carries no addresses.
-- `encode_v1(h)` and `encode_v2(h)` build headers, for a proxy written
-  in slang or a test. IPv6 addresses are printed in RFC 5952 form.
+- `acquire` hands out an idle connection, dials one while fewer than
+  `max_open` are open, or waits. Waiting is first come, first served: a
+  release goes straight to the task that has waited longest, which wakes
+  once, so the slowest waiter's latency is its place in the queue.
+- An idle connection is probed (the `probe` function) before reuse only
+  after `probe_after` idle, 1 s by default; one released moments ago is
+  handed out as is.
+- `options(max_open)` also sets `max_idle` (default `max_open`),
+  `idle_timeout` (5 minutes), `max_lifetime` (none; set it behind a
+  balancer so new connections reach new backends) and `probe_after`.
+- `stats(p)`: open, idle and waiting now; dials, reuses, waits, total
+  and longest wait, and timeouts.
+- `close(p)` closes idle connections and fails waiters; leased ones close
+  as they come back. Releasing a lease twice panics.
+#### `context`
 
-The header is only bytes the peer sent. Require it on a listener that
-only the balancer can reach, or check the peer address first: otherwise
-any client can claim any address. The header comes before any TLS
-handshake, and `net.tls_accept` does its own accept on the listener, so
-a PROXY header in front of TLS needs a server-side TLS upgrade of an
-accepted fd, which `net` does not have yet.
+Cancellation and deadlines that flow from a request through everything
+it starts, so one timeout or one cancel stops all the work under it.
+
+```slang
+import "context";
+import "net";
+
+let req = context.with_timeout(context.background(), 2000000000);  // 2 s
+let db = context.with_cancel(req);          // ends when req ends
+context.watch_fd(db, fd);                   // a cancel closes fd
+let rr = net.recv_until(fd, 4096, context.deadline(db));
+context.cancel(req, "client went away");    // ends req and db
+println(context.cause(db) ?? "live");       // "client went away"
+context.release(db);
+```
+
+- `background()` is the root. `with_cancel(parent)`,
+  `with_timeout(parent, ns)` and `with_deadline_at(parent, mono_ns)` make
+  children; a child's deadline is the earlier of its own and its
+  parent's, and cancelling a context cancels everything made from it.
+- `deadline(c)` is an `until` for any API that waits; `remaining(c)` is
+  the nanoseconds left (-1 without a deadline), for a timeout another
+  protocol carries.
+- `cancel(c, reason)` (the first reason wins) and `release(c)`, for a
+  context whose work is done. Call one of them, as with Go's contexts:
+  until then a child stays in its parent's list.
+- `is_done(c)` and `cause(c)`: the cancel reason, `"deadline exceeded"`,
+  or `none` while live.
+- `watch_fd(c, fd)` closes `fd` on cancel, waking a task parked on it
+  with `"closed"`; `unwatch_fd` before closing it yourself. `done_chan(c)`
+  is closed on cancel, for a `select`.
+
+There are no timers: a deadline passing does not close watched fds. The
+operations given `deadline(c)` end at it on their own.
 
 #### `websocket`
 
@@ -7108,6 +7181,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [byteutil](packages/byteutil.md) -- source package, 6 public items
 - [cache](packages/cache.md) -- source package, 14 public items
 - [compress](packages/compress.md) -- compiler-provided, 10 public items
+- [context](packages/context.md) -- source package, 14 public items
 - [crypto](packages/crypto.md) -- compiler-provided, 54 public items
 - [csv](packages/csv.md) -- source package, 18 public items
 - [decimal](packages/decimal.md) -- source package, 37 public items
@@ -7136,8 +7210,9 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [net](packages/net.md) -- compiler-provided, 46 public items
 - [os](packages/os.md) -- compiler-provided, 18 public items
 - [pg](packages/pg.md) -- source package, 58 public items
+- [pool](packages/pool.md) -- source package, 11 public items
 - [proc](packages/proc.md) -- compiler-provided, 9 public items
-- [proxyproto](packages/proxyproto.md) -- source package, 6 public items
+- [protobuf](packages/protobuf.md) -- source package, 40 public items
 - [rand](packages/rand.md) -- source package, 15 public items
 - [redis](packages/redis.md) -- source package, 161 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
@@ -7975,6 +8050,109 @@ attacker-controlled input.
 ### `compress.inflate(bytes, int) -> result[bytes,str]`
 
 ### `compress.inflate_raw(bytes, int) -> result[bytes,str]`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# context
+
+# context
+
+> Package context.
+
+Cancellation and deadlines that flow from a request through everything
+it starts, so one timeout or one cancel stops all the work under it.
+
+```slang
+import "context";
+import "net";
+
+let req = context.with_timeout(context.background(), 2000000000);  // 2 s
+let db = context.with_cancel(req);          // ends when req ends
+context.watch_fd(db, fd);                   // a cancel closes fd
+let rr = net.recv_until(fd, 4096, context.deadline(db));
+context.cancel(req, "client went away");    // ends req and db
+println(context.cause(db) ?? "live");       // "client went away"
+context.release(db);
+```
+
+- `background()` is the root. `with_cancel(parent)`,
+  `with_timeout(parent, ns)` and `with_deadline_at(parent, mono_ns)` make
+  children; a child's deadline is the earlier of its own and its
+  parent's, and cancelling a context cancels everything made from it.
+- `deadline(c)` is an `until` for any API that waits; `remaining(c)` is
+  the nanoseconds left (-1 without a deadline), for a timeout another
+  protocol carries.
+- `cancel(c, reason)` (the first reason wins) and `release(c)`, for a
+  context whose work is done. Call one of them, as with Go's contexts:
+  until then a child stays in its parent's list.
+- `is_done(c)` and `cause(c)`: the cancel reason, `"deadline exceeded"`,
+  or `none` while live.
+- `watch_fd(c, fd)` closes `fd` on cancel, waking a task parked on it
+  with `"closed"`; `unwatch_fd` before closing it yourself. `done_chan(c)`
+  is closed on cancel, for a `select`.
+
+There are no timers: a deadline passing does not close watched fds. The
+operations given `deadline(c)` end at it on their own.
+
+## API
+
+### `gc struct Context`
+
+### `fn background() -> Context`
+
+The root: no deadline, never cancelled unless cancel is called on it.
+
+### `fn with_cancel(parent: Context) -> Context`
+
+A child of parent that can be cancelled on its own.
+
+### `fn with_timeout(parent: Context, ns: int) -> Context`
+
+A child of parent that ends ns nanoseconds from now (or at the parent's deadline, if that is sooner). ns <= 0 is already past.
+
+### `fn with_deadline_at(parent: Context, mono_ns: int) -> Context`
+
+A child of parent that ends at mono_ns, an absolute time.mono() value.
+
+### `fn cancel(c: Context, reason: str)`
+
+Cancels c and every context made from it, with reason as cause's text. The first cancel wins; later ones do nothing.
+
+### `fn release(c: Context)`
+
+Cancel with the reason "released": for a context whose work finished.
+
+### `fn is_done(c: Context) -> bool`
+
+Whether c was cancelled or its deadline has passed.
+
+### `fn cause(c: Context) -> opt[str]`
+
+Why c is done: the cancel reason, or "deadline exceeded"; none while it is live.
+
+### `fn deadline(c: Context) -> until`
+
+c's deadline as an `until` for any API that waits: never for a context without one, already passed for a cancelled one.
+
+### `fn remaining(c: Context) -> int`
+
+Nanoseconds until c's deadline (0 once passed or cancelled), or -1 for a context without one: for a timeout another protocol carries, such as a database statement timeout.
+
+### `fn watch_fd(c: Context, fd: i32)`
+
+Closes fd when c is cancelled, waking any task parked on it with "closed". If c is already cancelled, closes it now. Call unwatch_fd before closing fd yourself, so a later cancel cannot close a reused fd number.
+
+### `fn unwatch_fd(c: Context, fd: i32) -> bool`
+
+Stops watching fd. Returns false if c had already been cancelled (and fd closed by it).
+
+### `fn done_chan(c: Context) -> chan[bool]`
+
+A channel that is closed when c is cancelled, for a `select` that should also end on cancellation. Nothing is ever sent on it.
 
 ---
 
@@ -14568,6 +14746,94 @@ slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://
 
 
 
+# pool
+
+# pool
+
+> Package pool.
+
+A bounded pool of connections (or any costly resource) shared by many
+tasks, for clients that have no pool of their own. It is the design of
+`pg`'s and `mysql`'s pools, made generic over the connection type.
+
+```slang
+import "net";
+import "pool";
+
+fn dial_cache(deadline: until) -> result[i32, str] {
+    return net.dial_until("cache.internal", 11211, deadline);
+}
+fn close_cache(fd: i32) { net.close(fd); }
+fn alive(fd: i32) -> bool { return net.idle_alive(fd); }
+
+let p = pool.new(pool.options(64), dial_cache, close_cache, alive);
+let lr = pool.acquire(p, deadline);
+guard let lease = lr else let e = err_of(lr) { return; }   // "timeout"
+let _s = net.send(lease.v, b"version\r\n");
+pool.release(p, lease);        // pool.discard(p, lease) if it broke
+```
+
+- `acquire` hands out an idle connection, dials one while fewer than
+  `max_open` are open, or waits. Waiting is first come, first served: a
+  release goes straight to the task that has waited longest, which wakes
+  once, so the slowest waiter's latency is its place in the queue.
+- An idle connection is probed (the `probe` function) before reuse only
+  after `probe_after` idle, 1 s by default; one released moments ago is
+  handed out as is.
+- `options(max_open)` also sets `max_idle` (default `max_open`),
+  `idle_timeout` (5 minutes), `max_lifetime` (none; set it behind a
+  balancer so new connections reach new backends) and `probe_after`.
+- `stats(p)`: open, idle and waiting now; dials, reuses, waits, total
+  and longest wait, and timeouts.
+- `close(p)` closes idle connections and fails waiters; leased ones close
+  as they come back. Releasing a lease twice panics.
+
+## API
+
+### `struct Options`
+
+### `fn options(max_open: int) -> Options`
+
+Options with the defaults above for a pool of max_open connections.
+
+### `gc struct Lease[T]`
+
+One connection, on loan from acquire until release or discard.
+
+### `struct Stats`
+
+### `gc struct Pool[T]`
+
+### `fn new[T](o: Options, dial: fn(until) -> result[T, str], close: fn(T), probe: fn(T) -> bool) -> Pool[T]`
+
+A pool that opens nothing until the first acquire. dial makes a connection by a deadline, close ends one, probe says whether an idle one still works (one cheap check, such as net.idle_alive).
+
+### `fn acquire[T](p: Pool[T], deadline: until) -> result[Lease[T], str]`
+
+A connection for the caller's use until release or discard: an idle one, a new one if fewer than max_open are open, or else the next one released, in arrival order. "timeout" if deadline passes first, "pool is closed" after close.
+
+### `fn release[T](p: Pool[T], l: Lease[T])`
+
+Gives a connection back: to the task that has waited longest, else to the idle list. Closed instead once past max_lifetime, beyond max_idle, or after close. Releasing a lease twice panics: two tasks would then share one connection.
+
+### `fn discard[T](p: Pool[T], l: Lease[T])`
+
+Closes a connection the caller found broken, freeing its slot for the next waiter to dial.
+
+### `fn close[T](p: Pool[T])`
+
+Closes every idle connection and fails every waiting acquire; connections in use are closed as they come back. acquire fails from now on.
+
+### `fn stats[T](p: Pool[T]) -> Stats`
+
+A snapshot of the counters.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
 # proc
 
 # proc
@@ -14649,70 +14915,160 @@ slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://
 
 
 
-# proxyproto
+# protobuf
 
-# proxyproto
+# protobuf
 
-> Package proxyproto.
+> Package protobuf.
 
-The PROXY protocol, versions 1 and 2: the header HAProxy, AWS NLB and
-other balancers put in front of a connection so the server sees the
-real client address instead of the balancer's.
+The Protocol Buffers wire format, written and read field by field
+without generated code: for talking to a gRPC or protobuf service whose
+messages are few, or for building a codec on top.
 
 ```slang
-import "net";
-import "proxyproto";
-import "time";
+import "protobuf";
 
-let hr = proxyproto.read_until(fd, until_of(time.mono() + 5000000000));
-guard let h = hr else let e = err_of(hr) { net.close(fd); return; }
-println(h.src_addr + ":" + to_str(h.src_port));   // the real client
-// h.rest: bytes that came after the header, the start of the stream
+// message User { int64 id = 1; string name = 2; repeated sint32 deltas = 3; }
+let w = protobuf.writer();
+protobuf.write_int64(w, 1, 42);
+protobuf.write_string(w, 2, "ada");
+protobuf.write_packed_sint(w, 3, [-1, 5, -9]);
+let data = protobuf.finish(w);
+
+let r = protobuf.reader(data);
+while protobuf.more(r) {
+    let fr = protobuf.next(r);              // field number and wire type
+    guard let f = fr else { break; }
+    if f.num == 2 {
+        name = protobuf.read_string(r) ?? "";
+    } else {
+        protobuf.skip(r, f.wire);           // a field this reader does not use
+    }
+}
 ```
 
-- `parse(b)` reads a header from the start of `b`: `some(header)`,
-  `none` when `b` is a prefix of one and more bytes are needed, or an
-  error when `b` is not a PROXY header. `header.size` is its length.
-- `read_until(fd, deadline)` reads one off a socket and keeps any bytes
-  that arrived after it in `header.rest`.
-- A `Header` has `version`, `family` (`tcp4`, `tcp6`, `udp4`, `udp6`,
-  `unix`, `unknown`), the source and destination addresses and ports, and
-  v2's `tlvs` (`kind`, `value`): ALPN, the TLS server name (0x02), AWS's
-  VPC endpoint id (0xEA) and so on. `local` is true for a v2 LOCAL
-  header, a balancer's health check, which carries no addresses.
-- `encode_v1(h)` and `encode_v2(h)` build headers, for a proxy written
-  in slang or a test. IPv6 addresses are printed in RFC 5952 form.
-
-The header is only bytes the peer sent. Require it on a listener that
-only the balancer can reach, or check the peer address first: otherwise
-any client can claim any address. The header comes before any TLS
-handshake, and `net.tls_accept` does its own accept on the listener, so
-a PROXY header in front of TLS needs a server-side TLS upgrade of an
-accepted fd, which `net` does not have yet.
+There are writers for every scalar type (`write_int64`,
+`write_uint64`, `write_sint` with zigzag, `write_bool`, `write_fixed64`,
+`write_fixed32`, `write_double`, `write_float`), plus `write_bytes`,
+`write_string` and packed repeated fields. A nested message is its own
+`Writer`, passed to `write_bytes`. The readers mirror them;
+`read_packed_*` also accept an unpacked element, as parsers must. Lengths
+are checked against the input and varints against their ten-byte limit.
+Groups (wire types 3 and 4) are not read.
 
 ## API
 
-### `struct Tlv`
+### `let WIRE_VARINT = 0;`
 
-One v2 type-length-value field: ALPN (0x01), authority (0x02, the TLS SNI name), unique id (0x05), SSL details (0x20), AWS VPC endpoint id (0xEA), and so on.
+### `let WIRE_I64 = 1;`
 
-### `struct Header`
+### `let WIRE_LEN = 2;`
 
-### `fn parse(b: bytes) -> result[opt[Header], str]`
+### `let WIRE_I32 = 5;`
 
-The header at the start of b; none if b is a prefix of one and more bytes are needed; an error if b does not start with a PROXY header.
+### `gc struct Writer`
 
-### `fn read_until(fd: i32, deadline: until) -> result[Header, str]`
+### `fn writer() -> Writer`
 
-Reads a header from fd, then stops: whatever arrived after it is in rest. Bounded by deadline as a whole.
+### `fn finish(w: Writer) -> bytes`
 
-### `fn encode_v1(h: Header) -> bytes`
+### `fn size(w: Writer) -> int`
 
-The v1 (text) header for h: "PROXY TCP4 1.2.3.4 5.6.7.8 1111 443\r\n". Families other than tcp4 and tcp6 are sent as UNKNOWN.
+The bytes written so far, without emptying the writer.
 
-### `fn encode_v2(h: Header) -> result[bytes, str]`
+### `fn write_int64(w: Writer, field: int, v: int)`
 
-The v2 (binary) header for h, TLVs included. An error for an address that does not match h.family.
+int32, int64, uint32, uint64 and enum fields. A negative int32 or int64 takes ten bytes, as the format says; use write_sint for fields declared sint32/sint64.
+
+### `fn write_uint64(w: Writer, field: int, v: u64)`
+
+### `fn write_sint(w: Writer, field: int, v: int)`
+
+sint32 and sint64 fields: zigzag, so small negatives stay small.
+
+### `fn write_bool(w: Writer, field: int, v: bool)`
+
+### `fn write_fixed64(w: Writer, field: int, v: u64)`
+
+fixed64, sfixed64.
+
+### `fn write_fixed32(w: Writer, field: int, v: int)`
+
+fixed32, sfixed32 (the low 32 bits of v).
+
+### `fn write_double(w: Writer, field: int, v: float)`
+
+### `fn write_float(w: Writer, field: int, v: float)`
+
+### `fn write_bytes(w: Writer, field: int, b: bytes)`
+
+bytes fields and nested messages (a finished Writer's bytes).
+
+### `fn write_string(w: Writer, field: int, s: str)`
+
+### `fn write_packed_int(w: Writer, field: int, vs: [int])`
+
+repeated int32/int64/uint32/uint64/enum/bool, packed.
+
+### `fn write_packed_sint(w: Writer, field: int, vs: [int])`
+
+repeated sint32/sint64, packed.
+
+### `fn write_packed_double(w: Writer, field: int, vs: [float])`
+
+repeated double, packed.
+
+### `gc struct Reader`
+
+### `fn reader(b: bytes) -> Reader`
+
+### `fn more(r: Reader) -> bool`
+
+### `struct Field`
+
+### `fn next(r: Reader) -> result[Field, str]`
+
+The next field's number and wire type; read its value next with the reader for that type, or skip it.
+
+### `fn read_varint(r: Reader) -> result[int, str]`
+
+A varint field: int32/int64/uint*/enum read as int (uint64 values above int's range come back negative; read_uvarint keeps them).
+
+### `fn read_uvarint(r: Reader) -> result[u64, str]`
+
+### `fn read_sint(r: Reader) -> result[int, str]`
+
+A zigzag (sint32/sint64) field.
+
+### `fn read_bool(r: Reader) -> result[bool, str]`
+
+### `fn read_fixed64(r: Reader) -> result[u64, str]`
+
+### `fn read_fixed32(r: Reader) -> result[int, str]`
+
+A fixed32 field as an unsigned value; sfixed32 is read_sfixed32.
+
+### `fn read_sfixed32(r: Reader) -> result[int, str]`
+
+### `fn read_double(r: Reader) -> result[float, str]`
+
+### `fn read_float(r: Reader) -> result[float, str]`
+
+### `fn read_bytes(r: Reader) -> result[bytes, str]`
+
+A length-delimited field: bytes, a string, a nested message, or packed repeated values.
+
+### `fn read_string(r: Reader) -> result[str, str]`
+
+### `fn read_packed_int(r: Reader, wire: int) -> result[[int], str]`
+
+A packed repeated varint field (or a single unpacked element, which a parser must also accept for repeated scalars).
+
+### `fn read_packed_sint(r: Reader, wire: int) -> result[[int], str]`
+
+### `fn skip(r: Reader, wire: int) -> result[bool, str]`
+
+Skips a field's value of the given wire type.
 
 ---
 
