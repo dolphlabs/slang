@@ -27,8 +27,8 @@ standalone repo under `slangpackages/`.
 - [x] **Zero-copy file sends** (stdlib, `net`/`fs`): `sendfile` (and
   `splice` on Linux) from a file to a socket, used by `http` for static
   files. PR #602 (open).
-- [ ] **PROXY protocol v1/v2** (stdlib): parse the header HAProxy and AWS
-  NLB put in front of a connection, so servers see the real client address.
+- [x] **PROXY protocol v1/v2** (stdlib): parse the header HAProxy and AWS
+  NLB put in front of a connection, so servers see the real client address. PR #606 (open).
 - [ ] **DNS resolver** (stdlib): A/AAAA/CNAME lookups over UDP with TCP
   fallback, `/etc/resolv.conf` and `/etc/hosts`, a TTL cache, timeouts,
   and happy-eyeballs dialing (RFC 8305). `net.dial` resolves IPv4 only
