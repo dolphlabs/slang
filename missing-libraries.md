@@ -29,12 +29,11 @@ standalone repo under `slangpackages/`.
   files. PR #602 (open).
 - [x] **PROXY protocol v1/v2** (stdlib): parse the header HAProxy and AWS
   NLB put in front of a connection, so servers see the real client address. PR #606 (open).
-- [ ] **DNS resolver** (stdlib): A/AAAA/CNAME lookups over UDP with TCP
+- [x] **DNS resolver** (stdlib): A/AAAA/CNAME lookups over UDP with TCP
   fallback, `/etc/resolv.conf` and `/etc/hosts`, a TTL cache, timeouts,
-  and happy-eyeballs dialing (RFC 8305). `net.dial` resolves IPv4 only
-  today, so it cannot reach an IPv6 address: #614 fixes that.
-  Status: IPv6 dialing with happy eyeballs is in #614; the
-  wire-protocol client with a TTL cache waits for UDP (#600) to merge.
+  and happy-eyeballs dialing (RFC 8305). Happy eyeballs is in #614; the
+  wire-protocol client (`dns`) is on feat/dns, with `until_min` from
+  feat/until-min. `net.dial` still resolves with getaddrinfo.
 - [x] **Graceful restart and draining** (stdlib): hand listening sockets to
   a new process, stop accepting, and drain open connections with a
   deadline. PR #626 (open).
@@ -93,8 +92,8 @@ standalone repo under `slangpackages/`.
 - [x] **ACME** (stdlib): automatic certificates from Let's Encrypt with
   renewal, served through `tls_ctx_add_sni`. PR #622 (open).
 - [x] **TOTP and HOTP** (stdlib): RFC 6238/4226 codes and checks with skew. PR #617 (open).
-- [ ] **WebAuthn / passkeys** (package): registration and assertion.
-  Status: waits for the CBOR PR (feat/msgpack-cbor) to merge.
+- [x] **WebAuthn / passkeys** (stdlib, `webauthn`): registration and
+  assertion. On feat/webauthn; attestation is recorded, not verified.
 - [x] **Envelope encryption** (stdlib, `crypto`): AES-GCM data keys wrapped
   by a key-encryption key, with key ids for rotation. PR #618 (open).
 

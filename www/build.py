@@ -245,6 +245,8 @@ PACKAGE_SECTIONS = {
     "protobuf": ["`protobuf`"],
     "pool": ["`pool`"],
     "context": ["`context`"],
+    "webauthn": ["`webauthn`"],
+    "dns": ["`dns`"],
     "pg": ["`pg`"],
     "mysql": ["`mysql`"],
     "redis": ["`redis`"],
@@ -454,7 +456,7 @@ SLANG_BUILTINS = {
     "some", "none", "ok", "err", "err_of", "exit", "make_chan",
     "chan_send", "chan_recv", "chan_close", "make_mutex", "mutex_lock",
     "mutex_unlock", "mutex_trylock", "join_wait", "spawn", "nullptr",
-    "arena_new", "until_of", "until_never", "until_hit", "bytes_ptr",
+    "arena_new", "until_of", "until_never", "until_hit", "until_min", "bytes_ptr",
     "to_le", "to_be", "from_le", "from_be", "has", "del",
 }
 

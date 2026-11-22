@@ -141,6 +141,9 @@ fn jstring(p: JParser) -> result[str, str] {
         else if e == 117 {
             let cp = jhex4(p);
             if cp < 0 { return err("json: bad \\u escape"); }
+            // A str ends at its first NUL, so one in the text would cut it
+            // short without a trace.
+            if cp == 0 { return err("json: a NUL in a string"); }
             if cp >= 0xd800 && cp <= 0xdbff && p.at + 1 < len(p.b) && (p.b[p.at] as int) == 92 &&
                (p.b[p.at + 1] as int) == 117 {
                 p.at = p.at + 2;

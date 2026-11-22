@@ -34,9 +34,14 @@ fn run() {
     // fd table (test is a builtin, so no other process or fd is involved).
     // Not `true >&N`: dash, Ubuntu's sh, takes only one-digit fds in a
     // redirection, and on Linux the program's sockets are past 9.
-    let script = "for fd in" + list + "; do if [ -e /dev/fd/$fd ]; then echo leaked; fi; done; echo checked";
+    // Each line is appended by its own command, so no redirection is in
+    // force while the probe runs: dash keeps stdout on a spare fd of 10 or
+    // more while a `{ ...; } > file` group runs, and that spare can be one
+    // of the numbers probed.
+    let outp = "/tmp/sl_spawn_no_fd_leak.out";
+    let script = ": > " + outp + "; for fd in" + list + "; do if [ -e /dev/fd/$fd ]; then echo leaked >> " + outp + "; fi; done; echo checked >> " + outp;
     let noenv: [str] = [];
-    let r = proc.spawn(["sh", "-c", "{ " + script + "; } > /tmp/sl_spawn_no_fd_leak.out"], noenv, "", 0);
+    let r = proc.spawn(["sh", "-c", script], noenv, "", 0);
     guard let pid = r else let e = err_of(r) { die("spawn: " + e); }
     let _w = proc.wait(pid, until_never());
     let ofd = fs.open("/tmp/sl_spawn_no_fd_leak.out") ?? (-1 as i32);

@@ -24,6 +24,7 @@
   <url><loc>https://slang.dolphlabs.com/packages/crypto</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/csv</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/decimal</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/dns</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/encoding</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/envelope</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/flags</loc></url>
@@ -84,6 +85,7 @@
   <url><loc>https://slang.dolphlabs.com/packages/trace</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/unicode</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/uuid</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/webauthn</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/websocket</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/x509</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/xml</loc></url>

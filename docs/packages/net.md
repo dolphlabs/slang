@@ -70,6 +70,19 @@ report both "timed out" and "wrote this much". A `"timeout"` from
 connection must be closed, not retried. For a framed protocol that is
 the right contract regardless — a half-written frame is unrecoverable.
 
+An `until` is opaque: it cannot be compared or turned back into a
+number, so code that holds two deadlines combines them with
+`until_min(a, b)`, the earlier of the two (`until_never()` is later than
+any instant). That is how a call gives up at its own timeout or the
+caller's deadline, whichever comes first:
+
+```slang
+let attempt = until_min(deadline, until_of(time.mono() + 1000000000));
+let rr = net.recv_until(cfd, 4096, attempt);   // 1s, or less if deadline is sooner
+```
+
+`until_hit(u)` says whether `u` has passed (never for `until_never()`).
+
 `net.tls_recv_until` / `net.tls_send_until` are the same thing over
 TLS, with the same reserved string. The `link` API takes an `until` on
 `accept`/`send`/`recv` already.
