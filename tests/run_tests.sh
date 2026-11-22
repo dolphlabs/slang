@@ -676,7 +676,7 @@ rm -f "$ul_bin"
 [ "$ul_bad" -eq 0 ] && echo "PASS unicode licence notice"
 
 # Stdlib packages that carry their own unit tests.
-for pkg in stdlib/pg stdlib/timez stdlib/uuid stdlib/rand stdlib/decimal stdlib/nats stdlib/s3 stdlib/sigv4 stdlib/template stdlib/websocket stdlib/csv stdlib/mysql stdlib/toml stdlib/yaml stdlib/cache stdlib/x509 stdlib/xml stdlib/zip stdlib/tar; do
+for pkg in stdlib/pg stdlib/timez stdlib/uuid stdlib/rand stdlib/decimal stdlib/nats stdlib/s3 stdlib/sigv4 stdlib/template stdlib/websocket stdlib/csv stdlib/mysql stdlib/toml stdlib/yaml stdlib/cache stdlib/x509 stdlib/xml stdlib/zip stdlib/tar stdlib/runtime stdlib/oidc stdlib/acme stdlib/lease stdlib/balance stdlib/memcache stdlib/envelope stdlib/otp stdlib/idempotency stdlib/msgpack stdlib/cbor stdlib/crdt stdlib/singleflight stdlib/resilience stdlib/multipart stdlib/sse stdlib/smtp stdlib/trace stdlib/metrics stdlib/proxyproto stdlib/protobuf stdlib/pool stdlib/context; do
     if out=$(./slangc test "$pkg" 2>&1); then
         echo "PASS slangc test $pkg"
     else
@@ -1313,6 +1313,19 @@ if ./slangc tests/leaf_fn_native_args/main.sl --keep-c -o "$lfn_c" >/dev/null 2>
     fi
 else
     echo "FAIL leaf fn native args (compile)"
+    fail=1
+fi
+
+# Lists of numbers the runtime builds are pointer-free: a flag of 0
+# ("unknown") or anything but SL_ELEM_NOPTR makes every major collection
+# offer each element to mark as a candidate pointer (unicode.runes,
+# fs.fstat, regex matches, the json tape all did).
+noptr_bad=$(grep -nE 'sl_arr_new\(sizeof\((long long|int64_t|double|int32_t|uint32_t|float|int)\), [^S]' runtime/*.c)
+if [ -z "$noptr_bad" ]; then
+    echo "PASS runtime number lists are pointer-free"
+else
+    echo "FAIL runtime number lists not marked SL_ELEM_NOPTR:"
+    printf '%s\n' "$noptr_bad" | sed 's/^/  /'
     fail=1
 fi
 

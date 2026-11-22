@@ -77,9 +77,15 @@ TLS, with the same reserved string. The `link` API takes an `until` on
 `net.dial_until(host, port, deadline)` bounds connecting: the DNS lookup
 and the TCP connect together. A lookup still running when the deadline
 passes is abandoned to the resolver thread (`getaddrinfo` cannot be
-interrupted), so the caller gets `"timeout"` on time. Every address the
-name resolves to is tried in turn — `net.dial` does the same, without a
-deadline.
+interrupted), so the caller gets `"timeout"` on time.
+
+`net.dial`, `net.dial_until`, `net.tls_dial` and `link_dial` resolve
+IPv4 and IPv6 and race the addresses (happy eyeballs, RFC 8305): they
+are tried alternating families, in the resolver's order, and an attempt
+that has not connected within 250 ms does not hold up the next one. The
+first to connect wins and the others are closed, so a broken IPv6 route
+costs a quarter of a second, not a TCP connect timeout. An IP literal,
+IPv4 or IPv6, skips the resolver thread.
 
 ##### DNS SRV and TXT lookups
 
@@ -121,28 +127,37 @@ that is still running; remove a stale one with `os.remove` first. A path
 longer than the platform allows (104 bytes on macOS, 108 on Linux) is an
 error, not truncated.
 
-##### Sending files
+##### Listener and socket options
 
-`net.send_file(sock, file, offset, count)` sends `count` bytes of a file
-(an fd from `fs.open`) starting at `offset`, or the rest of the file for
-a negative `count`. On Linux and macOS it is `sendfile(2)`: the kernel
-moves the bytes from the page cache to the socket, never copying them
-through the program or onto the slang heap. It returns the count sent,
-short only if the file ended first.
+`net.listen_with(host, port, opts)` is `net.listen` with a bind address
+and options. `host` is an IP literal, IPv4 or IPv6, or `""` for any
+IPv4 address. `opts` is a list of words separated by spaces or commas;
+an unknown word is an error, not ignored:
+
+| Option | Effect |
+|---|---|
+| `reuseport` | `SO_REUSEPORT`: several listeners on one port, the kernel spreading connections between them (one per core) |
+| `v6only` | an IPv6 listener that refuses IPv4-mapped connections; without it, `"::"` takes both on every system |
+| `backlog=N` | the accept queue length (default 1024; the kernel may cap it) |
+| `fastopen=N` | TCP Fast Open with a queue of N, where the kernel allows it |
 
 ```slang
-let fr = fs.open("public/app.js");
-guard let file = fr else { return; }
-let sr = net.send_file_until(cfd, file, 0, -1, deadline);  // the whole file
-fs.close(file);
+let lr = net.listen_with("0.0.0.0", 8080, "reuseport backlog=4096");
 ```
 
-`net.tls_send_file` / `tls_send_file_until` do the same over TLS, which
-has to encrypt in user space: the bytes go through one pooled 64 KB
-buffer, still never the slang heap. A `"timeout"` leaves the stream at
-an unknown offset, as with `send_until`, so close the connection. A page
-that is not in the page cache is read from disk on the calling worker,
-as `fs.pread` does.
+`net.set_opt(fd, name, value)` and `net.get_opt(fd, name)` set and read
+options on any socket by name. Booleans are 0 or 1, and times are in
+seconds:
+
+| Name | Option |
+|---|---|
+| `nodelay` | `TCP_NODELAY`: send small writes now, without Nagle's delay |
+| `keepalive`, `keepidle`, `keepintvl`, `keepcnt` | TCP keepalive on/off, idle time before probes, interval between them, probes before giving up |
+| `quickack` | `TCP_QUICKACK` (Linux only; elsewhere the error `"option not supported on this system"`) |
+| `rcvbuf`, `sndbuf` | kernel buffer sizes (Linux reads back double what was set) |
+| `linger` | seconds `close` waits to flush unsent data; `-1` off (the default), `0` resets the connection |
+| `broadcast` | `SO_BROADCAST`, for UDP |
+| `ttl`, `multicast_ttl`, `multicast_loop` | IPv4 or IPv6 by the socket's family |
 ##### UDP
 
 Datagram sockets use the same fds, reactor and deadlines as TCP. A peer
@@ -368,9 +383,11 @@ the session, one OpenSSL call at a time. A link splits once.
 
 ### `net.nonblock(int) -> result[bool,str]`
 
-### `net.send_file(int, int, int, int) -> result[int,str]`
+### `net.listen_with(str, int, str) -> result[i32,str]`
 
-### `net.send_file_until(int, int, int, int, until) -> result[int,str]`
+### `net.set_opt(int, str, int) -> result[bool,str]`
+
+### `net.get_opt(int, str) -> result[int,str]`
 
 ### `net.udp_bind(str, int) -> result[i32,str]`
 
@@ -417,10 +434,6 @@ the session, one OpenSSL call at a time. A link splits once.
 ### `net.tls_send_until(rawptr, bytes, until) -> result[i32,str]`
 
 ### `net.tls_close(rawptr)`
-
-### `net.tls_send_file(rawptr, int, int, int) -> result[int,str]`
-
-### `net.tls_send_file_until(rawptr, int, int, int, until) -> result[int,str]`
 
 ### `net.tls_idle_alive(rawptr) -> bool`
 

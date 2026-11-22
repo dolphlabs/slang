@@ -211,9 +211,15 @@ TLS, with the same reserved string. The `link` API takes an `until` on
 `net.dial_until(host, port, deadline)` bounds connecting: the DNS lookup
 and the TCP connect together. A lookup still running when the deadline
 passes is abandoned to the resolver thread (`getaddrinfo` cannot be
-interrupted), so the caller gets `"timeout"` on time. Every address the
-name resolves to is tried in turn — `net.dial` does the same, without a
-deadline.
+interrupted), so the caller gets `"timeout"` on time.
+
+`net.dial`, `net.dial_until`, `net.tls_dial` and `link_dial` resolve
+IPv4 and IPv6 and race the addresses (happy eyeballs, RFC 8305): they
+are tried alternating families, in the resolver's order, and an attempt
+that has not connected within 250 ms does not hold up the next one. The
+first to connect wins and the others are closed, so a broken IPv6 route
+costs a quarter of a second, not a TCP connect timeout. An IP literal,
+IPv4 or IPv6, skips the resolver thread.
 
 ##### DNS SRV and TXT lookups
 
@@ -255,28 +261,37 @@ that is still running; remove a stale one with `os.remove` first. A path
 longer than the platform allows (104 bytes on macOS, 108 on Linux) is an
 error, not truncated.
 
-##### Sending files
+##### Listener and socket options
 
-`net.send_file(sock, file, offset, count)` sends `count` bytes of a file
-(an fd from `fs.open`) starting at `offset`, or the rest of the file for
-a negative `count`. On Linux and macOS it is `sendfile(2)`: the kernel
-moves the bytes from the page cache to the socket, never copying them
-through the program or onto the slang heap. It returns the count sent,
-short only if the file ended first.
+`net.listen_with(host, port, opts)` is `net.listen` with a bind address
+and options. `host` is an IP literal, IPv4 or IPv6, or `""` for any
+IPv4 address. `opts` is a list of words separated by spaces or commas;
+an unknown word is an error, not ignored:
+
+| Option | Effect |
+|---|---|
+| `reuseport` | `SO_REUSEPORT`: several listeners on one port, the kernel spreading connections between them (one per core) |
+| `v6only` | an IPv6 listener that refuses IPv4-mapped connections; without it, `"::"` takes both on every system |
+| `backlog=N` | the accept queue length (default 1024; the kernel may cap it) |
+| `fastopen=N` | TCP Fast Open with a queue of N, where the kernel allows it |
 
 ```slang
-let fr = fs.open("public/app.js");
-guard let file = fr else { return; }
-let sr = net.send_file_until(cfd, file, 0, -1, deadline);  // the whole file
-fs.close(file);
+let lr = net.listen_with("0.0.0.0", 8080, "reuseport backlog=4096");
 ```
 
-`net.tls_send_file` / `tls_send_file_until` do the same over TLS, which
-has to encrypt in user space: the bytes go through one pooled 64 KB
-buffer, still never the slang heap. A `"timeout"` leaves the stream at
-an unknown offset, as with `send_until`, so close the connection. A page
-that is not in the page cache is read from disk on the calling worker,
-as `fs.pread` does.
+`net.set_opt(fd, name, value)` and `net.get_opt(fd, name)` set and read
+options on any socket by name. Booleans are 0 or 1, and times are in
+seconds:
+
+| Name | Option |
+|---|---|
+| `nodelay` | `TCP_NODELAY`: send small writes now, without Nagle's delay |
+| `keepalive`, `keepidle`, `keepintvl`, `keepcnt` | TCP keepalive on/off, idle time before probes, interval between them, probes before giving up |
+| `quickack` | `TCP_QUICKACK` (Linux only; elsewhere the error `"option not supported on this system"`) |
+| `rcvbuf`, `sndbuf` | kernel buffer sizes (Linux reads back double what was set) |
+| `linger` | seconds `close` waits to flush unsent data; `-1` off (the default), `0` resets the connection |
+| `broadcast` | `SO_BROADCAST`, for UDP |
+| `ttl`, `multicast_ttl`, `multicast_loop` | IPv4 or IPv6 by the socket's family |
 ##### UDP
 
 Datagram sockets use the same fds, reactor and deadlines as TCP. A peer
@@ -623,6 +638,11 @@ while !proc.shutdown_requested() {
 
 proc.wait_idle();
 ```
+
+A process started with `proc.spawn` inherits standard input, output and
+error and nothing else: every socket and file the runtime opens is
+close-on-exec, so a child cannot hold a listener's port or a client's
+connection open after the program closes it.
 
 `proc.getenv(name)` reads an environment variable, returning
 `opt[str]` (`none` if unset). `proc.args()` is the process argument
@@ -2425,6 +2445,17 @@ Percent-escapes are emitted uppercase (RFC 3986 §2.1) and hex digests
 lowercase (what `sha256sum`, git and every API that returns one use).
 Both decoders accept either case.
 
+##### Range requests
+
+`http.parse_range(header, size)` reads a `Range` header for a resource of
+`size` bytes. It gives `ok([])` to send the whole resource (no header, or
+one worth ignoring: malformed, a unit other than bytes, more than 16
+ranges), `ok(ranges)` to answer 206 with those ranges (clipped to the
+end, suffix ranges like `bytes=-500` resolved), or an error to answer 416
+with `Content-Range: bytes */size`. `http.content_range(r, size)` gives
+the `Content-Range` value. With `net.send_file`, a range of a file goes
+straight from the page cache.
+
 #### `httpc`
 
 An HTTP/1.1 **client** — the mirror of `http`, which serves. Speaks
@@ -2636,6 +2667,711 @@ that case.
 
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
+
+#### `runtime`
+
+What the program's runtime is doing, for a `/debug` endpoint or metrics.
+
+```slang
+import "runtime";
+
+let s = runtime.stats();
+println(to_str(s.rss_bytes / 1048576) + " MB resident, " + to_str(s.tasks) +
+        " tasks, longest GC pause " + to_str(s.gc_pause_max_ns / 1000) + " us");
+```
+
+`runtime.stats()` returns `gc_majors` and `gc_minors` (collections so
+far), `gc_pause_total_ns` and `gc_pause_max_ns` (time the program was
+stopped for them), `heap_live_bytes` (live after the last full
+collection), `heap_new_bytes` (allocated since), `rss_bytes` and
+`rss_peak_bytes` (resident memory now and at most), `tasks` (spawned
+tasks running, the caller included if it is one) and `workers` (OS
+threads running tasks). The counters are kept whether or not anything
+reads them, at a few atomic adds per collection; reading them is a few
+loads and one system call.
+#### `oidc`
+
+OAuth 2.0 and OpenID Connect for a client: sign users in with Google,
+Microsoft, Okta, Auth0, Keycloak and the like, and get tokens for
+service-to-service calls.
+
+```slang
+import "oidc";
+
+let pr = oidc.discover("https://accounts.google.com", deadline);
+guard let provider = pr else { return err("no provider"); }
+let o = oidc.client(provider, client_id, client_secret, "https://app.example/callback");
+
+// 1. send the browser off; keep state, nonce and pk.verifier in the session
+let pk = oidc.pkce() ?? fail();
+let state = oidc.random_token() ?? "";
+let nonce = oidc.random_token() ?? "";
+redirect(oidc.authorize_url(o, ["openid", "email"], state, nonce, pk));
+
+// 2. on the callback, after checking state: trade the code
+let tr = oidc.exchange(o, code, pk.verifier, deadline);
+guard let tokens = tr else { return err("sign-in failed"); }
+let cr = oidc.verify_id_token(o, tokens.id_token, nonce, deadline);
+guard let who = cr else { return err("bad ID token"); }     // who.sub, who.email
+```
+
+`discover` checks that the document's issuer is the one asked for and
+that the endpoints are HTTPS. `exchange`, `refresh` and
+`client_credentials` authenticate with `client_secret_basic`.
+`verify_id_token` follows OpenID Connect Core 3.1.3.7:
+
+- the signature is checked against the provider's published keys, RS256
+  or ES256 only (`none` and HMAC are refused);
+- the issuer, the audience (and `azp` when there are several), expiry
+  with a minute of leeway, and the nonce are checked.
+
+Keys are cached by `kid` and refetched, at most once a minute, when a
+token names one not seen yet. `Claims.raw` holds every claim.
+#### `acme`
+
+Certificates from Let's Encrypt or any ACME CA (RFC 8555), obtained and
+renewed by the program itself with http-01 challenges.
+
+```slang
+import "acme";
+import "crypto";
+
+let store = acme.challenges();
+// in the port-80 handler: answer acme.http01(store, path) when it is some(body)
+
+let key = crypto.ecdsa_p256_generate() ?? b"";      // keep it: it is the account
+let ar = acme.account(acme.LETSENCRYPT, key, ["mailto:ops@example.com"], deadline);
+guard let acct = ar else { return err("acme account"); }
+let cr = acme.obtain(acct, store, ["example.com", "www.example.com"], deadline);
+guard let cert = cr else { return err("acme order"); }
+// cert.chain_pem and cert.key_pem: serve them with net.tls_ctx_add_sni
+if acme.renew_due(cert.chain_pem, 30) { /* obtain again */ }
+```
+
+- `account` registers (or finds) the account for a P-256 key and agrees
+  to the CA's terms.
+- `obtain` orders the names, publishes each http-01 key authorization in
+  the store while the CA checks it, finalizes with a CSR for a fresh
+  P-256 key, and downloads the chain.
+- Requests are JWS-signed (ES256) with the replay-nonce protocol, and
+  retried once on `badNonce`.
+- `LETSENCRYPT_STAGING` is for trying it out without production rate
+  limits.
+#### `lease`
+
+Leases and leader election: one process at a time holds a named lease,
+for running a scheduled job once across replicas, or for electing one
+leader.
+
+```slang
+import "lease";
+
+let e = lease.elector("jobs:nightly-report", 10000);   // a 10 s lease
+// every ~3 seconds:
+if lease.elect(e, redis_conn, deadline) ?? false {
+    // leading: pass lease.fence(e) with the writes made, so storage can
+    // refuse a stale leader's late ones
+}
+```
+
+- **Redis:** `redis_acquire(conn, name, ttl_ms, deadline)` is
+  `SET name token NX PX ttl`. `redis_renew` and `redis_release` are
+  scripts that check the token first, so a process can never renew or
+  release a lease it lost. Each acquisition takes a fencing token
+  (`INCR name:fence`) that only grows: a leader that stalled past its
+  lease and wakes up still believing it leads carries an older fence
+  than the real leader, and storage that checks fences refuses it. A
+  lease is safe to act on while `remaining_ms(l) > 0`.
+- **Leader election:** `elector(name, ttl_ms)`, `elect` (renew while
+  leading, try to acquire otherwise), `leading`, `fence` and `resign`,
+  which hands over at once instead of after the ttl.
+- **Postgres:** `pg_try_lock` and `pg_unlock` are session advisory
+  locks on `key_of(name)`. They are held while the connection lives, so
+  use a connection of its own, never a pooled one.
+#### `balance`
+
+Client-side load balancing: pick a backend per request, spread load,
+steer away from slow backends and stop sending to failing ones.
+
+```slang
+import "balance";
+import "time";
+
+let lb = balance.new(["10.0.0.1:8080", "10.0.0.2:8080"], balance.P2C);
+let pr = balance.pick(lb, "");
+guard let p = pr else { return err("no backend up"); }
+let t0 = time.mono();
+let r = call(p.addr);
+let worked = false;
+if let _v = r { worked = true; }
+balance.done(lb, p, worked, (time.mono() - t0) as int);
+```
+
+| Strategy | Picks |
+|---|---|
+| `ROUND_ROBIN` | each backend in turn |
+| `RANDOM` | uniformly at random |
+| `LEAST` | the fewest requests in flight |
+| `P2C` | two at random, the one with fewer in flight, then the lower latency (an EWMA): nearly `LEAST`'s spread without herding every client onto one backend |
+| `HASH` | the backend a key maps to (rendezvous hashing via `math/shard`), and the key's next backend while that one is ejected |
+
+A backend that fails `eject_after` times in a row (5) is ejected for
+`eject_ns` (10 s), doubling for each ejection in a row up to
+`eject_max_ns` (5 minutes); a success resets it. `set_backends` replaces
+the list from service discovery and keeps the state of backends that
+stay. `status` reports each backend.
+#### `memcache`
+
+A memcached client over the text protocol, across one or more servers.
+
+```slang
+import "memcache";
+
+let mc = memcache.new(["cache-1:11211", "cache-2:11211"]);
+memcache.set(mc, "user:42", to_bytes(body), 300, deadline);   // 5 minutes
+let gr = memcache.get(mc, "user:42", deadline);
+guard let found = gr else let e = err_of(gr) { return err(e); }  // I/O error
+if let v = found { use(v); } else { /* a miss */ }
+```
+
+The client has `get`, `gets` (with the cas token), `get_multi` (one
+request per server), `set`, `add`, `replace`, `cas`, `delete`, `incr`,
+`decr`, `touch` and `close`. Keys spread over servers by rendezvous
+hashing, so adding or removing a server moves only its share. Up to
+`max_idle` connections per server are kept and reused, and a connection
+that saw any error is closed rather than reused. Keys are checked (1 to
+250 bytes, no spaces or control characters) and values are limited to
+`max_value` (1 MB, memcached's default item size).
+#### `envelope`
+
+Envelope encryption for stored data: each value gets its own random data
+key, stored wrapped by a key-encryption key named by an id. Rotating the
+key-encryption key then rewrites a few dozen bytes per value, not the
+value, and old keys can stay for reading.
+
+```slang
+import "envelope";
+
+let kr = envelope.keyring();
+envelope.add_key(kr, "2026-11", key_from_kms);         // 32 bytes
+let box = envelope.seal(kr, to_bytes(ssn), to_bytes("user:42"));
+let back = envelope.open(kr, box ?? b"", to_bytes("user:42"));
+
+envelope.add_key(kr, "2027-01", next_key);              // now the sealing key
+let moved = envelope.rewrap(kr, box ?? b"");            // value untouched
+```
+
+Both layers are AES-256-GCM through `crypto.seal`, so nonces are always
+fresh. The aad binds a value to its context, so a box sealed for
+`"user:42"` will not open as `"user:43"`. The wrapped data key is bound
+to its key id. `key_id(box)` says which key sealed a box, `use_key`
+picks the sealing key, and `remove_key` drops an old one (never the
+current one).
+#### `otp`
+
+One-time passwords for two-factor sign-in: HOTP (RFC 4226) and TOTP
+(RFC 6238), the codes authenticator apps show.
+
+```slang
+import "otp";
+
+// enrolment: keep the secret, show the URI as a QR code
+let secret = otp.new_secret() ?? b"";
+let uri = otp.uri(secret, "Acme", "ada@example.com", otp.totp_options());
+
+// sign-in: accept each code once
+let matched = otp.verify_totp(secret, code, now_unix_secs, otp.totp_options());
+guard let step = matched else { return deny(); }
+if step <= user.last_otp_step { return deny(); }   // a replay
+user.last_otp_step = step;
+```
+
+`totp_options()` gives 6 digits, 30-second steps, one step of skew either
+side, and SHA-1 (what apps assume; `"SHA256"` and `"SHA512"` also work).
+`verify_totp` compares in constant time and returns the time step that
+matched, so a code cannot be used twice: within its 30 seconds it is
+otherwise valid for anyone who saw it. There are also `hotp`, `totp`,
+`verify_hotp` (with a look-ahead window), `parse_secret` (base32 as apps
+show it) and `new_secret` (160 random bits). Checked against both RFCs'
+test vectors.
+#### `idempotency` and `outbox`
+
+Two patterns for doing a thing exactly once in effect.
+
+**Idempotency keys** (the `Idempotency-Key` header): a retried request
+with the same key gets the first one's response instead of running
+twice.
+
+```slang
+import "idempotency";
+
+let br = idempotency.begin(redis_conn, key, request_fingerprint, 30000, deadline);
+guard let b = br else { return unavailable(); }
+if b.state == idempotency.DONE { return replay(b.response); }
+if b.state == idempotency.IN_PROGRESS { return conflict(); }          // 409
+if b.state == idempotency.MISMATCH { return unprocessable(); }        // 422
+let resp = handle();                                                  // NEW: run it
+idempotency.complete(redis_conn, key, b, resp, 86400000, deadline);   // keep a day
+```
+
+The reservation is one atomic `SET NX`, so two copies of a request
+arriving together cannot both run. It expires after `lock_ms` if the
+process dies, so the key does not stay stuck. `complete` and `abandon`
+act only on the caller's own reservation, and the fingerprint catches a
+key reused for a different request.
+
+**The transactional outbox:** write an event in the same Postgres
+transaction as the change it describes, and let a relay publish it.
+The event goes out if and only if the change commits.
+
+```slang
+import "outbox";
+
+pg.exec(conn, outbox.schema(), deadline);                  // in a migration
+// inside the business transaction:
+outbox.add(conn, "orders.created", payload, deadline);
+// in a relay task, in a loop (publish is fn(outbox.Message) -> bool):
+let n = outbox.relay(conn, 100, publish_to_kafka, deadline);
+```
+
+`relay` claims a batch with `FOR UPDATE SKIP LOCKED`, so several relays
+can share the table. Published rows are deleted, and failed ones are
+retried after 2, 4, 8, ... seconds (at most an hour). Delivery is at
+least once, so consumers should be idempotent too.
+#### `msgpack` and `cbor`
+
+MessagePack and CBOR (RFC 8949), the two common binary forms of JSON's
+data model, with binary strings added. CBOR also has tags; COSE,
+WebAuthn and CWT are built on it.
+
+```slang
+import "cbor";
+import "msgpack";
+
+// streaming: nothing allocated but the output
+let w = msgpack.writer();
+msgpack.write_map(w, 1);
+msgpack.write_str(w, "id");
+msgpack.write_int(w, 42);
+let data = msgpack.finish(w);
+
+let r = msgpack.reader(data);
+let pairs = msgpack.read_map(r) ?? 0;
+let key = msgpack.read_str(r) ?? "";
+let id = msgpack.read_int(r) ?? 0;
+
+// or as a tree
+let v = cbor.decode(bytes_in) ?? cbor.null_value();
+let temp = cbor.get(v, "temp");
+```
+
+- **Writers** (`write_int`, `write_str`/`write_text`, `write_bin`/
+  `write_bytes`, `write_float`, `write_array`, `write_map`, and so on)
+  always use the shortest form. CBOR writes a float in the smallest of
+  half, single or double precision that holds it exactly, its preferred
+  serialization. MessagePack has `write_ext` and `write_timestamp`; CBOR
+  has `write_tag`.
+- **Readers** read one value at a time (`peek`/`peek_major` says what
+  comes next) and `skip` past what is not needed. CBOR reads
+  indefinite-length strings and containers (`-1` from `read_array` /
+  `read_map`, then items until `at_break`).
+- **Values:** `decode`/`encode` and `read_value`/`write_value` work on a
+  `Value` tree; `get(v, key)` finds a map entry.
+- **Untrusted input:** every length is checked against the bytes left
+  before anything is allocated, so a five-byte "array of 4 billion"
+  fails at once. Nesting is limited to `MAX_DEPTH` (512), and CBOR text
+  must be UTF-8. Both are checked against the specifications' example
+  vectors.
+#### `crdt`
+
+Conflict-free replicated data types: state that replicas update on their
+own and merge in any order, any number of times, and then agree on.
+They suit counters, sets and maps shared between nodes without a
+coordinator.
+
+```slang
+import "crdt";
+
+let a = crdt.gcounter();
+let b = crdt.gcounter();
+crdt.gc_inc(a, "node-a", 3);
+crdt.gc_inc(b, "node-b", 4);
+crdt.gc_merge(a, b);
+crdt.gc_value(a)            // 7, on whichever node merges both
+```
+
+- `gcounter` (grow-only) and `pncounter` (up and down).
+- `orset`: a set where an add the remover had not seen survives the
+  remove. It is the optimized OR-set, with no tombstones: its size follows
+  the elements present plus one counter per node, however many adds and
+  removes it has seen.
+- `lwwmap`: last writer wins per key, by timestamp, with ties going to
+  the larger node id so every replica picks the same winner. Deletes
+  are tombstones; `map_compact` drops old ones once every replica is
+  known to have merged past them.
+
+Each node passes its own id with its updates. The state is plain data, so
+`json.encode`/`json.decode` ship it.
+#### `singleflight`
+
+Concurrent identical calls share one execution: while a call for a key
+is running, more calls for that key wait for its answer instead of
+running again. It is the cure for a cache stampede, where a popular key
+expires and a thousand requests reach the database at once.
+
+```slang
+import "singleflight";
+
+fn load_user(id: str, deadline: until) -> result[User, str] { ... }
+
+let users = singleflight.group(load_user);     // one group per loader
+let r = singleflight.call(users, "user:" + id, id, deadline);
+```
+
+The first caller for a key runs the function; the others get its result
+or its error. A call that panics answers every waiter with an error.
+Waiters wait for the running call, which ends at the first caller's
+deadline, not theirs. `forget(g, key)` makes the next call run anew, and
+`runs`/`joins` count calls that ran and calls that shared.
+#### `resilience`
+
+Ways to fail well under load, each safe to share between tasks.
+
+```slang
+import "resilience";
+
+let b = resilience.breaker(resilience.breaker_options());
+if resilience.allow(b) {
+    let r = call_upstream();
+    let worked = false;
+    if let _v = r { worked = true; }
+    resilience.record(b, worked);
+}
+
+let per_ip = resilience.gcra(100.0, 20);        // 100/s per key, bursts of 20
+let d = resilience.gcra_allow(per_ip, client_ip);
+if !d.allowed { /* 429 with Retry-After from d.retry_after_ns */ }
+```
+
+- **Circuit breaker:** `breaker(o)`, `allow`, `record`. It opens when
+  failures reach `failure_ratio` of the last `window` calls (once
+  `min_calls` have been seen), refuses calls for `open_ns`, then lets
+  `probes` trial calls through: that many successes close it, one failure
+  opens it again. `breaker_state` and `trips` report it.
+- **Bulkhead:** `bulkhead(limit)`, `try_enter`, `leave`. At most `limit`
+  calls at once; the rest are turned away at once rather than queued.
+- **Retry budget:** `retry_budget(ratio, min_per_sec)`. Each request
+  `deposit`s `ratio` of a retry and each retry (`can_retry`) takes one,
+  so retries cannot multiply the load in an outage.
+- **Retry:** `retry(f, arg, options, budget, rng, deadline)` calls
+  `f(arg, deadline)` with full-jitter backoff until it succeeds, the
+  attempts run out, the budget refuses, or the deadline passes. An error
+  starting with `"permanent:"` is not retried.
+- **Token bucket:** `token_bucket(rate, burst)`, `take`, `take_n`,
+  `wait_ns`.
+- **Keyed GCRA:** `gcra(rate, burst)` and `gcra_allow(g, key)` give a
+  `Decision` with `allowed`, `retry_after_ns` and `remaining`. State is
+  one int per key; keys whose bucket is full again are dropped as the map
+  grows, so memory follows the keys active within one burst period.
+- **Hedging:** `hedge(f, arg, delay_ns, deadline)` calls `f` and, if it
+  has not answered within `delay_ns`, calls it again and returns the
+  first success. Use it for idempotent reads only. The slower call runs
+  to its end in the background.
+#### `multipart`
+
+`multipart/form-data` (RFC 7578), the body of HTML file uploads, read as a
+stream so a large upload never has to fit in memory.
+
+```slang
+import "multipart";
+
+let b = multipart.boundary_of(content_type) ?? "";
+let p = multipart.parser(b);
+// as each chunk of the body arrives:
+let er = multipart.feed(p, chunk);
+guard let evs = er else { return bad_request(); }
+for e in evs {
+    if e.kind == multipart.PART { /* e.part.name, filename, content_type */ }
+    else if e.kind == multipart.DATA { /* the next e.data bytes of the part */ }
+    else if e.kind == multipart.PART_END { /* the part is complete */ }
+}
+// when the body ends: multipart.finish(p) is an error if it was cut short
+```
+
+Part data comes out as it arrives; the parser holds back only the bytes
+that could start a boundary. Part headers are limited to
+`max_header_bytes` (8 KB) and parts to `max_parts` (1000). `filename*`
+(RFC 5987) is decoded. `parse(body, boundary)` reads a body already in
+memory. `body(boundary)`, `add_field`, `add_file`, `close` and
+`content_type` build one for an upload.
+
+#### `sse`
+
+Server-Sent Events: a server pushing events to a browser's `EventSource`
+over one long response, and a client reading such a stream.
+
+```slang
+import "sse";
+
+// server, on a link after reading the request
+c.send_bytes(sse.head(), deadline);
+c.send_bytes(sse.event("tick", "{\"n\":1}", "1"), deadline);
+c.send_bytes(sse.comment("keep-alive"), deadline);     // every ~15 seconds
+
+// client
+let p = sse.parser();
+for e in sse.feed(p, chunk) { println(e.kind + ": " + e.data); }
+```
+
+`head()` sends no Content-Length (the stream ends when the server closes
+the connection) and tells buffering proxies not to hold events back.
+`event` splits multi-line data into data lines. The parser follows the
+HTML specification: CR, LF and CRLF line endings even when split between
+chunks, the last event id (for `Last-Event-ID` on reconnect), `retry_ms`,
+comments, and a leading byte-order mark.
+#### `smtp`
+
+Sending mail: an SMTP client (RFC 5321) with STARTTLS or implicit TLS and
+AUTH PLAIN, and a MIME builder for text, HTML and attachments.
+
+```slang
+import "proc";
+import "smtp";
+
+let cfg = smtp.config("smtp.example.com", 587);      // STARTTLS on 587
+cfg.username = "app@example.com";
+cfg.password = proc.getenv("SMTP_PASSWORD") ?? "";
+let m = smtp.message("App <app@example.com>", ["ada@example.com"], "Welcome");
+m.text = "Hello Ada";
+m.html = "<p>Hello <b>Ada</b></p>";
+let r = smtp.send(cfg, m, deadline);
+```
+
+- `config(host, port)` uses STARTTLS, or implicit TLS on port 465. A
+  server that does not offer STARTTLS is refused before any password is
+  sent; `security: "none"` is for a local relay only.
+- A `Message` has `from`, `to`, `cc`, `bcc` (sent to, never shown),
+  `reply_to`, `subject`, `text`, `html`, `attachments` and extra
+  `headers`. Text and HTML go in `multipart/alternative`, and
+  attachments make it `multipart/mixed`. Parts are base64 in 76-column
+  lines, and non-ASCII names and subjects use RFC 2047 encoded words.
+- `build(m)` gives the message bytes, and `send_raw` sends prepared
+  ones. Lines starting with `.` are dot-stuffed. A CR or LF in a header
+  value is replaced, so a subject cannot add headers.
+#### `trace`
+
+Distributed tracing: spans with W3C trace context propagation
+(`traceparent`), exported to an OpenTelemetry collector over OTLP/HTTP
+with JSON bodies.
+
+```slang
+import "trace";
+
+let t = trace.tracer("checkout", "http://otel-collector:4318");
+
+// a request came in: continue the caller's trace if it sent one
+let parent = trace.parse_traceparent(incoming_traceparent);
+let span = trace.start(t, "POST /orders", parent);
+trace.set_str(span, "http.route", "/orders");
+let db = trace.child(span, "insert order");
+trace.end(db);
+outgoing_headers["traceparent"] = trace.traceparent(span);   // to the next service
+trace.end(span);
+```
+
+- `start(t, name, parent)` starts a span: a child of a caller's context
+  (from `parse_traceparent`, which refuses malformed values per the W3C
+  spec) or the root of a new trace. `child(span, name)` nests one.
+- `set_str`, `set_int`, `set_float`, `set_bool`, `set_kind`, `set_error`
+  and `set_ok` describe it; `end` queues it for export.
+- Ended spans are sent in batches by a background task: when
+  `max_batch` are queued, and every `flush_ns` otherwise. The queue is
+  bounded by `max_queue`; spans past it, or lost in a failed send, are
+  counted in `counts(t).dropped`, so a dead collector costs bounded
+  memory. `flush(t, deadline)` sends now.
+- `sample_ratio` decides new traces; a continued trace follows the
+  caller's sampled flag. An unsampled span records nothing.
+- A tracer with endpoint `""` sends nothing and keeps spans for
+  `drain(t)`, for tests.
+#### `metrics`
+
+Prometheus metrics: counters, gauges and histograms with labels, and the
+text exposition format a Prometheus server scrapes.
+
+```slang
+import "metrics";
+
+let reg = metrics.registry();
+let reqs = metrics.counter(reg, "http_requests_total", "Requests served.",
+                           ["method", "code"]);
+let lat = metrics.histogram(reg, "http_request_duration_seconds",
+                            "Request latency.", ["route"],
+                            metrics.default_buckets());
+
+metrics.inc(metrics.with(reqs, ["GET", "200"]));
+let users = metrics.with(lat, ["/users"]);   // keep it: no lookup per update
+metrics.observe(users, 0.012);
+
+// GET /metrics: answer metrics.expose(reg), Content-Type metrics.CONTENT_TYPE
+```
+
+- `counter` (`inc`, `add`; a decrease panics), `gauge` (`set`, `add`,
+  `inc`, `dec`) and `histogram` (`observe`) register a family by name;
+  `with(family, label_values)` gives a series. Keeping the series makes
+  an update one lock, with no label lookup. `remove` drops a series whose
+  label value will not come back, so memory does not grow without bound.
+- Histograms are classic fixed-bucket ones, which Prometheus scrapes:
+  a few ints a series and a binary search per observation.
+  `default_buckets()` are Prometheus's latency buckets in seconds;
+  `exponential_buckets(start, factor, count)` makes others.
+- `expose(reg)` sorts families and series, so two scrapes of an idle
+  program are identical. Names and label names are checked at
+  registration, and label values and help text are escaped.
+#### `proxyproto`
+
+The PROXY protocol, versions 1 and 2: the header HAProxy, AWS NLB and
+other balancers put in front of a connection so the server sees the
+real client address instead of the balancer's.
+
+```slang
+import "net";
+import "proxyproto";
+import "time";
+
+let hr = proxyproto.read_until(fd, until_of(time.mono() + 5000000000));
+guard let h = hr else let e = err_of(hr) { net.close(fd); return; }
+println(h.src_addr + ":" + to_str(h.src_port));   // the real client
+// h.rest: bytes that came after the header, the start of the stream
+```
+
+- `parse(b)` reads a header from the start of `b`: `some(header)`,
+  `none` when `b` is a prefix of one and more bytes are needed, or an
+  error when `b` is not a PROXY header. `header.size` is its length.
+- `read_until(fd, deadline)` reads one off a socket and keeps any bytes
+  that arrived after it in `header.rest`.
+- A `Header` has `version`, `family` (`tcp4`, `tcp6`, `udp4`, `udp6`,
+  `unix`, `unknown`), the source and destination addresses and ports, and
+  v2's `tlvs` (`kind`, `value`): ALPN, the TLS server name (0x02), AWS's
+  VPC endpoint id (0xEA) and so on. `local` is true for a v2 LOCAL
+  header, a balancer's health check, which carries no addresses.
+- `encode_v1(h)` and `encode_v2(h)` build headers, for a proxy written
+  in slang or a test. IPv6 addresses are printed in RFC 5952 form.
+
+The header is only bytes the peer sent. Require it on a listener that
+only the balancer can reach, or check the peer address first: otherwise
+any client can claim any address. The header comes before any TLS
+handshake, and `net.tls_accept` does its own accept on the listener, so
+a PROXY header in front of TLS needs a server-side TLS upgrade of an
+accepted fd, which `net` does not have yet.
+#### `protobuf`
+
+The Protocol Buffers wire format, written and read field by field
+without generated code: for talking to a gRPC or protobuf service whose
+messages are few, or for building a codec on top.
+
+```slang
+import "protobuf";
+
+// message User { int64 id = 1; string name = 2; repeated sint32 deltas = 3; }
+let w = protobuf.writer();
+protobuf.write_int64(w, 1, 42);
+protobuf.write_string(w, 2, "ada");
+protobuf.write_packed_sint(w, 3, [-1, 5, -9]);
+let data = protobuf.finish(w);
+
+let r = protobuf.reader(data);
+while protobuf.more(r) {
+    let fr = protobuf.next(r);              // field number and wire type
+    guard let f = fr else { break; }
+    if f.num == 2 {
+        name = protobuf.read_string(r) ?? "";
+    } else {
+        protobuf.skip(r, f.wire);           // a field this reader does not use
+    }
+}
+```
+
+There are writers for every scalar type (`write_int64`,
+`write_uint64`, `write_sint` with zigzag, `write_bool`, `write_fixed64`,
+`write_fixed32`, `write_double`, `write_float`), plus `write_bytes`,
+`write_string` and packed repeated fields. A nested message is its own
+`Writer`, passed to `write_bytes`. The readers mirror them;
+`read_packed_*` also accept an unpacked element, as parsers must. Lengths
+are checked against the input and varints against their ten-byte limit.
+Groups (wire types 3 and 4) are not read.
+#### `pool`
+
+A bounded pool of connections (or any costly resource) shared by many
+tasks, for clients that have no pool of their own. It is the design of
+`pg`'s and `mysql`'s pools, made generic over the connection type.
+
+```slang
+import "net";
+import "pool";
+
+fn dial_cache(deadline: until) -> result[i32, str] {
+    return net.dial_until("cache.internal", 11211, deadline);
+}
+fn close_cache(fd: i32) { net.close(fd); }
+fn alive(fd: i32) -> bool { return net.idle_alive(fd); }
+
+let p = pool.new(pool.options(64), dial_cache, close_cache, alive);
+let lr = pool.acquire(p, deadline);
+guard let lease = lr else let e = err_of(lr) { return; }   // "timeout"
+let _s = net.send(lease.v, b"version\r\n");
+pool.release(p, lease);        // pool.discard(p, lease) if it broke
+```
+
+- `acquire` hands out an idle connection, dials one while fewer than
+  `max_open` are open, or waits. Waiting is first come, first served: a
+  release goes straight to the task that has waited longest, which wakes
+  once, so the slowest waiter's latency is its place in the queue.
+- An idle connection is probed (the `probe` function) before reuse only
+  after `probe_after` idle, 1 s by default; one released moments ago is
+  handed out as is.
+- `options(max_open)` also sets `max_idle` (default `max_open`),
+  `idle_timeout` (5 minutes), `max_lifetime` (none; set it behind a
+  balancer so new connections reach new backends) and `probe_after`.
+- `stats(p)`: open, idle and waiting now; dials, reuses, waits, total
+  and longest wait, and timeouts.
+- `close(p)` closes idle connections and fails waiters; leased ones close
+  as they come back. Releasing a lease twice panics.
+#### `context`
+
+Cancellation and deadlines that flow from a request through everything
+it starts, so one timeout or one cancel stops all the work under it.
+
+```slang
+import "context";
+import "net";
+
+let req = context.with_timeout(context.background(), 2000000000);  // 2 s
+let db = context.with_cancel(req);          // ends when req ends
+context.watch_fd(db, fd);                   // a cancel closes fd
+let rr = net.recv_until(fd, 4096, context.deadline(db));
+context.cancel(req, "client went away");    // ends req and db
+println(context.cause(db) ?? "live");       // "client went away"
+context.release(db);
+```
+
+- `background()` is the root. `with_cancel(parent)`,
+  `with_timeout(parent, ns)` and `with_deadline_at(parent, mono_ns)` make
+  children; a child's deadline is the earlier of its own and its
+  parent's, and cancelling a context cancels everything made from it.
+- `deadline(c)` is an `until` for any API that waits; `remaining(c)` is
+  the nanoseconds left (-1 without a deadline), for a timeout another
+  protocol carries.
+- `cancel(c, reason)` (the first reason wins) and `release(c)`, for a
+  context whose work is done. Call one of them, as with Go's contexts:
+  until then a child stays in its parent's list.
+- `is_done(c)` and `cause(c)`: the cancel reason, `"deadline exceeded"`,
+  or `none` while live.
+- `watch_fd(c, fd)` closes `fd` on cancel, waking a task parked on it
+  with `"closed"`; `unwatch_fd` before closing it yourself. `done_chan(c)`
+  is closed on cancel, for a `select`.
+
+There are no timers: a deadline passing does not close watched fds. The
+operations given `deadline(c)` end at it on their own.
 
 #### `websocket`
 
@@ -4211,21 +4947,29 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 
 ## All packages
 
+- [acme](packages/acme.md) -- source package, 12 public items
+- [balance](packages/balance.md) -- source package, 17 public items
 - [builder](packages/builder.md) -- source package, 20 public items
 - [byteutil](packages/byteutil.md) -- source package, 6 public items
 - [cache](packages/cache.md) -- source package, 14 public items
+- [cbor](packages/cbor.md) -- source package, 68 public items
 - [compress](packages/compress.md) -- compiler-provided, 10 public items
+- [context](packages/context.md) -- source package, 14 public items
+- [crdt](packages/crdt.md) -- source package, 26 public items
 - [crypto](packages/crypto.md) -- compiler-provided, 54 public items
 - [csv](packages/csv.md) -- source package, 18 public items
 - [decimal](packages/decimal.md) -- source package, 37 public items
 - [encoding](packages/encoding.md) -- compiler-provided, 23 public items
+- [envelope](packages/envelope.md) -- source package, 9 public items
 - [flags](packages/flags.md) -- source package, 23 public items
 - [fs](packages/fs.md) -- compiler-provided, 9 public items
-- [http](packages/http.md) -- source package, 58 public items
+- [http](packages/http.md) -- source package, 61 public items
 - [http2](packages/http2.md) -- source package, 133 public items
 - [httpc](packages/httpc.md) -- source package, 35 public items
+- [idempotency](packages/idempotency.md) -- source package, 8 public items
 - [io](packages/io.md) -- compiler-provided, 12 public items
 - [json](packages/json.md) -- compiler-provided, 0 public items
+- [lease](packages/lease.md) -- source package, 14 public items
 - [log](packages/log.md) -- compiler-provided, 4 public items
 - [math](packages/math.md) -- compiler-provided, 131 public items
 - [math/big](packages/math/big.md) -- source package, 59 public items
@@ -4238,25 +4982,41 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [math/sketch](packages/math/sketch.md) -- source package, 105 public items
 - [math/stats](packages/math/stats.md) -- source package, 128 public items
 - [math/vec](packages/math/vec.md) -- compiler-provided, 23 public items
+- [memcache](packages/memcache.md) -- source package, 15 public items
+- [metrics](packages/metrics.md) -- source package, 19 public items
+- [msgpack](packages/msgpack.md) -- source package, 60 public items
+- [multipart](packages/multipart.md) -- source package, 19 public items
 - [mysql](packages/mysql.md) -- source package, 49 public items
 - [nats](packages/nats.md) -- source package, 31 public items
-- [net](packages/net.md) -- compiler-provided, 50 public items
+- [net](packages/net.md) -- compiler-provided, 49 public items
+- [oidc](packages/oidc.md) -- source package, 15 public items
 - [os](packages/os.md) -- compiler-provided, 18 public items
+- [otp](packages/otp.md) -- source package, 10 public items
+- [outbox](packages/outbox.md) -- source package, 5 public items
 - [pg](packages/pg.md) -- source package, 58 public items
-- [proc](packages/proc.md) -- compiler-provided, 9 public items
+- [pool](packages/pool.md) -- source package, 11 public items
+- [proc](packages/proc.md) -- compiler-provided, 10 public items
+- [protobuf](packages/protobuf.md) -- source package, 40 public items
+- [proxyproto](packages/proxyproto.md) -- source package, 6 public items
 - [rand](packages/rand.md) -- source package, 15 public items
 - [redis](packages/redis.md) -- source package, 161 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
+- [resilience](packages/resilience.md) -- source package, 32 public items
+- [runtime](packages/runtime.md) -- source package, 2 public items
 - [s3](packages/s3.md) -- source package, 23 public items
 - [sigv4](packages/sigv4.md) -- source package, 14 public items
+- [singleflight](packages/singleflight.md) -- source package, 7 public items
+- [smtp](packages/smtp.md) -- source package, 9 public items
 - [sort](packages/sort.md) -- source package, 9 public items
 - [sql](packages/sql.md) -- compiler-provided, 20 public items
+- [sse](packages/sse.md) -- source package, 9 public items
 - [strings](packages/strings.md) -- compiler-provided, 28 public items
 - [tar](packages/tar.md) -- source package, 12 public items
 - [template](packages/template.md) -- source package, 7 public items
 - [time](packages/time.md) -- compiler-provided, 5 public items
 - [timez](packages/timez.md) -- source package, 144 public items
 - [toml](packages/toml.md) -- source package, 2 public items
+- [trace](packages/trace.md) -- source package, 30 public items
 - [unicode](packages/unicode.md) -- compiler-provided, 11 public items
 - [uuid](packages/uuid.md) -- source package, 11 public items
 - [websocket](packages/websocket.md) -- source package, 16 public items

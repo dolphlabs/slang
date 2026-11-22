@@ -55,7 +55,7 @@ static sl_res_bool_str *sl_fs_err_bool(const char *msg) {
 static sl_res_i32_str *sl_fs_open(const char *path) {
     if (!path)
         return sl_fs_err_i32("invalid path");
-    int fd = open(path, O_RDONLY);
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0)
         return sl_fs_err_i32(strerror(errno));
     return sl_fs_ok_i32((int32_t)fd);
@@ -64,7 +64,7 @@ static sl_res_i32_str *sl_fs_open(const char *path) {
 static sl_res_i32_str *sl_fs_create(const char *path) {
     if (!path)
         return sl_fs_err_i32("invalid path");
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
     if (fd < 0)
         return sl_fs_err_i32(strerror(errno));
     return sl_fs_ok_i32((int32_t)fd);
@@ -207,7 +207,7 @@ static sl_res_str_str *sl_fs_realpath(const char *path) {
  * is not open. Of the file already opened, so what is served is what
  * was checked. */
 static sl_arr *sl_fs_fstat(int fd) {
-    sl_arr *a = sl_arr_new(sizeof(long long), 4);
+    sl_arr *a = sl_arr_new(sizeof(long long), SL_ELEM_NOPTR);
     struct stat st;
     if (fstat(fd, &st) != 0)
         return a;
