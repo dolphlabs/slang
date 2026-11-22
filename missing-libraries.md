@@ -21,9 +21,9 @@ standalone repo under `slangpackages/`.
 - [x] **UDP** (stdlib, `net`): bind, `send_to`, `recv_from` with deadlines
   on the reactor, connected UDP, and multicast join/leave. DNS, syslog,
   StatsD, game and voice servers, and later QUIC need it. PR #600 (open).
-- [ ] **Socket options** (stdlib, `net`): `SO_REUSEPORT` listeners (one
+- [x] **Socket options** (stdlib, `net`): `SO_REUSEPORT` listeners (one
   accept queue per core), `TCP_NODELAY`, keepalive idle/interval/count,
-  listen backlog, and `TCP_FASTOPEN` where the OS has it.
+  listen backlog, and `TCP_FASTOPEN` where the OS has it. PR #601 (open).
 - [ ] **Zero-copy file sends** (stdlib, `net`/`fs`): `sendfile` (and
   `splice` on Linux) from a file to a socket, used by `http` for static
   files.
