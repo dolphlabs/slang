@@ -117,8 +117,8 @@ standalone repo under `slangpackages/`.
   advisory locks.
 - [ ] **Outbox and idempotency keys** (stdlib): transactional outbox and a
   store for idempotent handlers.
-- [ ] **CRDTs** (stdlib): G-counter, PN-counter, OR-set, LWW-map, mergeable
-  like `math/sketch`.
+- [x] **CRDTs** (stdlib): G-counter, PN-counter, OR-set, LWW-map, mergeable
+  like `math/sketch`. PR #613 (open).
 - [ ] **Client-side load balancing** (stdlib): pick a backend by
   consistent hash (`math/shard`), least-loaded or power of two choices.
 
