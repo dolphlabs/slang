@@ -445,6 +445,124 @@
         }
       ]
     },
+    "context": {
+      "name": "context",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Context",
+          "decl": "struct",
+          "sig": "gc struct Context",
+          "doc": "",
+          "file": "stdlib/context/context.sl",
+          "line": 31
+        },
+        {
+          "name": "background",
+          "decl": "fn",
+          "sig": "fn background() -> Context",
+          "doc": "The root: no deadline, never cancelled unless cancel is called on it.",
+          "file": "stdlib/context/context.sl",
+          "line": 43
+        },
+        {
+          "name": "with_cancel",
+          "decl": "fn",
+          "sig": "fn with_cancel(parent: Context) -> Context",
+          "doc": "A child of parent that can be cancelled on its own.",
+          "file": "stdlib/context/context.sl",
+          "line": 51
+        },
+        {
+          "name": "with_timeout",
+          "decl": "fn",
+          "sig": "fn with_timeout(parent: Context, ns: int) -> Context",
+          "doc": "A child of parent that ends ns nanoseconds from now (or at the parent's deadline, if that is sooner). ns <= 0 is already past.",
+          "file": "stdlib/context/context.sl",
+          "line": 57
+        },
+        {
+          "name": "with_deadline_at",
+          "decl": "fn",
+          "sig": "fn with_deadline_at(parent: Context, mono_ns: int) -> Context",
+          "doc": "A child of parent that ends at mono_ns, an absolute time.mono() value.",
+          "file": "stdlib/context/context.sl",
+          "line": 66
+        },
+        {
+          "name": "cancel",
+          "decl": "fn",
+          "sig": "fn cancel(c: Context, reason: str)",
+          "doc": "Cancels c and every context made from it, with reason as cause's text. The first cancel wins; later ones do nothing.",
+          "file": "stdlib/context/context.sl",
+          "line": 72
+        },
+        {
+          "name": "release",
+          "decl": "fn",
+          "sig": "fn release(c: Context)",
+          "doc": "Cancel with the reason \"released\": for a context whose work finished.",
+          "file": "stdlib/context/context.sl",
+          "line": 105
+        },
+        {
+          "name": "is_done",
+          "decl": "fn",
+          "sig": "fn is_done(c: Context) -> bool",
+          "doc": "Whether c was cancelled or its deadline has passed.",
+          "file": "stdlib/context/context.sl",
+          "line": 110
+        },
+        {
+          "name": "cause",
+          "decl": "fn",
+          "sig": "fn cause(c: Context) -> opt[str]",
+          "doc": "Why c is done: the cancel reason, or \"deadline exceeded\"; none while it is live.",
+          "file": "stdlib/context/context.sl",
+          "line": 119
+        },
+        {
+          "name": "deadline",
+          "decl": "fn",
+          "sig": "fn deadline(c: Context) -> until",
+          "doc": "c's deadline as an `until` for any API that waits: never for a context without one, already passed for a cancelled one.",
+          "file": "stdlib/context/context.sl",
+          "line": 136
+        },
+        {
+          "name": "remaining",
+          "decl": "fn",
+          "sig": "fn remaining(c: Context) -> int",
+          "doc": "Nanoseconds until c's deadline (0 once passed or cancelled), or -1 for a context without one: for a timeout another protocol carries, such as a database statement timeout.",
+          "file": "stdlib/context/context.sl",
+          "line": 153
+        },
+        {
+          "name": "watch_fd",
+          "decl": "fn",
+          "sig": "fn watch_fd(c: Context, fd: i32)",
+          "doc": "Closes fd when c is cancelled, waking any task parked on it with \"closed\". If c is already cancelled, closes it now. Call unwatch_fd before closing fd yourself, so a later cancel cannot close a reused fd number.",
+          "file": "stdlib/context/context.sl",
+          "line": 175
+        },
+        {
+          "name": "unwatch_fd",
+          "decl": "fn",
+          "sig": "fn unwatch_fd(c: Context, fd: i32) -> bool",
+          "doc": "Stops watching fd. Returns false if c had already been cancelled (and fd closed by it).",
+          "file": "stdlib/context/context.sl",
+          "line": 188
+        },
+        {
+          "name": "done_chan",
+          "decl": "fn",
+          "sig": "fn done_chan(c: Context) -> chan[bool]",
+          "doc": "A channel that is closed when c is cancelled, for a `select` that should also end on cancellation. Nothing is ever sent on it.",
+          "file": "stdlib/context/context.sl",
+          "line": 207
+        }
+      ]
+    },
     "crypto": {
       "name": "crypto",
       "kind": "native",
@@ -10830,6 +10948,100 @@
         }
       ]
     },
+    "pool": {
+      "name": "pool",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Options",
+          "decl": "struct",
+          "sig": "struct Options",
+          "doc": "",
+          "file": "stdlib/pool/pool.sl",
+          "line": 28
+        },
+        {
+          "name": "options",
+          "decl": "fn",
+          "sig": "fn options(max_open: int) -> Options",
+          "doc": "Options with the defaults above for a pool of max_open connections.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 46
+        },
+        {
+          "name": "Lease",
+          "decl": "struct",
+          "sig": "gc struct Lease[T]",
+          "doc": "One connection, on loan from acquire until release or discard.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 53
+        },
+        {
+          "name": "Stats",
+          "decl": "struct",
+          "sig": "struct Stats",
+          "doc": "",
+          "file": "stdlib/pool/pool.sl",
+          "line": 60
+        },
+        {
+          "name": "Pool",
+          "decl": "struct",
+          "sig": "gc struct Pool[T]",
+          "doc": "",
+          "file": "stdlib/pool/pool.sl",
+          "line": 80
+        },
+        {
+          "name": "new",
+          "decl": "fn",
+          "sig": "fn new[T](o: Options, dial: fn(until) -> result[T, str], close: fn(T), probe: fn(T) -> bool) -> Pool[T]",
+          "doc": "A pool that opens nothing until the first acquire. dial makes a connection by a deadline, close ends one, probe says whether an idle one still works (one cheap check, such as net.idle_alive).",
+          "file": "stdlib/pool/pool.sl",
+          "line": 102
+        },
+        {
+          "name": "acquire",
+          "decl": "fn",
+          "sig": "fn acquire[T](p: Pool[T], deadline: until) -> result[Lease[T], str]",
+          "doc": "A connection for the caller's use until release or discard: an idle one, a new one if fewer than max_open are open, or else the next one released, in arrival order. \"timeout\" if deadline passes first, \"pool is closed\" after close.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 123
+        },
+        {
+          "name": "release",
+          "decl": "fn",
+          "sig": "fn release[T](p: Pool[T], l: Lease[T])",
+          "doc": "Gives a connection back: to the task that has waited longest, else to the idle list. Closed instead once past max_lifetime, beyond max_idle, or after close. Releasing a lease twice panics: two tasks would then share one connection.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 200
+        },
+        {
+          "name": "discard",
+          "decl": "fn",
+          "sig": "fn discard[T](p: Pool[T], l: Lease[T])",
+          "doc": "Closes a connection the caller found broken, freeing its slot for the next waiter to dial.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 234
+        },
+        {
+          "name": "close",
+          "decl": "fn",
+          "sig": "fn close[T](p: Pool[T])",
+          "doc": "Closes every idle connection and fails every waiting acquire; connections in use are closed as they come back. acquire fails from now on.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 251
+        },
+        {
+          "name": "stats",
+          "decl": "fn",
+          "sig": "fn stats[T](p: Pool[T]) -> Stats",
+          "doc": "A snapshot of the counters.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 268
+        }
+      ]
+    },
     "proc": {
       "name": "proc",
       "kind": "native",
@@ -10909,6 +11121,386 @@
           "ret": "result[int,str]",
           "tls": false,
           "sig": "proc.wait(int, until) -> result[int,str]"
+        }
+      ]
+    },
+    "protobuf": {
+      "name": "protobuf",
+      "kind": "source",
+      "items": [
+        {
+          "name": "WIRE_VARINT",
+          "decl": "let",
+          "sig": "let WIRE_VARINT = 0;",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 34
+        },
+        {
+          "name": "WIRE_I64",
+          "decl": "let",
+          "sig": "let WIRE_I64 = 1;",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 35
+        },
+        {
+          "name": "WIRE_LEN",
+          "decl": "let",
+          "sig": "let WIRE_LEN = 2;",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 36
+        },
+        {
+          "name": "WIRE_I32",
+          "decl": "let",
+          "sig": "let WIRE_I32 = 5;",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 37
+        },
+        {
+          "name": "Writer",
+          "decl": "struct",
+          "sig": "gc struct Writer",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 41
+        },
+        {
+          "name": "writer",
+          "decl": "fn",
+          "sig": "fn writer() -> Writer",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 45
+        },
+        {
+          "name": "finish",
+          "decl": "fn",
+          "sig": "fn finish(w: Writer) -> bytes",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 49
+        },
+        {
+          "name": "size",
+          "decl": "fn",
+          "sig": "fn size(w: Writer) -> int",
+          "doc": "The bytes written so far, without emptying the writer.",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 54
+        },
+        {
+          "name": "write_int64",
+          "decl": "fn",
+          "sig": "fn write_int64(w: Writer, field: int, v: int)",
+          "doc": "int32, int64, uint32, uint64 and enum fields. A negative int32 or int64 takes ten bytes, as the format says; use write_sint for fields declared sint32/sint64.",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 84
+        },
+        {
+          "name": "write_uint64",
+          "decl": "fn",
+          "sig": "fn write_uint64(w: Writer, field: int, v: u64)",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 89
+        },
+        {
+          "name": "write_sint",
+          "decl": "fn",
+          "sig": "fn write_sint(w: Writer, field: int, v: int)",
+          "doc": "sint32 and sint64 fields: zigzag, so small negatives stay small.",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 95
+        },
+        {
+          "name": "write_bool",
+          "decl": "fn",
+          "sig": "fn write_bool(w: Writer, field: int, v: bool)",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 100
+        },
+        {
+          "name": "write_fixed64",
+          "decl": "fn",
+          "sig": "fn write_fixed64(w: Writer, field: int, v: u64)",
+          "doc": "fixed64, sfixed64.",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 106
+        },
+        {
+          "name": "write_fixed32",
+          "decl": "fn",
+          "sig": "fn write_fixed32(w: Writer, field: int, v: int)",
+          "doc": "fixed32, sfixed32 (the low 32 bits of v).",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 112
+        },
+        {
+          "name": "write_double",
+          "decl": "fn",
+          "sig": "fn write_double(w: Writer, field: int, v: float)",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 117
+        },
+        {
+          "name": "write_float",
+          "decl": "fn",
+          "sig": "fn write_float(w: Writer, field: int, v: float)",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 122
+        },
+        {
+          "name": "write_bytes",
+          "decl": "fn",
+          "sig": "fn write_bytes(w: Writer, field: int, b: bytes)",
+          "doc": "bytes fields and nested messages (a finished Writer's bytes).",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 128
+        },
+        {
+          "name": "write_string",
+          "decl": "fn",
+          "sig": "fn write_string(w: Writer, field: int, s: str)",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 134
+        },
+        {
+          "name": "write_packed_int",
+          "decl": "fn",
+          "sig": "fn write_packed_int(w: Writer, field: int, vs: [int])",
+          "doc": "repeated int32/int64/uint32/uint64/enum/bool, packed.",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 139
+        },
+        {
+          "name": "write_packed_sint",
+          "decl": "fn",
+          "sig": "fn write_packed_sint(w: Writer, field: int, vs: [int])",
+          "doc": "repeated sint32/sint64, packed.",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 146
+        },
+        {
+          "name": "write_packed_double",
+          "decl": "fn",
+          "sig": "fn write_packed_double(w: Writer, field: int, vs: [float])",
+          "doc": "repeated double, packed.",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 153
+        },
+        {
+          "name": "Reader",
+          "decl": "struct",
+          "sig": "gc struct Reader",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 161
+        },
+        {
+          "name": "reader",
+          "decl": "fn",
+          "sig": "fn reader(b: bytes) -> Reader",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 166
+        },
+        {
+          "name": "more",
+          "decl": "fn",
+          "sig": "fn more(r: Reader) -> bool",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 170
+        },
+        {
+          "name": "Field",
+          "decl": "struct",
+          "sig": "struct Field",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 174
+        },
+        {
+          "name": "next",
+          "decl": "fn",
+          "sig": "fn next(r: Reader) -> result[Field, str]",
+          "doc": "The next field's number and wire type; read its value next with the reader for that type, or skip it.",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 181
+        },
+        {
+          "name": "read_varint",
+          "decl": "fn",
+          "sig": "fn read_varint(r: Reader) -> result[int, str]",
+          "doc": "A varint field: int32/int64/uint*/enum read as int (uint64 values above int's range come back negative; read_uvarint keeps them).",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 195
+        },
+        {
+          "name": "read_uvarint",
+          "decl": "fn",
+          "sig": "fn read_uvarint(r: Reader) -> result[u64, str]",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 201
+        },
+        {
+          "name": "read_sint",
+          "decl": "fn",
+          "sig": "fn read_sint(r: Reader) -> result[int, str]",
+          "doc": "A zigzag (sint32/sint64) field.",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 206
+        },
+        {
+          "name": "read_bool",
+          "decl": "fn",
+          "sig": "fn read_bool(r: Reader) -> result[bool, str]",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 212
+        },
+        {
+          "name": "read_fixed64",
+          "decl": "fn",
+          "sig": "fn read_fixed64(r: Reader) -> result[u64, str]",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 218
+        },
+        {
+          "name": "read_fixed32",
+          "decl": "fn",
+          "sig": "fn read_fixed32(r: Reader) -> result[int, str]",
+          "doc": "A fixed32 field as an unsigned value; sfixed32 is read_sfixed32.",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 227
+        },
+        {
+          "name": "read_sfixed32",
+          "decl": "fn",
+          "sig": "fn read_sfixed32(r: Reader) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 235
+        },
+        {
+          "name": "read_double",
+          "decl": "fn",
+          "sig": "fn read_double(r: Reader) -> result[float, str]",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 242
+        },
+        {
+          "name": "read_float",
+          "decl": "fn",
+          "sig": "fn read_float(r: Reader) -> result[float, str]",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 248
+        },
+        {
+          "name": "read_bytes",
+          "decl": "fn",
+          "sig": "fn read_bytes(r: Reader) -> result[bytes, str]",
+          "doc": "A length-delimited field: bytes, a string, a nested message, or packed repeated values.",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 256
+        },
+        {
+          "name": "read_string",
+          "decl": "fn",
+          "sig": "fn read_string(r: Reader) -> result[str, str]",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 266
+        },
+        {
+          "name": "read_packed_int",
+          "decl": "fn",
+          "sig": "fn read_packed_int(r: Reader, wire: int) -> result[[int], str]",
+          "doc": "A packed repeated varint field (or a single unpacked element, which a parser must also accept for repeated scalars).",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 274
+        },
+        {
+          "name": "read_packed_sint",
+          "decl": "fn",
+          "sig": "fn read_packed_sint(r: Reader, wire: int) -> result[[int], str]",
+          "doc": "",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 293
+        },
+        {
+          "name": "skip",
+          "decl": "fn",
+          "sig": "fn skip(r: Reader, wire: int) -> result[bool, str]",
+          "doc": "Skips a field's value of the given wire type.",
+          "file": "stdlib/protobuf/protobuf.sl",
+          "line": 313
+        }
+      ]
+    },
+    "proxyproto": {
+      "name": "proxyproto",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Tlv",
+          "decl": "struct",
+          "sig": "struct Tlv",
+          "doc": "One v2 type-length-value field: ALPN (0x01), authority (0x02, the TLS SNI name), unique id (0x05), SSL details (0x20), AWS VPC endpoint id (0xEA), and so on.",
+          "file": "stdlib/proxyproto/proxyproto.sl",
+          "line": 28
+        },
+        {
+          "name": "Header",
+          "decl": "struct",
+          "sig": "struct Header",
+          "doc": "",
+          "file": "stdlib/proxyproto/proxyproto.sl",
+          "line": 33
+        },
+        {
+          "name": "parse",
+          "decl": "fn",
+          "sig": "fn parse(b: bytes) -> result[opt[Header], str]",
+          "doc": "The header at the start of b; none if b is a prefix of one and more bytes are needed; an error if b does not start with a PROXY header.",
+          "file": "stdlib/proxyproto/proxyproto.sl",
+          "line": 53
+        },
+        {
+          "name": "read_until",
+          "decl": "fn",
+          "sig": "fn read_until(fd: i32, deadline: until) -> result[Header, str]",
+          "doc": "Reads a header from fd, then stops: whatever arrived after it is in rest. Bounded by deadline as a whole.",
+          "file": "stdlib/proxyproto/proxyproto.sl",
+          "line": 68
+        },
+        {
+          "name": "encode_v1",
+          "decl": "fn",
+          "sig": "fn encode_v1(h: Header) -> bytes",
+          "doc": "The v1 (text) header for h: \"PROXY TCP4 1.2.3.4 5.6.7.8 1111 443\\r\\n\". Families other than tcp4 and tcp6 are sent as UNKNOWN.",
+          "file": "stdlib/proxyproto/proxyproto.sl",
+          "line": 92
+        },
+        {
+          "name": "encode_v2",
+          "decl": "fn",
+          "sig": "fn encode_v2(h: Header) -> result[bytes, str]",
+          "doc": "The v2 (binary) header for h, TLVs included. An error for an address that does not match h.family.",
+          "file": "stdlib/proxyproto/proxyproto.sl",
+          "line": 103
         }
       ]
     },
