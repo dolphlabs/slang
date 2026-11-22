@@ -29,6 +29,7 @@ Start with /llms-small.txt: the whole language on one page, about 3k tokens, eno
 - [csv](packages/csv.md): Package csv.
 - [decimal](packages/decimal.md): Package decimal.
 - [encoding](packages/encoding.md): Package encoding.
+- [envelope](packages/envelope.md): Package envelope.
 - [flags](packages/flags.md): Package flags.
 - [fs](packages/fs.md): Package fs.
 - [http](packages/http.md): Package http.

@@ -1,5 +1,9 @@
 # todo
 
+- [x] **`envelope` (2026-11-22, feat/envelope).** Envelope encryption over
+  `crypto.seal`: a random data key per value wrapped by a named
+  key-encryption key, aad binding, key rotation with `rewrap` (the value
+  is unchanged) and a versioned layout.
 - [x] **`otp` (2026-11-22, feat/otp).** HOTP and TOTP over SHA-1/256/512
   with replay-safe verification (the matched step is returned), base32
   secrets and otpauth URIs. HMAC-SHA1 is built on `crypto.sha1` in slang,
