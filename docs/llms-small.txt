@@ -268,6 +268,7 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg mysql redis regex
 strings unicode encoding compress math math/vec decimal rand builder byteutil flags sort
+uuid http http2 httpc websocket idempotency outbox template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 uuid http http2 httpc websocket msgpack cbor template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 uuid http http2 httpc websocket crdt template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 uuid http http2 httpc websocket singleflight template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
@@ -464,6 +465,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - http: header, header_or, headers, request, parse_frame, method_is, method_is_at, path_is, path_is_at, path_param, path_param_at, frame_method (+42 more)
 - http2: client_settings, client_preface, client_request_msg, client_read_response, client_start, client_max_streams, client_call, client_close, raw_msg, grant_msg, response_msg, response_trailers_msg (+57 more)
 - httpc: parse_url, header, new_client, enable_cookies, clear_cookies, parse_cookie_date, set_cookie, cookies, new_request, client_send, client_get, client_head (+18 more)
+- idempotency: begin, complete, abandon
 - io: read_line, read_all, eprint, eprintln, flush, is_tty, term_width, term_height, read_secret, raw_on, raw_off, read_key
 - json: see /packages/json.md
 - log: debug, info, warn, error
@@ -485,6 +487,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - nats: options, with_creds, connect, connect_with, publish, publish_reply, publish_headers, publish_full, subscribe, queue_subscribe, next_msg, unsubscribe (+15 more)
 - net: listen, port, accept, dial, dial_until, lookup_srv_until, lookup_txt_until, dial_unix, listen_unix, send, recv, recv_until (+34 more)
 - os: setenv, unsetenv, environ, pid, hostname, tmpdir, exists, is_dir, is_file, size, mtime, mtime_ns (+6 more)
+- outbox: schema, add, relay, pending
 - pg: rows_as, parse_url, sqlstate, scram_client_final, connect, connect_config, close, usable, in_transaction, server_param, arg_text, arg_int (+39 more)
 - pool: options, new, acquire, release, discard, close, stats
 - proc: shutdown_requested, active_tasks, wait_idle, getenv, args, cwd, spawn, kill, wait
