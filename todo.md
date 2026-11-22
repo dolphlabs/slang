@@ -1,5 +1,11 @@
 # todo
 
+- [x] **`memcache` (2026-11-22, feat/memcache).** A memcached text
+  protocol client: get/gets/get_multi, set/add/replace/cas,
+  delete/incr/decr/touch, rendezvous hashing over servers, idle
+  connection reuse with errored connections dropped. Tested against an
+  in-test server (no memcached on the machine or in CI).
+
 - [x] **A leaf function could hold a safepoint (found 2026-11-21 when
   math/big's tests crashed after merging dev; fixed in
   fix/leaf-body-no-safepoint).** Callers skip their bracket around a call

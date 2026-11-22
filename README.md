@@ -3634,6 +3634,29 @@ that case.
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
 
+#### `memcache`
+
+A memcached client over the text protocol, across one or more servers.
+
+```slang
+import "memcache";
+
+let mc = memcache.new(["cache-1:11211", "cache-2:11211"]);
+memcache.set(mc, "user:42", to_bytes(body), 300, deadline);   // 5 minutes
+let gr = memcache.get(mc, "user:42", deadline);
+guard let found = gr else let e = err_of(gr) { return err(e); }  // I/O error
+if let v = found { use(v); } else { /* a miss */ }
+```
+
+The client has `get`, `gets` (with the cas token), `get_multi` (one
+request per server), `set`, `add`, `replace`, `cas`, `delete`, `incr`,
+`decr`, `touch` and `close`. Keys spread over servers by rendezvous
+hashing, so adding or removing a server moves only its share. Up to
+`max_idle` connections per server are kept and reused, and a connection
+that saw any error is closed rather than reused. Keys are checked (1 to
+250 bytes, no spaces or control characters) and values are limited to
+`max_value` (1 MB, memcached's default item size).
+
 #### `websocket`
 
 A WebSocket client (RFC 6455) over `ws://` and `wss://`, with
