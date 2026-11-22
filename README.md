@@ -3685,6 +3685,36 @@ that case.
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
 
+#### `crdt`
+
+Conflict-free replicated data types: state that replicas update on their
+own and merge in any order, any number of times, and then agree on.
+They suit counters, sets and maps shared between nodes without a
+coordinator.
+
+```slang
+import "crdt";
+
+let a = crdt.gcounter();
+let b = crdt.gcounter();
+crdt.gc_inc(a, "node-a", 3);
+crdt.gc_inc(b, "node-b", 4);
+crdt.gc_merge(a, b);
+crdt.gc_value(a)            // 7, on whichever node merges both
+```
+
+- `gcounter` (grow-only) and `pncounter` (up and down).
+- `orset`: a set where an add the remover had not seen survives the
+  remove. It is the optimized OR-set, with no tombstones: its size follows
+  the elements present plus one counter per node, however many adds and
+  removes it has seen.
+- `lwwmap`: last writer wins per key, by timestamp, with ties going to
+  the larger node id so every replica picks the same winner. Deletes
+  are tombstones; `map_compact` drops old ones once every replica is
+  known to have merged past them.
+
+Each node passes its own id with its updates. The state is plain data, so
+`json.encode`/`json.decode` ship it.
 #### `singleflight`
 
 Concurrent identical calls share one execution: while a call for a key

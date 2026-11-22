@@ -1,5 +1,10 @@
 # todo
 
+- [x] **`crdt` (2026-11-22, feat/crdt).** G-counter, PN-counter, an
+  optimized OR-set (no tombstones; checked to stay bounded through 1000
+  adds and removes) and an LWW-map with tombstone compaction. Merges are
+  checked for order, repetition and convergence of three replicas under
+  400 seeded random operations.
 - [x] **`singleflight` (2026-11-22, feat/singleflight).** A group bound
   to a loader function: concurrent calls for one key share a single run
   and its result or error; a panicking call answers every waiter with an

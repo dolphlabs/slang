@@ -221,6 +221,7 @@ PACKAGE_SECTIONS = {
     "http": ["`http`"],
     "httpc": ["`httpc`"],
     "websocket": ["`websocket`"],
+    "crdt": ["`crdt`"],
     "singleflight": ["`singleflight`"],
     "resilience": ["`resilience`"],
     "multipart": ["`multipart`"],
