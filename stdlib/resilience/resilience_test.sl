@@ -80,10 +80,16 @@ fn test_should_allow_the_minimum_rate_without_requests() {
     let n = 0;
     for _ in 0..20 { if can_retry(b) { n = n + 1; } }
     assert(n == 5, "minimum allowed " + to_str(n));
+    let t0 = time.mono();
     time.sleep(ms(450));
     let m = 0;
     for _ in 0..20 { if can_retry(b) { m = m + 1; } }
-    assert(m == 2, "refill after 450 ms at 5/s gave " + to_str(m));
+    // 5/s for however long the sleep really took (a loaded machine
+    // oversleeps), capped at the 5 the allowance holds
+    let slept_ms = ((time.mono() - t0) as int) / 1000000;
+    let most = slept_ms * 5 / 1000 + 1;
+    if most > 5 { most = 5; }
+    assert(m >= 2 && m <= most, "refill after " + to_str(slept_ms) + " ms at 5/s gave " + to_str(m));
 }
 
 gc struct Calls {
