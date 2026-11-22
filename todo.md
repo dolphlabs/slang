@@ -5,6 +5,13 @@
   delete/incr/decr/touch, rendezvous hashing over servers, idle
   connection reuse with errored connections dropped. Tested against an
   in-test server (no memcached on the machine or in CI).
+- [x] **UDP in `net` (2026-11-22, feat/net-udp).** Datagram sockets on the
+  reactor: `udp_bind`, `udp_bind_shared`, `udp_dial`, `udp_addr`,
+  `send_to`, `recv_from` (with `_until` forms), `addr_str`, and multicast
+  `udp_join`/`udp_leave`. A sender's address comes back as an opaque
+  sockaddr so a reply costs no lookup; an oversized datagram is the error
+  "truncated". tests/net_udp runs in the GC stress lists. First item of
+  section 1 in missing-libraries.md.
 
 - [x] **A leaf function could hold a safepoint (found 2026-11-21 when
   math/big's tests crashed after merging dev; fixed in
