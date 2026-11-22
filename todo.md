@@ -1,5 +1,12 @@
 # todo
 
+- [x] **`lease` (2026-11-22, feat/lease).** Redis leases with
+  token-checked renew/release and fencing tokens, a leader elector, and
+  Postgres session advisory locks. Unit-tested against a fake Redis, run
+  against a real Redis locally, and wired into CI (a Redis container in
+  the Postgres job) through tests/live/lease. Found: CI has no job
+  running tests/live/redis, though that test says it does.
+
 - [x] **A leaf function could hold a safepoint (found 2026-11-21 when
   math/big's tests crashed after merging dev; fixed in
   fix/leaf-body-no-safepoint).** Callers skip their bracket around a call

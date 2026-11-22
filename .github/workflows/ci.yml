@@ -227,6 +227,20 @@ jobs:
           PG_URL: postgres://slang:secret@127.0.0.1:55432/slang
         run: tests/live/pg_alloc_budget/run.sh
 
+      # lease against a real Redis (started here) and the Postgres above:
+      # the token-checked renew/release scripts and advisory locks.
+      - name: Lease live test
+        env:
+          PG_URL: postgres://slang:secret@127.0.0.1:55432/slang
+          REDIS_URL: redis://127.0.0.1:56379
+        run: |
+          docker run -d --name redis -p 56379:6379 redis:7
+          for i in $(seq 30); do
+            (exec 3<>/dev/tcp/127.0.0.1/56379) 2>/dev/null && break
+            sleep 1
+          done
+          ./slangc tests/live/lease/main.sl --run
+
   # The nats client against real nats-server instances: plain, with each
   # kind of authentication, and over TLS with a verified certificate.
   # `make test` covers the protocol and reconnection everywhere against
