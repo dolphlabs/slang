@@ -2615,6 +2615,40 @@ that case.
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
 
+#### `metrics`
+
+Prometheus metrics: counters, gauges and histograms with labels, and the
+text exposition format a Prometheus server scrapes.
+
+```slang
+import "metrics";
+
+let reg = metrics.registry();
+let reqs = metrics.counter(reg, "http_requests_total", "Requests served.",
+                           ["method", "code"]);
+let lat = metrics.histogram(reg, "http_request_duration_seconds",
+                            "Request latency.", ["route"],
+                            metrics.default_buckets());
+
+metrics.inc(metrics.with(reqs, ["GET", "200"]));
+let users = metrics.with(lat, ["/users"]);   // keep it: no lookup per update
+metrics.observe(users, 0.012);
+
+// GET /metrics: answer metrics.expose(reg), Content-Type metrics.CONTENT_TYPE
+```
+
+- `counter` (`inc`, `add`; a decrease panics), `gauge` (`set`, `add`,
+  `inc`, `dec`) and `histogram` (`observe`) register a family by name;
+  `with(family, label_values)` gives a series. Keeping the series makes
+  an update one lock, with no label lookup. `remove` drops a series whose
+  label value will not come back, so memory does not grow without bound.
+- Histograms are classic fixed-bucket ones, which Prometheus scrapes:
+  a few ints a series and a binary search per observation.
+  `default_buckets()` are Prometheus's latency buckets in seconds;
+  `exponential_buckets(start, factor, count)` makes others.
+- `expose(reg)` sorts families and series, so two scrapes of an idle
+  program are identical. Names and label names are checked at
+  registration, and label values and help text are escaped.
 #### `proxyproto`
 
 The PROXY protocol, versions 1 and 2: the header HAProxy, AWS NLB and
@@ -4363,6 +4397,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [math/sketch](packages/math/sketch.md) -- source package, 105 public items
 - [math/stats](packages/math/stats.md) -- source package, 128 public items
 - [math/vec](packages/math/vec.md) -- compiler-provided, 23 public items
+- [metrics](packages/metrics.md) -- source package, 19 public items
 - [mysql](packages/mysql.md) -- source package, 49 public items
 - [nats](packages/nats.md) -- source package, 31 public items
 - [net](packages/net.md) -- compiler-provided, 46 public items
