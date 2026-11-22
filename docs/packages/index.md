@@ -2626,6 +2626,27 @@ that case.
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
 
+#### `runtime`
+
+What the program's runtime is doing, for a `/debug` endpoint or metrics.
+
+```slang
+import "runtime";
+
+let s = runtime.stats();
+println(to_str(s.rss_bytes / 1048576) + " MB resident, " + to_str(s.tasks) +
+        " tasks, longest GC pause " + to_str(s.gc_pause_max_ns / 1000) + " us");
+```
+
+`runtime.stats()` returns `gc_majors` and `gc_minors` (collections so
+far), `gc_pause_total_ns` and `gc_pause_max_ns` (time the program was
+stopped for them), `heap_live_bytes` (live after the last full
+collection), `heap_new_bytes` (allocated since), `rss_bytes` and
+`rss_peak_bytes` (resident memory now and at most), `tasks` (spawned
+tasks running, the caller included if it is one) and `workers` (OS
+threads running tasks). The counters are kept whether or not anything
+reads them, at a few atomic adds per collection; reading them is a few
+loads and one system call.
 #### `oidc`
 
 OAuth 2.0 and OpenID Connect for a client: sign users in with Google,
@@ -4932,13 +4953,14 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [outbox](packages/outbox.md) -- source package, 5 public items
 - [pg](packages/pg.md) -- source package, 58 public items
 - [pool](packages/pool.md) -- source package, 11 public items
-- [proc](packages/proc.md) -- compiler-provided, 9 public items
+- [proc](packages/proc.md) -- compiler-provided, 10 public items
 - [protobuf](packages/protobuf.md) -- source package, 40 public items
 - [proxyproto](packages/proxyproto.md) -- source package, 6 public items
 - [rand](packages/rand.md) -- source package, 15 public items
 - [redis](packages/redis.md) -- source package, 161 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
 - [resilience](packages/resilience.md) -- source package, 32 public items
+- [runtime](packages/runtime.md) -- source package, 2 public items
 - [s3](packages/s3.md) -- source package, 23 public items
 - [sigv4](packages/sigv4.md) -- source package, 14 public items
 - [singleflight](packages/singleflight.md) -- source package, 7 public items

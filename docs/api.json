@@ -13429,6 +13429,13 @@
           "sig": "proc.spawn([str], [str], str, int) -> result[int,str]"
         },
         {
+          "name": "runtime_stats",
+          "params": [],
+          "ret": "[int]",
+          "tls": false,
+          "sig": "proc.runtime_stats() -> [int]"
+        },
+        {
           "name": "kill",
           "params": [
             "int",
@@ -15604,6 +15611,28 @@
           "doc": "Calls f(a, deadline); if it has not answered within delay_ns, calls it again and takes whichever answers first with a success. Cuts tail latency for idempotent reads at the cost of at most one extra call. The slower call is not stopped: it runs to its end in the background and its answer is dropped.",
           "file": "stdlib/resilience/resilience.sl",
           "line": 504
+        }
+      ]
+    },
+    "runtime": {
+      "name": "runtime",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Stats",
+          "decl": "struct",
+          "sig": "struct Stats",
+          "doc": "",
+          "file": "stdlib/runtime/runtime.sl",
+          "line": 17
+        },
+        {
+          "name": "stats",
+          "decl": "fn",
+          "sig": "fn stats() -> Stats",
+          "doc": "",
+          "file": "stdlib/runtime/runtime.sl",
+          "line": 30
         }
       ]
     },

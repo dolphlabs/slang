@@ -1,5 +1,11 @@
 # todo
 
+- [x] **Runtime stats (2026-11-22, feat/runtime-stats).** `runtime.stats()`
+  over a new `proc.runtime_stats()`: GC collections and pauses (always
+  counted now, once per collection; a major's start time was only read
+  under SLANG_GC_STAT), live and new heap bytes, current and peak RSS
+  (task_info on macOS, /proc/self/statm on Linux; checked against
+  /usr/bin/time), tasks and workers.
 - [x] **Number lists the runtime built were scanned as pointers (found
   2026-11-22 while writing listener handoff; fixed in fix/fs-fstat-noptr).**
   `fs.fstat` passed 4 as the element flag and the regex match lists and

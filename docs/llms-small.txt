@@ -268,6 +268,7 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg mysql redis regex
 strings unicode encoding compress math math/vec decimal rand builder byteutil flags sort
+uuid http http2 httpc websocket runtime template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 uuid http http2 httpc websocket oidc template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 uuid http http2 httpc websocket acme template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 uuid http http2 httpc websocket lease template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
@@ -504,13 +505,14 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - outbox: schema, add, relay, pending
 - pg: rows_as, parse_url, sqlstate, scram_client_final, connect, connect_config, close, usable, in_transaction, server_param, arg_text, arg_int (+39 more)
 - pool: options, new, acquire, release, discard, close, stats
-- proc: shutdown_requested, active_tasks, wait_idle, getenv, args, cwd, spawn, kill, wait
+- proc: shutdown_requested, active_tasks, wait_idle, getenv, args, cwd, spawn, runtime_stats, kill, wait
 - protobuf: writer, finish, size, write_int64, write_uint64, write_sint, write_bool, write_fixed64, write_fixed32, write_double, write_float, write_bytes (+21 more)
 - proxyproto: parse, read_until, encode_v1, encode_v2
 - rand: new, from_os, fork, next_u64, below, between, unit, chance, shuffle, pick, backoff, jitter (+2 more)
 - redis: encode, decode, decode_at, slot, parse_url, connect_config, connect, do, close, usable, ping, echo (+132 more)
 - regex: compile, free, groups, is_match, is_match_bytes, find, find_at, find_bytes, find_bytes_at
 - resilience: breaker_options, breaker, allow, record, breaker_state, trips, bulkhead, try_enter, leave, bulkhead_active, bulkhead_rejected, retry_budget (+12 more)
+- runtime: stats
 - s3: new_client, from_env, put_object, get_object, get_range, head_object, delete_object, list_objects, create_multipart, upload_part, complete_multipart, abort_multipart (+8 more)
 - sigv4: new_signer, amz_date_now, payload_hash, derive_key, signing_key, scope, uri_encode, canonical_query, authorization, sign, presign_query, presign
 - singleflight: group, call, forget, runs, joins

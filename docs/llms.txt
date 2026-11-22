@@ -73,6 +73,7 @@ Start with /llms-small.txt: the whole language on one page, about 3k tokens, eno
 - [redis](packages/redis.md): Package redis.
 - [regex](packages/regex.md): Package regex.
 - [resilience](packages/resilience.md): Package resilience.
+- [runtime](packages/runtime.md): Package runtime.
 - [s3](packages/s3.md): Package s3.
 - [sigv4](packages/sigv4.md): Package sigv4.
 - [singleflight](packages/singleflight.md): Package singleflight.
