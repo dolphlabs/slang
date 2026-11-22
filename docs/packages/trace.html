@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>trace — slang</title>
+<meta name="description" content="Package trace.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<meta name="theme-color" content="#07080a" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f7f5ef" media="(prefers-color-scheme: light)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="trace">
+<meta property="og:description" content="Package trace.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://slang.dolphlabs.com/packages/trace">
+<meta property="og:image" content="https://slang.dolphlabs.com/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The slang rabbit mark beside the slang wordmark">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://slang.dolphlabs.com/packages/trace">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/trace.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preload" href="../fonts/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<script>
+/* Before first paint, so a saved light theme never flashes dark. */
+try { var t = localStorage.getItem("slang-theme");
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="nav" data-nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="../" aria-label="slang home">
+      <img class="logo-on-dark" src="../brand/slang-logo-light.svg" alt="" width="77" height="32">
+      <img class="logo-on-light" src="../brand/slang-logo-dark.svg" alt="" width="77" height="32">
+    </a>
+    <nav class="nav-links" aria-label="Primary"><a href="../guide/">Guide</a><a href="../concurrency/">Concurrency</a><a class="active" href="../packages/">Packages</a><a href="../bench/">Benchmarks</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a></nav>
+    <div class="nav-actions">
+      <button class="search-btn" type="button" data-search aria-label="Search the docs" aria-keyshortcuts="Control+K Meta+K /">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <span class="search-label">Search</span>
+        <kbd class="search-kbd">/</kbd>
+      </button>
+      <button class="icon-btn" type="button" data-theme-toggle aria-label="Switch to light theme" title="Switch theme">
+        <svg class="i-sun" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <svg class="i-moon" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.6A8 8 0 1 1 9.4 4a6.4 6.4 0 0 0 10.6 10.6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      </button>
+      <a class="btn btn-ghost btn-sm nav-gh" href="https://github.com/dolphlabs/slang">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span>GitHub</span>
+      </a>
+      <a class="btn btn-light btn-sm nav-start" href="../#install">Get started</a>
+      <button class="nav-menu" type="button" aria-expanded="false" aria-controls="nav-sheet" aria-label="Menu" data-menu>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6h14M3 10h14M3 14h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </div>
+  <nav class="nav-sheet" id="nav-sheet" aria-label="Menu" hidden><a href="../guide/">Guide</a><a href="../concurrency/">Concurrency</a><a class="active" href="../packages/">Packages</a><a href="../bench/">Benchmarks</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="https://github.com/dolphlabs/slang">GitHub</a></nav>
+</header>
+
+<div class="docbar">
+  <button class="docbar-btn" type="button" aria-expanded="false" aria-controls="sidebar" data-drawer>
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    <span>Docs</span>
+  </button>
+  <span class="docbar-here">trace</span>
+</div>
+
+<div class="docs">
+  <aside class="sidebar" id="sidebar" aria-label="Documentation">
+    <div class="sidebar-inner"><div class="side-group"><p class="side-title">Start</p><ul class="side-list"><li><a href="../">Overview</a></li><li><a href="../guide/">Guide</a></li><li><a href="../guide/data">Data types</a></li><li><a href="../guide/errors">Errors</a></li><li><a href="../guide/functions">Functions</a></li></ul></div><div class="side-group"><p class="side-title">Build</p><ul class="side-list"><li><a href="../concurrency/">Concurrency</a></li><li><a href="../testing/">Testing</a></li><li><a href="../packages/">Packages</a></li><li><a href="../interop/">C interop</a></li></ul></div><div class="side-group"><p class="side-title">Under the hood</p><ul class="side-list"><li><a href="../internals/">Internals</a></li><li><a href="../bench/">Benchmarks</a></li><li><a href="../limitations/">Limitations</a></li></ul></div><details class="side-group side-pkgs" open><summary>Packages<span class="side-count">76</span></summary><ul class="side-list"><li><a href="../packages/acme">acme</a></li><li><a href="../packages/balance">balance</a></li><li><a href="../packages/builder">builder</a></li><li><a href="../packages/byteutil">byteutil</a></li><li><a href="../packages/cache">cache</a></li><li><a href="../packages/cbor">cbor</a></li><li><a href="../packages/compress">compress</a></li><li><a href="../packages/context">context</a></li><li><a href="../packages/crdt">crdt</a></li><li><a href="../packages/crypto">crypto</a></li><li><a href="../packages/csv">csv</a></li><li><a href="../packages/decimal">decimal</a></li><li><a href="../packages/encoding">encoding</a></li><li><a href="../packages/envelope">envelope</a></li><li><a href="../packages/flags">flags</a></li><li><a href="../packages/fs">fs</a></li><li><a href="../packages/http">http</a></li><li><a href="../packages/http2">http2</a></li><li><a href="../packages/httpc">httpc</a></li><li><a href="../packages/idempotency">idempotency</a></li><li><a href="../packages/io">io</a></li><li><a href="../packages/json">json</a></li><li><a href="../packages/lease">lease</a></li><li><a href="../packages/log">log</a></li><li><a href="../packages/math">math</a></li><li><a href="../packages/math/big">math/big</a></li><li><a href="../packages/math/finance">math/finance</a></li><li><a href="../packages/math/geo">math/geo</a></li><li><a href="../packages/math/interp">math/interp</a></li><li><a href="../packages/math/numtheory">math/numtheory</a></li><li><a href="../packages/math/optimize">math/optimize</a></li><li><a href="../packages/math/shard">math/shard</a></li><li><a href="../packages/math/sketch">math/sketch</a></li><li><a href="../packages/math/stats">math/stats</a></li><li><a href="../packages/math/vec">math/vec</a></li><li><a href="../packages/memcache">memcache</a></li><li><a href="../packages/metrics">metrics</a></li><li><a href="../packages/msgpack">msgpack</a></li><li><a href="../packages/multipart">multipart</a></li><li><a href="../packages/mysql">mysql</a></li><li><a href="../packages/nats">nats</a></li><li><a href="../packages/net">net</a></li><li><a href="../packages/oidc">oidc</a></li><li><a href="../packages/os">os</a></li><li><a href="../packages/otp">otp</a></li><li><a href="../packages/outbox">outbox</a></li><li><a href="../packages/pg">pg</a></li><li><a href="../packages/pool">pool</a></li><li><a href="../packages/proc">proc</a></li><li><a href="../packages/protobuf">protobuf</a></li><li><a href="../packages/proxyproto">proxyproto</a></li><li><a href="../packages/rand">rand</a></li><li><a href="../packages/redis">redis</a></li><li><a href="../packages/regex">regex</a></li><li><a href="../packages/resilience">resilience</a></li><li><a href="../packages/s3">s3</a></li><li><a href="../packages/sigv4">sigv4</a></li><li><a href="../packages/singleflight">singleflight</a></li><li><a href="../packages/smtp">smtp</a></li><li><a href="../packages/sort">sort</a></li><li><a href="../packages/sql">sql</a></li><li><a href="../packages/sse">sse</a></li><li><a href="../packages/strings">strings</a></li><li><a href="../packages/tar">tar</a></li><li><a href="../packages/template">template</a></li><li><a href="../packages/time">time</a></li><li><a href="../packages/timez">timez</a></li><li><a href="../packages/toml">toml</a></li><li><a href="../packages/trace" aria-current="page">trace</a></li><li><a href="../packages/unicode">unicode</a></li><li><a href="../packages/uuid">uuid</a></li><li><a href="../packages/websocket">websocket</a></li><li><a href="../packages/x509">x509</a></li><li><a href="../packages/xml">xml</a></li><li><a href="../packages/yaml">yaml</a></li><li><a href="../packages/zip">zip</a></li></ul></details></div>
+  </aside>
+  <div class="drawer-scrim" data-scrim hidden></div>
+
+  <main id="main" class="doc-main">
+
+    <article class="content">
+      <nav class="crumbs" aria-label="Breadcrumb"><a href="../">Docs</a><span class="sep" aria-hidden="true">/</span><a href="../packages/">Packages</a><span class="sep" aria-hidden="true">/</span><span aria-current="page">trace</span></nav>
+      <header class="page-head">
+        <h1>trace</h1>
+        <p class="tagline">Package trace.</p>
+        <p class="agentline">
+          <a href="../packages/trace.md">Markdown</a><span aria-hidden="true">·</span><a href="../llms.txt">llms.txt</a><span aria-hidden="true">·</span><a href="../api.json">api.json</a>
+        </p>
+      </header>
+<p>Distributed tracing: spans with W3C trace context propagation (<code>traceparent</code>), exported to an OpenTelemetry collector over OTLP/HTTP with JSON bodies.</p>
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;trace&quot;</span>;
+
+<span class="k">let</span> t = trace.<span class="f">tracer</span>(<span class="s">&quot;checkout&quot;</span>, <span class="s">&quot;http://otel-collector:4318&quot;</span>);
+
+<span class="c">// a request came in: continue the caller&#x27;s trace if it sent one</span>
+<span class="k">let</span> parent = trace.<span class="f">parse_traceparent</span>(incoming_traceparent);
+<span class="k">let</span> span = trace.<span class="f">start</span>(t, <span class="s">&quot;POST /orders&quot;</span>, parent);
+trace.<span class="f">set_str</span>(span, <span class="s">&quot;http.route&quot;</span>, <span class="s">&quot;/orders&quot;</span>);
+<span class="k">let</span> db = trace.<span class="f">child</span>(span, <span class="s">&quot;insert order&quot;</span>);
+trace.<span class="f">end</span>(db);
+outgoing_headers[<span class="s">&quot;traceparent&quot;</span>] = trace.<span class="f">traceparent</span>(span);   <span class="c">// to the next service</span>
+trace.<span class="f">end</span>(span);</code></pre></div>
+<ul><li><code>start(t, name, parent)</code> starts a span: a child of a caller&#x27;s context (from <code>parse_traceparent</code>, which refuses malformed values per the W3C spec) or the root of a new trace. <code>child(span, name)</code> nests one.</li><li><code>set_str</code>, <code>set_int</code>, <code>set_float</code>, <code>set_bool</code>, <code>set_kind</code>, <code>set_error</code> and <code>set_ok</code> describe it; <code>end</code> queues it for export.</li><li>Ended spans are sent in batches by a background task: when <code>max_batch</code> are queued, and every <code>flush_ns</code> otherwise. The queue is bounded by <code>max_queue</code>; spans past it, or lost in a failed send, are counted in <code>counts(t).dropped</code>, so a dead collector costs bounded memory. <code>flush(t, deadline)</code> sends now.</li><li><code>sample_ratio</code> decides new traces; a continued trace follows the caller&#x27;s sampled flag. An unsampled span records nothing.</li><li>A tracer with endpoint <code>&quot;&quot;</code> sends nothing and keeps spans for <code>drain(t)</code>, for tests.</li></ul>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="options"><div class="api-sig"><code><span class="k">struct</span> Options</code> <span class="src">stdlib/trace/trace.sl:31</span><a class="anchor" href="#options">#</a></div></div><div class="api-item" id="options"><div class="api-sig"><code><span class="k">fn</span> <span class="f">options</span>() -&gt; Options</code> <span class="src">stdlib/trace/trace.sl:43</span><a class="anchor" href="#options">#</a></div></div><div class="api-item" id="spancontext"><div class="api-sig"><code><span class="k">struct</span> SpanContext</code> <span class="src">stdlib/trace/trace.sl:49</span><a class="anchor" href="#spancontext">#</a></div><p class="api-doc">A span&#x27;s place in a trace, as traceparent carries it.</p></div><div class="api-item" id="attr"><div class="api-sig"><code><span class="k">struct</span> Attr</code> <span class="src">stdlib/trace/trace.sl:55</span><a class="anchor" href="#attr">#</a></div></div><div class="api-item" id="span"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Span</code> <span class="src">stdlib/trace/trace.sl:64</span><a class="anchor" href="#span">#</a></div></div><div class="api-item" id="tracer"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Tracer</code> <span class="src">stdlib/trace/trace.sl:78</span><a class="anchor" href="#tracer">#</a></div></div><div class="api-item" id="kind-internal"><div class="api-sig"><code><span class="k">let</span> KIND_INTERNAL = <span class="n">1</span>;</code> <span class="src">stdlib/trace/trace.sl:93</span><a class="anchor" href="#kind-internal">#</a></div></div><div class="api-item" id="kind-server"><div class="api-sig"><code><span class="k">let</span> KIND_SERVER = <span class="n">2</span>;</code> <span class="src">stdlib/trace/trace.sl:94</span><a class="anchor" href="#kind-server">#</a></div></div><div class="api-item" id="kind-client"><div class="api-sig"><code><span class="k">let</span> KIND_CLIENT = <span class="n">3</span>;</code> <span class="src">stdlib/trace/trace.sl:95</span><a class="anchor" href="#kind-client">#</a></div></div><div class="api-item" id="kind-producer"><div class="api-sig"><code><span class="k">let</span> KIND_PRODUCER = <span class="n">4</span>;</code> <span class="src">stdlib/trace/trace.sl:96</span><a class="anchor" href="#kind-producer">#</a></div></div><div class="api-item" id="kind-consumer"><div class="api-sig"><code><span class="k">let</span> KIND_CONSUMER = <span class="n">5</span>;</code> <span class="src">stdlib/trace/trace.sl:97</span><a class="anchor" href="#kind-consumer">#</a></div></div><div class="api-item" id="tracer"><div class="api-sig"><code><span class="k">fn</span> <span class="f">tracer</span>(service: <span class="t">str</span>, endpoint: <span class="t">str</span>) -&gt; Tracer</code> <span class="src">stdlib/trace/trace.sl:107</span><a class="anchor" href="#tracer">#</a></div><p class="api-doc">A tracer for one service. endpoint is the collector&#x27;s base URL (spans go to endpoint + &quot;/v1/traces&quot;); &quot;&quot; exports nothing and keeps ended spans for drain(), for tests.</p></div><div class="api-item" id="tracer-with"><div class="api-sig"><code><span class="k">fn</span> <span class="f">tracer_with</span>(service: <span class="t">str</span>, endpoint: <span class="t">str</span>, o: Options) -&gt; Tracer</code> <span class="src">stdlib/trace/trace.sl:111</span><a class="anchor" href="#tracer-with">#</a></div></div><div class="api-item" id="start"><div class="api-sig"><code><span class="k">fn</span> <span class="f">start</span>(t: Tracer, name: <span class="t">str</span>, parent: <span class="t">opt</span>[SpanContext]) -&gt; Span</code> <span class="src">stdlib/trace/trace.sl:132</span><a class="anchor" href="#start">#</a></div><p class="api-doc">A new span: a child of parent (a caller&#x27;s context, from parse_traceparent) or the root of a new trace.</p></div><div class="api-item" id="child"><div class="api-sig"><code><span class="k">fn</span> <span class="f">child</span>(s: Span, name: <span class="t">str</span>) -&gt; Span</code> <span class="src">stdlib/trace/trace.sl:158</span><a class="anchor" href="#child">#</a></div><p class="api-doc">A span inside s, in the same trace.</p></div><div class="api-item" id="set-kind"><div class="api-sig"><code><span class="k">fn</span> <span class="f">set_kind</span>(s: Span, kind: <span class="t">int</span>)</code> <span class="src">stdlib/trace/trace.sl:164</span><a class="anchor" href="#set-kind">#</a></div></div><div class="api-item" id="set-str"><div class="api-sig"><code><span class="k">fn</span> <span class="f">set_str</span>(s: Span, key: <span class="t">str</span>, v: <span class="t">str</span>)</code> <span class="src">stdlib/trace/trace.sl:166</span><a class="anchor" href="#set-str">#</a></div></div><div class="api-item" id="set-int"><div class="api-sig"><code><span class="k">fn</span> <span class="f">set_int</span>(s: Span, key: <span class="t">str</span>, v: <span class="t">int</span>)</code> <span class="src">stdlib/trace/trace.sl:171</span><a class="anchor" href="#set-int">#</a></div></div><div class="api-item" id="set-float"><div class="api-sig"><code><span class="k">fn</span> <span class="f">set_float</span>(s: Span, key: <span class="t">str</span>, v: <span class="t">float</span>)</code> <span class="src">stdlib/trace/trace.sl:176</span><a class="anchor" href="#set-float">#</a></div></div><div class="api-item" id="set-bool"><div class="api-sig"><code><span class="k">fn</span> <span class="f">set_bool</span>(s: Span, key: <span class="t">str</span>, v: <span class="t">bool</span>)</code> <span class="src">stdlib/trace/trace.sl:181</span><a class="anchor" href="#set-bool">#</a></div></div><div class="api-item" id="set-error"><div class="api-sig"><code><span class="k">fn</span> <span class="f">set_error</span>(s: Span, msg: <span class="t">str</span>)</code> <span class="src">stdlib/trace/trace.sl:187</span><a class="anchor" href="#set-error">#</a></div><p class="api-doc">Marks the span failed, with a message.</p></div><div class="api-item" id="set-ok"><div class="api-sig"><code><span class="k">fn</span> <span class="f">set_ok</span>(s: Span)</code> <span class="src">stdlib/trace/trace.sl:192</span><a class="anchor" href="#set-ok">#</a></div></div><div class="api-item" id="end"><div class="api-sig"><code><span class="k">fn</span> <span class="f">end</span>(s: Span)</code> <span class="src">stdlib/trace/trace.sl:197</span><a class="anchor" href="#end">#</a></div><p class="api-doc">Ends the span and queues it for export. A second end does nothing.</p></div><div class="api-item" id="traceparent"><div class="api-sig"><code><span class="k">fn</span> <span class="f">traceparent</span>(s: Span) -&gt; <span class="t">str</span></code> <span class="src">stdlib/trace/trace.sl:219</span><a class="anchor" href="#traceparent">#</a></div><p class="api-doc">The traceparent header value for s: &quot;00-&lt;trace&gt;-&lt;span&gt;-&lt;flags&gt;&quot;.</p></div><div class="api-item" id="parse-traceparent"><div class="api-sig"><code><span class="k">fn</span> <span class="f">parse_traceparent</span>(h: <span class="t">str</span>) -&gt; <span class="t">opt</span>[SpanContext]</code> <span class="src">stdlib/trace/trace.sl:227</span><a class="anchor" href="#parse-traceparent">#</a></div><p class="api-doc">The caller&#x27;s span context from a traceparent header; none if the value is missing or malformed (start a new trace then).</p></div><div class="api-item" id="flush"><div class="api-sig"><code><span class="k">fn</span> <span class="f">flush</span>(t: Tracer, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">int</span>, <span class="t">str</span>]</code> <span class="src">stdlib/trace/trace.sl:248</span><a class="anchor" href="#flush">#</a></div><p class="api-doc">Sends every queued span now. Returns how many were sent.</p></div><div class="api-item" id="drain"><div class="api-sig"><code><span class="k">fn</span> <span class="f">drain</span>(t: Tracer) -&gt; [Span]</code> <span class="src">stdlib/trace/trace.sl:291</span><a class="anchor" href="#drain">#</a></div><p class="api-doc">Ended spans not yet sent, removed from the queue: for a tracer with no endpoint, as in tests.</p></div><div class="api-item" id="counts"><div class="api-sig"><code><span class="k">struct</span> Counts</code> <span class="src">stdlib/trace/trace.sl:300</span><a class="anchor" href="#counts">#</a></div></div><div class="api-item" id="counts"><div class="api-sig"><code><span class="k">fn</span> <span class="f">counts</span>(t: Tracer) -&gt; Counts</code> <span class="src">stdlib/trace/trace.sl:308</span><a class="anchor" href="#counts">#</a></div></div><div class="api-item" id="encode-otlp"><div class="api-sig"><code><span class="k">fn</span> <span class="f">encode_otlp</span>(t: Tracer, spans: [Span]) -&gt; <span class="t">bytes</span></code> <span class="src">stdlib/trace/trace.sl:317</span><a class="anchor" href="#encode-otlp">#</a></div><p class="api-doc">The OTLP/HTTP JSON body for spans (ExportTraceServiceRequest).</p></div></div>
+<nav class="pager" aria-label="Previous and next"><a class="prev" href="../packages/toml"><span class="dir">Previous</span><span class="name">toml</span></a><a class="next" href="../packages/unicode"><span class="dir">Next</span><span class="name">unicode</span></a></nav>
+    </article>
+  </main>
+
+  <aside class="toc" aria-label="On this page">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+
+<footer class="foot">
+  <div class="foot-inner">
+    <a class="foot-logo" href="../" aria-label="slang home">
+      <img class="logo-on-dark" src="../brand/slang-icon-light.svg" alt="" width="28" height="28">
+      <img class="logo-on-light" src="../brand/slang-icon-dark.svg" alt="" width="28" height="28">
+    </a>
+    <p class="foot-by">Built and maintained by
+      <a href="https://dolphlabs.com" rel="noopener">Dolphlabs</a> · Dolph Tech Limited</p>
+    <p class="foot-note">Generated from the repository by <code>www/build.py</code>:
+      the guide from <code>README.md</code>, the API from the compiler's own
+      signature tables and the <code>pub</code> declarations in
+      <code>stdlib/</code>. Nothing here is written twice.</p>
+  </div>
+</footer>
+
+<div class="palette" id="palette" role="dialog" aria-modal="true" aria-label="Search the docs" hidden>
+  <div class="palette-box">
+    <div class="palette-field">
+      <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <input id="palette-input" type="search" placeholder="Search pages, packages and functions" autocomplete="off" spellcheck="false"
+             role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list">
+      <kbd>esc</kbd>
+    </div>
+    <div class="palette-list" id="palette-list" role="listbox" aria-label="Results"></div>
+    <div class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

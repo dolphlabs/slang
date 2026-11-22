@@ -118,6 +118,17 @@ Percent-escapes are emitted uppercase (RFC 3986 §2.1) and hex digests
 lowercase (what `sha256sum`, git and every API that returns one use).
 Both decoders accept either case.
 
+##### Range requests
+
+`http.parse_range(header, size)` reads a `Range` header for a resource of
+`size` bytes. It gives `ok([])` to send the whole resource (no header, or
+one worth ignoring: malformed, a unit other than bytes, more than 16
+ranges), `ok(ranges)` to answer 206 with those ranges (clipped to the
+end, suffix ranges like `bytes=-500` resolved), or an error to answer 416
+with `Content-Range: bytes */size`. `http.content_range(r, size)` gives
+the `Content-Range` value. With `net.send_file`, a range of a file goes
+straight from the page cache.
+
 ## API
 
 ### `encoding.hex_encode(bytes) -> str`
