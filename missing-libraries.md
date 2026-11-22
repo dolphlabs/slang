@@ -81,7 +81,7 @@ standalone repo under `slangpackages/`.
   multipart/form-data uploads, and range requests.
 - [ ] **gRPC streaming** (package `slangpackages/grpc`): server, client and
   bidirectional streams; the package is unary only.
-  Status: not started (separate repo).
+  Status: in progress on feat/grpc-streaming in the grpc repo; left alone here.
 - [ ] **HTTP/3 and QUIC** (stdlib): after UDP.
   Status: not started; after UDP.
 
