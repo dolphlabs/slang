@@ -10555,6 +10555,100 @@
         }
       ]
     },
+    "pool": {
+      "name": "pool",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Options",
+          "decl": "struct",
+          "sig": "struct Options",
+          "doc": "",
+          "file": "stdlib/pool/pool.sl",
+          "line": 28
+        },
+        {
+          "name": "options",
+          "decl": "fn",
+          "sig": "fn options(max_open: int) -> Options",
+          "doc": "Options with the defaults above for a pool of max_open connections.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 46
+        },
+        {
+          "name": "Lease",
+          "decl": "struct",
+          "sig": "gc struct Lease[T]",
+          "doc": "One connection, on loan from acquire until release or discard.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 53
+        },
+        {
+          "name": "Stats",
+          "decl": "struct",
+          "sig": "struct Stats",
+          "doc": "",
+          "file": "stdlib/pool/pool.sl",
+          "line": 60
+        },
+        {
+          "name": "Pool",
+          "decl": "struct",
+          "sig": "gc struct Pool[T]",
+          "doc": "",
+          "file": "stdlib/pool/pool.sl",
+          "line": 80
+        },
+        {
+          "name": "new",
+          "decl": "fn",
+          "sig": "fn new[T](o: Options, dial: fn(until) -> result[T, str], close: fn(T), probe: fn(T) -> bool) -> Pool[T]",
+          "doc": "A pool that opens nothing until the first acquire. dial makes a connection by a deadline, close ends one, probe says whether an idle one still works (one cheap check, such as net.idle_alive).",
+          "file": "stdlib/pool/pool.sl",
+          "line": 102
+        },
+        {
+          "name": "acquire",
+          "decl": "fn",
+          "sig": "fn acquire[T](p: Pool[T], deadline: until) -> result[Lease[T], str]",
+          "doc": "A connection for the caller's use until release or discard: an idle one, a new one if fewer than max_open are open, or else the next one released, in arrival order. \"timeout\" if deadline passes first, \"pool is closed\" after close.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 123
+        },
+        {
+          "name": "release",
+          "decl": "fn",
+          "sig": "fn release[T](p: Pool[T], l: Lease[T])",
+          "doc": "Gives a connection back: to the task that has waited longest, else to the idle list. Closed instead once past max_lifetime, beyond max_idle, or after close. Releasing a lease twice panics: two tasks would then share one connection.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 200
+        },
+        {
+          "name": "discard",
+          "decl": "fn",
+          "sig": "fn discard[T](p: Pool[T], l: Lease[T])",
+          "doc": "Closes a connection the caller found broken, freeing its slot for the next waiter to dial.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 234
+        },
+        {
+          "name": "close",
+          "decl": "fn",
+          "sig": "fn close[T](p: Pool[T])",
+          "doc": "Closes every idle connection and fails every waiting acquire; connections in use are closed as they come back. acquire fails from now on.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 251
+        },
+        {
+          "name": "stats",
+          "decl": "fn",
+          "sig": "fn stats[T](p: Pool[T]) -> Stats",
+          "doc": "A snapshot of the counters.",
+          "file": "stdlib/pool/pool.sl",
+          "line": 268
+        }
+      ]
+    },
     "proc": {
       "name": "proc",
       "kind": "native",
