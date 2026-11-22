@@ -221,6 +221,7 @@ PACKAGE_SECTIONS = {
     "http": ["`http`"],
     "httpc": ["`httpc`"],
     "websocket": ["`websocket`"],
+    "smtp": ["`smtp`"],
     "pg": ["`pg`"],
     "mysql": ["`mysql`"],
     "redis": ["`redis`"],

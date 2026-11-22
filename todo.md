@@ -1,5 +1,11 @@
 # todo
 
+- [x] **`smtp` (2026-11-22, feat/smtp).** An SMTP client with STARTTLS
+  (refusing a server without it before any password is sent), implicit
+  TLS and AUTH PLAIN, and a MIME builder. The test caught AUTH PLAIN
+  built as a str: a str stops at its first NUL, so the credential was
+  cut short; it is built as bytes.
+
 - [x] **A leaf function could hold a safepoint (found 2026-11-21 when
   math/big's tests crashed after merging dev; fixed in
   fix/leaf-body-no-safepoint).** Callers skip their bracket around a call
