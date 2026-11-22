@@ -378,6 +378,59 @@ static sl_res_i32_str *sl_net_tls_send_until(void *sslv, sl_bytes *data,
     return sl_net_tls_send_u(sslv, data, u);
 }
 
+/* net.send_file over TLS: the file through one pooled chunk, encrypted
+ * by OpenSSL. A WANT_WRITE retry passes SSL_write the same buffer and
+ * length, as OpenSSL requires; the chunk is held until it is all out. */
+static sl_res_int_str *sl_net_tls_send_file_u(void *sslv, int file,
+                                              long long off, long long count,
+                                              sl_until u) {
+    sl_rt_need_fat_stack();
+    SSL *ssl = (SSL *)sslv;
+    const char *msg = NULL;
+    long long want = sl_sendfile_span(file, off, count, &msg);
+    if (want < 0) return sl_sendfile_err(msg);
+    if (want == 0) return sl_sendfile_ok(0);
+    if (u && sl_until_hit(u)) return sl_sendfile_err("timeout");
+    unsigned char *buf = (unsigned char *)sl_recv_buf_get(SL_SENDFILE_CHUNK);
+    long long sent = 0;
+    while (sent < want) {
+        long long step = want - sent;
+        if (step > SL_SENDFILE_CHUNK) step = SL_SENDFILE_CHUNK;
+        ssize_t got = pread(file, buf, (size_t)step, (off_t)(off + sent));
+        if (got < 0 && errno == EINTR) continue;
+        if (got < 0) {
+            int e = errno; sl_recv_buf_put(buf);
+            return sl_sendfile_err(strerror(e));
+        }
+        if (got == 0) break;              /* the file ended early */
+        int done = 0;
+        while (done < got) {
+            int n = SSL_write(ssl, buf + done, (int)(got - done));
+            if (n > 0) { done += n; continue; }
+            int err = SSL_get_error(ssl, n);
+            int w = sl_tls_park_until(ssl, err, 0, u);
+            if (w == 0) continue;
+            sl_recv_buf_put(buf);
+            if (w == -3) return sl_sendfile_err("timeout");
+            return sl_sendfile_err(sl_tls_last_error());
+        }
+        sent += got;
+    }
+    sl_recv_buf_put(buf);
+    return sl_sendfile_ok(sent);
+}
+
+static sl_res_int_str *sl_net_tls_send_file(void *sslv, int file,
+                                            long long off, long long count) {
+    return sl_net_tls_send_file_u(sslv, file, off, count, 0);
+}
+
+static sl_res_int_str *sl_net_tls_send_file_until(void *sslv, int file,
+                                                  long long off,
+                                                  long long count, sl_until u) {
+    return sl_net_tls_send_file_u(sslv, file, off, count, u);
+}
+
 static sl_res_bytes_str *sl_net_tls_recv_u(void *sslv, int max, sl_until u) {
     sl_rt_need_fat_stack();
     if (u && sl_until_hit(u))

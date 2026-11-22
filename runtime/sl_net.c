@@ -2,19 +2,25 @@
 #include <limits.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/stat.h>
+#include <poll.h>
 #include <time.h>
 #include <sys/socket.h>
 #if defined(__linux__)
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
+#include <sys/sendfile.h>
 #define SL_REACTOR_EPOLL 1
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
 #include <sys/event.h>
+#include <sys/uio.h>
 #define SL_REACTOR_KQUEUE 1
 #else
 #error "slang net: need kqueue or epoll"
 #endif
 #include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <net/if.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <sys/un.h>
@@ -38,7 +44,21 @@
 static void sl_net_set_nonblocking(int fd) {
     int fl = fcntl(fd, F_GETFL, 0);
     if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+    /* Every socket the runtime makes passes through here, so this is also
+     * where it stops leaking into child processes: without FD_CLOEXEC,
+     * proc.spawn's children inherited every listener and connection the
+     * program had open, holding ports and peers open after the program
+     * closed them. Linux sockets get SOCK_CLOEXEC at creation as well
+     * (SL_SOCK_CLOEXEC); an accepted one, and every socket on macOS, gets
+     * the flag here, a few instructions after it exists. */
+    fcntl(fd, F_SETFD, FD_CLOEXEC);
 }
+
+#ifdef SOCK_CLOEXEC
+#define SL_SOCK_CLOEXEC SOCK_CLOEXEC
+#else
+#define SL_SOCK_CLOEXEC 0
+#endif
 
 /* TLS parks on the same reactor (WANT_READ/WANT_WRITE). FDs stay
  * non-blocking; sl_net_tls_* retries through sl_reactor_wait. */
@@ -1260,9 +1280,22 @@ static void *sl_dns_thread(void *arg) {
  * waits for as long as the lookup takes; otherwise a passed deadline
  * returns EAI_AGAIN with *timed_out set, and the job is abandoned to the
  * resolver thread. */
+static int sl_dns_lookup_family_until(const char *host, const char *portstr,
+                                      int family, struct addrinfo **res,
+                                      sl_until u, int *timed_out);
+
 static int sl_dns_lookup_until(const char *host, const char *portstr,
                                struct addrinfo **res, sl_until u,
                                int *timed_out) {
+    return sl_dns_lookup_family_until(host, portstr, AF_INET, res, u,
+                                      timed_out);
+}
+
+/* family AF_INET, or AF_UNSPEC for IPv4 and IPv6 (with AI_ADDRCONFIG, so
+ * a host without IPv6 is not handed IPv6 addresses it cannot reach). */
+static int sl_dns_lookup_family_until(const char *host, const char *portstr,
+                                      int family, struct addrinfo **res,
+                                      sl_until u, int *timed_out) {
     *timed_out = 0;
     *res = NULL;
     if (u && sl_until_hit(u)) {
@@ -1284,8 +1317,10 @@ static int sl_dns_lookup_until(const char *host, const char *portstr,
     sl_rt_preempt_disable();
     snprintf(job->portstr, sizeof(job->portstr), "%s", portstr);
     sl_rt_preempt_enable();
-    job->hints.ai_family = AF_INET;
+    job->hints.ai_family = family;
     job->hints.ai_socktype = SOCK_STREAM;
+    if (family == AF_UNSPEC)
+        job->hints.ai_flags = AI_ADDRCONFIG;
     atomic_store_explicit(&job->state, 0, memory_order_relaxed);
     int pfd[2];
     if (pipe(pfd) != 0) {
@@ -1637,12 +1672,6 @@ static sl_res__str__str *sl_net_lookup_txt_until(const char *name,
 }
 #endif /* SLANG_NET_DNS */
 
-static int sl_dns_lookup(const char *host, const char *portstr,
-                         struct addrinfo **res) {
-    int timed_out;
-    return sl_dns_lookup_until(host, portstr, res, 0, &timed_out);
-}
-
 /* Called once from main() (program.c), gated on 'net' being imported
  * at all, BEFORE sl_proc_install_signal_handlers() so
  * sl_rt_shutdown_hook is guaranteed set before the signal thread
@@ -1901,7 +1930,7 @@ static sl_res_i32_str *sl_net_listen(int port) {
  * precisely the collapse the error model says not to do. */
 static int sl_net_listen_fd(int port, int reuse_port, int *err) {
     *err = 0;
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    int fd = socket(AF_INET, SOCK_STREAM | SL_SOCK_CLOEXEC, 0);
     if (fd < 0) { *err = errno; return -1; }
     int one = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
@@ -1972,7 +2001,7 @@ static sl_res_i32_str *sl_net_accept(int lfd) {
  * deadline). */
 static int sl_net_connect_addr(struct sockaddr *addr, socklen_t alen,
                                int family, sl_until u, int *err) {
-    int fd = socket(family, SOCK_STREAM, 0);
+    int fd = socket(family, SOCK_STREAM | SL_SOCK_CLOEXEC, 0);
     if (fd < 0) { *err = errno; return -1; }
     sl_net_set_nonblocking(fd);
     if (connect(fd, addr, alen) == 0) {
@@ -1995,32 +2024,174 @@ static int sl_net_connect_addr(struct sockaddr *addr, socklen_t alen,
     return fd;
 }
 
-/* net.dial / net.dial_until. Every resolved address is tried in turn,
- * not just the first: a name with a stale or unreachable record ahead
- * of a working one would otherwise fail outright. The deadline, when
- * set, covers the lookup and every attempt together. */
-static sl_res_i32_str *sl_net_dial_u(const char *host, int port, sl_until u) {
+/* ---- dialing: IPv4 and IPv6 with happy eyeballs (RFC 8305) ------------
+ *
+ * A name is resolved for both families and its addresses are tried
+ * interleaved (IPv6, IPv4, IPv6, ...; getaddrinfo's own order picks the
+ * first, per RFC 6724). An attempt that has not connected within 250 ms
+ * does not hold up the next one: both race, the first to connect wins and
+ * the rest are closed. Without that, a host with a broken IPv6 route
+ * would wait out the whole TCP connect timeout on every IPv6 address
+ * before trying IPv4 -- the reason dial used to resolve IPv4 only. One
+ * address (an IP literal, a name with one record) is a single attempt,
+ * exactly as before. */
+
+#define SL_HE_MAX 16
+#define SL_HE_DELAY_NS 250000000LL
+/* How often a race with every address started looks at the attempts it
+   is not parked on (the reactor parks a task on one fd). */
+#define SL_HE_RECHECK_NS 25000000LL
+
+/* 1 connected, 0 still connecting, or -errno. */
+static int sl_he_state(int fd) {
+    struct pollfd p;
+    p.fd = fd;
+    p.events = POLLOUT;
+    p.revents = 0;
+    if (poll(&p, 1, 0) <= 0)
+        return 0;
+    int so = 0;
+    socklen_t l = sizeof(so);
+    getsockopt(fd, SOL_SOCKET, SO_ERROR, &so, &l);
+    if (so != 0)
+        return -so;
+    if (p.revents & POLLOUT)
+        return 1;
+    return (p.revents & (POLLERR | POLLHUP)) ? -ECONNREFUSED : 0;
+}
+
+static sl_until sl_he_min(sl_until a, sl_until b) {
+    if (a == 0) return b;
+    if (b == 0) return a;
+    return a < b ? a : b;
+}
+
+/* Connect to host:port. Returns the fd, or -1 with *err: an errno, -2 for
+ * the deadline, EINTR for an interrupted park, or -3 with *gai set to a
+ * resolver error code. */
+static int sl_net_dial_fd(const char *host, int port, sl_until u, int *err,
+                          int *gai) {
     char portstr[16];
     sl_rt_preempt_disable();
     snprintf(portstr, sizeof(portstr), "%d", port);
     sl_rt_preempt_enable();
     struct addrinfo *res = NULL;
-    int timed_out = 0;
-    int rc = sl_dns_lookup_until(host, portstr, &res, u, &timed_out);
-    if (timed_out) return sl_net_err_i32("timeout");
-    if (rc != 0 || !res) return sl_net_err_i32(gai_strerror(rc));
-    int err = 0;
-    for (struct addrinfo *a = res; a; a = a->ai_next) {
-        int fd = sl_net_connect_addr(a->ai_addr, a->ai_addrlen, a->ai_family,
-                                     u, &err);
-        if (fd >= 0) {
-            freeaddrinfo(res);
-            return sl_net_ok_i32((int32_t)fd);
-        }
-        if (err == -2 || err == EINTR) break;
+    /* An IP literal needs no resolver: getaddrinfo with AI_NUMERICHOST
+       answers on this thread, without the resolver thread's queue and
+       wake-up -- and without AI_ADDRCONFIG, which on some systems
+       refuses "::1" on a host with no global IPv6 address. */
+    struct in6_addr lit6;
+    struct in_addr lit4;
+    if (inet_pton(AF_INET, host, &lit4) == 1 ||
+        inet_pton(AF_INET6, host, &lit6) == 1) {
+        struct addrinfo hints;
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_flags = AI_NUMERICHOST;
+        int rc = getaddrinfo(host, portstr, &hints, &res);
+        if (rc != 0 || !res) { *gai = rc; *err = -3; return -1; }
+    } else {
+        int timed_out = 0;
+        int rc = sl_dns_lookup_family_until(host, portstr, AF_UNSPEC, &res,
+                                            u, &timed_out);
+        if (timed_out) { *err = -2; return -1; }
+        if (rc != 0 || !res) { *gai = rc; *err = -3; return -1; }
     }
+    if (u && sl_until_hit(u)) { freeaddrinfo(res); *err = -2; return -1; }
+
+    /* interleave the families, keeping each family's own order */
+    struct addrinfo *order[SL_HE_MAX];
+    int n = 0;
+    struct addrinfo *a1 = res, *a2 = NULL;
+    int fam1 = res->ai_family;
+    for (struct addrinfo *a = res; a; a = a->ai_next)
+        if (a->ai_family != fam1) { a2 = a; break; }
+    while ((a1 || a2) && n < SL_HE_MAX) {
+        while (a1 && a1->ai_family != fam1) a1 = a1->ai_next;
+        if (a1) { order[n++] = a1; a1 = a1->ai_next; }
+        while (a2 && a2->ai_family == fam1) a2 = a2->ai_next;
+        if (a2 && n < SL_HE_MAX) { order[n++] = a2; a2 = a2->ai_next; }
+    }
+
+    int fds[SL_HE_MAX];
+    int nf = 0, next = 0, last = ECONNREFUSED;
+    long long started = 0;
+    int winner = -1;
+    while (winner < 0) {
+        if (next < n && (nf == 0 || sl_now_ns() >= started + SL_HE_DELAY_NS)) {
+            struct addrinfo *a = order[next++];
+            int fd = socket(a->ai_family, SOCK_STREAM | SL_SOCK_CLOEXEC, 0);
+            if (fd < 0) { last = errno; continue; }
+            sl_net_set_nonblocking(fd);
+            if (connect(fd, a->ai_addr, a->ai_addrlen) == 0) {
+                winner = fd;
+                break;
+            }
+            if (errno != EINPROGRESS && errno != EAGAIN) {
+                last = errno;
+                close(fd);
+                continue;
+            }
+            fds[nf++] = fd;
+            started = sl_now_ns();
+        }
+        if (nf == 0) {
+            if (next >= n) break;          /* every address refused */
+            continue;
+        }
+        /* Park on the newest attempt until the next one is due (or, with
+           every address started, briefly, to look at the others too). */
+        sl_until wake = u;
+        if (next < n)
+            wake = sl_he_min(u, sl_until_of(started + SL_HE_DELAY_NS));
+        else if (nf > 1)
+            wake = sl_he_min(u, sl_until_of(sl_now_ns() + SL_HE_RECHECK_NS));
+        int w = sl_reactor_wait_until(fds[nf - 1], SL_REACTOR_WRITE, 1, wake);
+        if (w < 0 && w != -2) {
+            for (int i = 0; i < nf; i++) close(fds[i]);
+            freeaddrinfo(res);
+            *err = EINTR;
+            return -1;
+        }
+        if (w == -2 && u && sl_until_hit(u)) {
+            for (int i = 0; i < nf; i++) close(fds[i]);
+            freeaddrinfo(res);
+            *err = -2;
+            return -1;
+        }
+        for (int i = 0; i < nf;) {
+            int st = sl_he_state(fds[i]);
+            if (st == 1) {
+                winner = fds[i];
+                fds[i] = fds[--nf];
+                break;
+            }
+            if (st < 0) {
+                last = -st;
+                close(fds[i]);
+                fds[i] = fds[--nf];
+                continue;
+            }
+            i++;
+        }
+    }
+    for (int i = 0; i < nf; i++)
+        close(fds[i]);
     freeaddrinfo(res);
+    if (winner < 0) { *err = last; return -1; }
+    sl_reactor_mark_persistent(winner);
+    return winner;
+}
+
+/* net.dial / net.dial_until: the deadline, when set, covers the lookup
+ * and every attempt together. */
+static sl_res_i32_str *sl_net_dial_u(const char *host, int port, sl_until u) {
+    int err = 0, gai = 0;
+    int fd = sl_net_dial_fd(host, port, u, &err, &gai);
+    if (fd >= 0) return sl_net_ok_i32((int32_t)fd);
     if (err == -2) return sl_net_err_i32("timeout");
+    if (err == -3) return sl_net_err_i32(gai_strerror(gai));
     if (err == EINTR) return sl_net_err_i32("interrupted");
     return sl_net_err_i32(strerror(err));
 }
@@ -2070,7 +2241,7 @@ static sl_res_i32_str *sl_net_listen_unix(const char *path) {
     struct sockaddr_un sa;
     const char *why = NULL;
     if (sl_net_unix_addr(path, &sa, &why) != 0) return sl_net_err_i32(why);
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    int fd = socket(AF_UNIX, SOCK_STREAM | SL_SOCK_CLOEXEC, 0);
     if (fd < 0) return sl_net_err_i32(strerror(errno));
     if (bind(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0 ||
         listen(fd, 1024) != 0) {
@@ -2300,6 +2471,811 @@ static sl_res_bool_str *sl_net_nonblock(int fd) {
     return sl_net_ok_bool(true);
 }
 
+/* ---- UDP ---------------------------------------------------------------
+ *
+ * Datagram sockets on the same fds and reactor as TCP. A peer address is
+ * an opaque value: the raw sockaddr (sockaddr_in or sockaddr_in6) as
+ * bytes. recv_from hands it back and send_to takes it as is, so replying
+ * to a sender never resolves a name or formats a string; net.udp_addr
+ * resolves one ahead of time and net.addr_str prints it. The layout is
+ * this process's own (BSD sockaddrs carry a length byte), so it is not
+ * for storing or sending elsewhere. */
+
+#define SL_UDP_MAX 65535 /* the largest datagram: recv_from's default size */
+
+typedef struct {
+    struct sockaddr_storage ss;
+    socklen_t len;
+} sl_udp_addr;
+
+/* host as an IP literal ("" is any IPv4 address) into a, or -1. */
+static int sl_udp_parse_ip(const char *host, int port, sl_udp_addr *a) {
+    memset(a, 0, sizeof(*a));
+    if (port < 0 || port > 65535)
+        return -1;
+    if (!strchr(host, ':')) {
+        struct sockaddr_in *v4 = (struct sockaddr_in *)&a->ss;
+        v4->sin_family = AF_INET;
+        v4->sin_port = htons((uint16_t)port);
+        if (host[0] == '\0')
+            v4->sin_addr.s_addr = htonl(INADDR_ANY);
+        else if (inet_pton(AF_INET, host, &v4->sin_addr) != 1)
+            return -1;
+        a->len = sizeof(struct sockaddr_in);
+        return 0;
+    }
+    struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)&a->ss;
+    v6->sin6_family = AF_INET6;
+    v6->sin6_port = htons((uint16_t)port);
+    if (inet_pton(AF_INET6, host, &v6->sin6_addr) != 1)
+        return -1;
+    a->len = sizeof(struct sockaddr_in6);
+    return 0;
+}
+
+/* An IP literal as is, anything else through the resolver (IPv4, like
+ * net.dial), bounded by u. Returns 0, -1 with *msg set, or -2 for the
+ * deadline. */
+static int sl_udp_resolve(const char *host, int port, sl_until u,
+                          sl_udp_addr *a, const char **msg) {
+    if (port < 0 || port > 65535) {
+        *msg = "port out of range";
+        return -1;
+    }
+    if (sl_udp_parse_ip(host, port, a) == 0)
+        return 0;
+    char portstr[16];
+    sl_rt_preempt_disable();
+    snprintf(portstr, sizeof(portstr), "%d", port);
+    sl_rt_preempt_enable();
+    struct addrinfo *res = NULL;
+    int timed_out = 0;
+    int rc = sl_dns_lookup_until(host, portstr, &res, u, &timed_out);
+    if (timed_out)
+        return -2;
+    if (rc != 0 || !res) {
+        *msg = gai_strerror(rc);
+        return -1;
+    }
+    memset(a, 0, sizeof(*a));
+    memcpy(&a->ss, res->ai_addr, res->ai_addrlen);
+    a->len = (socklen_t)res->ai_addrlen;
+    freeaddrinfo(res);
+    return 0;
+}
+
+static sl_bytes *sl_udp_addr_bytes(const struct sockaddr_storage *ss,
+                                   socklen_t len) {
+    sl_bytes *b = sl_bytes_alloc_uninit(len);
+    memcpy(b->ptr, ss, len);
+    return b;
+}
+
+/* An address from net.udp_addr / recv_from back into a, or -1. */
+static int sl_udp_addr_of(sl_bytes *b, sl_udp_addr *a) {
+    if (!b || (b->len != (long long)sizeof(struct sockaddr_in) &&
+               b->len != (long long)sizeof(struct sockaddr_in6)))
+        return -1;
+    memset(a, 0, sizeof(*a));
+    memcpy(&a->ss, b->ptr, (size_t)b->len);
+    a->len = (socklen_t)b->len;
+    int fam = ((struct sockaddr *)&a->ss)->sa_family;
+    if ((fam == AF_INET && a->len != sizeof(struct sockaddr_in)) ||
+        (fam == AF_INET6 && a->len != sizeof(struct sockaddr_in6)) ||
+        (fam != AF_INET && fam != AF_INET6))
+        return -1;
+    return 0;
+}
+
+/* A new non-blocking datagram socket the reactor can park on. */
+static int sl_udp_socket(int family, int *err) {
+    int fd = socket(family, SOCK_DGRAM, 0);
+    if (fd < 0) { *err = errno; return -1; }
+    sl_net_set_nonblocking(fd);
+    return fd;
+}
+
+static sl_res_i32_str *sl_udp_ready(int fd) {
+    sl_rt_preempt_disable();
+    sl_reactor_clear_closing(fd);
+    sl_rt_preempt_enable();
+    sl_reactor_mark_persistent(fd);
+    return sl_net_ok_i32((int32_t)fd);
+}
+
+static sl_res_i32_str *sl_udp_bind_opt(const char *host, int port,
+                                       int shared) {
+    sl_udp_addr a;
+    if (sl_udp_parse_ip(host, port, &a) != 0)
+        return sl_net_err_i32(port < 0 || port > 65535
+                                  ? "port out of range"
+                                  : "udp_bind: host must be an IP address or \"\"");
+    int e = 0;
+    int fd = sl_udp_socket(a.ss.ss_family, &e);
+    if (fd < 0) return sl_net_err_i32(strerror(e));
+    if (shared) {
+        /* Several sockets on one port: multicast listeners, or one
+           socket per core with the kernel spreading datagrams. */
+        int one = 1;
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+#ifdef SO_REUSEPORT
+        setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one));
+#endif
+    }
+    if (bind(fd, (struct sockaddr *)&a.ss, a.len) != 0) {
+        e = errno; close(fd);
+        return sl_net_err_i32(strerror(e));
+    }
+    return sl_udp_ready(fd);
+}
+
+static sl_res_i32_str *sl_net_udp_bind(const char *host, int port) {
+    return sl_udp_bind_opt(host, port, 0);
+}
+
+static sl_res_i32_str *sl_net_udp_bind_shared(const char *host, int port) {
+    return sl_udp_bind_opt(host, port, 1);
+}
+
+/* A connected datagram socket: net.send and net.recv work on it and the
+ * kernel drops datagrams from any other sender. */
+static sl_res_i32_str *sl_net_udp_dial(const char *host, int port,
+                                       sl_until u) {
+    sl_udp_addr a;
+    const char *msg = "";
+    int rc = sl_udp_resolve(host, port, u, &a, &msg);
+    if (rc == -2) return sl_net_err_i32("timeout");
+    if (rc != 0) return sl_net_err_i32(msg);
+    int e = 0;
+    int fd = sl_udp_socket(a.ss.ss_family, &e);
+    if (fd < 0) return sl_net_err_i32(strerror(e));
+    /* connect on a datagram socket only records the peer: it never
+       blocks, so there is nothing to park on */
+    if (connect(fd, (struct sockaddr *)&a.ss, a.len) != 0) {
+        e = errno; close(fd);
+        return sl_net_err_i32(strerror(e));
+    }
+    return sl_udp_ready(fd);
+}
+
+static sl_res_bytes_str *sl_net_udp_addr(const char *host, int port,
+                                         sl_until u) {
+    sl_udp_addr a;
+    const char *msg = "";
+    int rc = sl_udp_resolve(host, port, u, &a, &msg);
+    if (rc == -2) return sl_net_err_bytes("timeout");
+    if (rc != 0) return sl_net_err_bytes(msg);
+    return sl_net_ok_bytes(sl_udp_addr_bytes(&a.ss, a.len));
+}
+
+/* "1.2.3.4:53" or "[::1]:53"; "" for bytes that are no address. */
+static const char *sl_net_addr_str(sl_bytes *b) {
+    sl_udp_addr a;
+    if (sl_udp_addr_of(b, &a) != 0)
+        return "";
+    char ip[INET6_ADDRSTRLEN];
+    char out[INET6_ADDRSTRLEN + 10];
+    sl_rt_preempt_disable();
+    if (a.ss.ss_family == AF_INET) {
+        struct sockaddr_in *v4 = (struct sockaddr_in *)&a.ss;
+        inet_ntop(AF_INET, &v4->sin_addr, ip, sizeof(ip));
+        snprintf(out, sizeof(out), "%s:%u", ip, ntohs(v4->sin_port));
+    } else {
+        struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)&a.ss;
+        inet_ntop(AF_INET6, &v6->sin6_addr, ip, sizeof(ip));
+        snprintf(out, sizeof(out), "[%s]:%u", ip, ntohs(v6->sin6_port));
+    }
+    sl_rt_preempt_enable();
+    return sl_strdup(out);
+}
+
+/* One datagram to addr. A datagram goes whole or not at all, so the
+ * count is always len(data). EAGAIN (a full socket buffer) parks. */
+static sl_res_i32_str *sl_net_send_to_u(int fd, sl_bytes *data, sl_bytes *to,
+                                        sl_until u) {
+    sl_udp_addr a;
+    if (sl_udp_addr_of(to, &a) != 0)
+        return sl_net_err_i32("send_to: not an address from udp_addr or recv_from");
+    if (u && sl_until_hit(u))
+        return sl_net_err_i32("timeout");
+    int epoch = sl_reactor_close_epoch(fd);
+    for (;;) {
+        ssize_t n = sendto(fd, data->ptr, (size_t)data->len, 0,
+                           (struct sockaddr *)&a.ss, a.len);
+        if (n >= 0)
+            return sl_net_ok_i32((int32_t)n);
+        if (errno == EINTR)
+            continue;
+        if (errno != EAGAIN && errno != EWOULDBLOCK && errno != ENOBUFS)
+            return sl_net_err_i32(strerror(errno));
+        if (sl_net_user_nonblock_contains((void *)(intptr_t)fd))
+            return sl_net_err_i32("would block");
+        int w = sl_reactor_wait_epoch(fd, SL_REACTOR_WRITE, 0, u, epoch);
+        if (w == -2)
+            return sl_net_err_i32("timeout");
+        if (w == SL_REACTOR_CLOSED)
+            return sl_net_err_i32("closed");
+    }
+}
+
+static sl_res_i32_str *sl_net_send_to(int fd, sl_bytes *data, sl_bytes *to) {
+    return sl_net_send_to_u(fd, data, to, 0);
+}
+
+static sl_res_i32_str *sl_net_send_to_until(int fd, sl_bytes *data,
+                                            sl_bytes *to, sl_until u) {
+    return sl_net_send_to_u(fd, data, to, u);
+}
+
+static sl_res__bytes__str *sl_net_dgram_err(const char *msg) {
+    sl_res__bytes__str *r = (sl_res__bytes__str *)sl_gc_alloc(
+        sizeof(sl_res__bytes__str), sl_gc_trace_sl_res__bytes__str);
+    r->ok = false;
+    r->e = sl_strdup(msg);
+    return r;
+}
+
+/* One datagram as [data, sender]. A datagram longer than max is an error
+ * ("truncated"), not a silent cut: the rest is gone either way, and a
+ * DNS client, say, must know to retry over TCP. Allocation happens only
+ * once the datagram is in (sl_net_recv_bytes says why). */
+static sl_res__bytes__str *sl_net_recv_from_u(int fd, int max, sl_until u) {
+    if (u && sl_until_hit(u))
+        return sl_net_dgram_err("timeout");
+    if (max <= 0 || max > SL_UDP_MAX) max = SL_UDP_MAX;
+    unsigned char *scratch = (unsigned char *)sl_recv_buf_get((size_t)max);
+    int epoch = sl_reactor_close_epoch(fd);
+    for (;;) {
+        struct sockaddr_storage from;
+        struct iovec iov = {scratch, (size_t)max};
+        struct msghdr mh;
+        memset(&mh, 0, sizeof(mh));
+        mh.msg_name = &from;
+        mh.msg_namelen = sizeof(from);
+        mh.msg_iov = &iov;
+        mh.msg_iovlen = 1;
+        ssize_t n = recvmsg(fd, &mh, 0);
+        if (n >= 0) {
+            if (mh.msg_flags & MSG_TRUNC) {
+                sl_recv_buf_put(scratch);
+                return sl_net_dgram_err("truncated");
+            }
+            sl_bytes *data = sl_net_recv_bytes(scratch, (long long)n);
+            sl_recv_buf_put(scratch);
+            sl_bytes *addr = sl_udp_addr_bytes(&from, mh.msg_namelen);
+            sl_arr *pair = sl_arr_new(sizeof(sl_bytes *), 1);
+            sl_arr_push(pair, &data, sizeof(sl_bytes *));
+            sl_arr_push(pair, &addr, sizeof(sl_bytes *));
+            sl_res__bytes__str *r = (sl_res__bytes__str *)sl_gc_alloc(
+                sizeof(sl_res__bytes__str), sl_gc_trace_sl_res__bytes__str);
+            r->ok = true;
+            r->v = pair;
+            return r;
+        }
+        if (errno == EINTR)
+            continue;
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            int e = errno;
+            sl_recv_buf_put(scratch);
+            return sl_net_dgram_err(strerror(e));
+        }
+        if (sl_net_user_nonblock_contains((void *)(intptr_t)fd)) {
+            sl_recv_buf_put(scratch);
+            return sl_net_dgram_err("would block");
+        }
+        int wr = sl_reactor_wait_epoch(fd, SL_REACTOR_READ, 1, u, epoch);
+        if (wr < 0) {
+            sl_recv_buf_put(scratch);
+            return sl_net_dgram_err(wr == -2 ? "timeout"
+                                    : wr == SL_REACTOR_CLOSED ? "closed"
+                                                              : "interrupted");
+        }
+    }
+}
+
+static sl_res__bytes__str *sl_net_recv_from(int fd, int max) {
+    return sl_net_recv_from_u(fd, max, 0);
+}
+
+static sl_res__bytes__str *sl_net_recv_from_until(int fd, int max,
+                                                  sl_until u) {
+    return sl_net_recv_from_u(fd, max, u);
+}
+
+/* Join or leave multicast group `group` on interface `iface` ("" lets the
+ * kernel choose), IPv4 or IPv6 by the group's form. */
+static sl_res_bool_str *sl_udp_membership(int fd, const char *group,
+                                          const char *iface, int join) {
+    struct in_addr g4;
+    struct in6_addr g6;
+    unsigned idx = 0;
+    if (iface[0] != '\0') {
+        idx = if_nametoindex(iface);
+        if (idx == 0)
+            return sl_net_err_bool("unknown interface");
+    }
+    if (inet_pton(AF_INET, group, &g4) == 1) {
+        struct ip_mreq m;
+        memset(&m, 0, sizeof(m));
+        m.imr_multiaddr = g4;
+        m.imr_interface.s_addr = htonl(INADDR_ANY);
+        if (idx != 0) {
+            /* IPv4 names the interface by an address; ip_mreqn takes an
+               index but is Linux-only */
+#ifdef __linux__
+            struct ip_mreqn mn;
+            memset(&mn, 0, sizeof(mn));
+            mn.imr_multiaddr = g4;
+            mn.imr_ifindex = (int)idx;
+            if (setsockopt(fd, IPPROTO_IP,
+                           join ? IP_ADD_MEMBERSHIP : IP_DROP_MEMBERSHIP,
+                           &mn, sizeof(mn)) != 0)
+                return sl_net_err_bool(strerror(errno));
+            return sl_net_ok_bool(true);
+#else
+            return sl_net_err_bool("udp_join: an IPv4 interface by name needs Linux; pass \"\"");
+#endif
+        }
+        if (setsockopt(fd, IPPROTO_IP,
+                       join ? IP_ADD_MEMBERSHIP : IP_DROP_MEMBERSHIP, &m,
+                       sizeof(m)) != 0)
+            return sl_net_err_bool(strerror(errno));
+        return sl_net_ok_bool(true);
+    }
+    if (inet_pton(AF_INET6, group, &g6) == 1) {
+        struct ipv6_mreq m;
+        memset(&m, 0, sizeof(m));
+        m.ipv6mr_multiaddr = g6;
+        m.ipv6mr_interface = idx;
+        if (setsockopt(fd, IPPROTO_IPV6,
+                       join ? IPV6_JOIN_GROUP : IPV6_LEAVE_GROUP, &m,
+                       sizeof(m)) != 0)
+            return sl_net_err_bool(strerror(errno));
+        return sl_net_ok_bool(true);
+    }
+    return sl_net_err_bool("not a multicast group address");
+}
+
+static sl_res_bool_str *sl_net_udp_join(int fd, const char *group,
+                                        const char *iface) {
+    return sl_udp_membership(fd, group, iface, 1);
+}
+
+static sl_res_bool_str *sl_net_udp_leave(int fd, const char *group,
+                                         const char *iface) {
+    return sl_udp_membership(fd, group, iface, 0);
+}
+
+/* ---- listener options and socket options ------------------------------ */
+
+typedef struct {
+    int reuseport;
+    int v6only;
+    int backlog;   /* 0: the default (1024, as net.listen) */
+    int fastopen;  /* TCP Fast Open queue length; 0: off */
+} sl_listen_opts;
+
+/* "reuseport v6only backlog=4096 fastopen=256", words separated by
+ * spaces or commas. Unknown words are an error, not ignored: a typo in a
+ * tuning flag should not pass silently. Returns NULL or the error text. */
+static const char *sl_net_parse_listen_opts(const char *s, sl_listen_opts *o) {
+    memset(o, 0, sizeof(*o));
+    const char *p = s;
+    while (*p) {
+        while (*p == ' ' || *p == ',') p++;
+        if (!*p) break;
+        const char *w = p;
+        while (*p && *p != ' ' && *p != ',') p++;
+        size_t n = (size_t)(p - w);
+        const char *eq = memchr(w, '=', n);
+        size_t key = eq ? (size_t)(eq - w) : n;
+        long val = 0;
+        if (eq) {
+            char *end = NULL;
+            val = strtol(eq + 1, &end, 10);
+            if (end != p || eq + 1 == p || val < 0 || val > 1 << 20)
+                return "listen_with: bad number in option";
+        }
+        if (key == 9 && !memcmp(w, "reuseport", 9) && !eq) o->reuseport = 1;
+        else if (key == 6 && !memcmp(w, "v6only", 6) && !eq) o->v6only = 1;
+        else if (key == 7 && !memcmp(w, "backlog", 7) && eq) o->backlog = (int)val;
+        else if (key == 8 && !memcmp(w, "fastopen", 8) && eq) o->fastopen = (int)val;
+        else return "listen_with: unknown option (want reuseport, v6only, backlog=N, fastopen=N)";
+    }
+    return NULL;
+}
+
+/* host as an IP literal ("" is any IPv4 address) and port into ss:
+ * sl_udp_parse_ip, which UDP's bind already uses. */
+static int sl_net_ip_literal(const char *host, int port,
+                             struct sockaddr_storage *ss, socklen_t *len) {
+    sl_udp_addr a;
+    if (sl_udp_parse_ip(host, port, &a) != 0)
+        return -1;
+    *ss = a.ss;
+    *len = a.len;
+    return 0;
+}
+
+/* net.listen with a bind address and options; see pkg_net/sigs.c. */
+static sl_res_i32_str *sl_net_listen_with(const char *host, int port,
+                                          const char *opts) {
+    sl_listen_opts o;
+    const char *bad = sl_net_parse_listen_opts(opts, &o);
+    if (bad)
+        return sl_net_err_i32(bad);
+    struct sockaddr_storage ss;
+    socklen_t alen = 0;
+    if (sl_net_ip_literal(host, port, &ss, &alen) != 0)
+        return sl_net_err_i32(port < 0 || port > 65535
+                                  ? "port out of range"
+                                  : "listen_with: host must be an IP address or \"\"");
+    int fd = socket(ss.ss_family, SOCK_STREAM, 0);
+    if (fd < 0)
+        return sl_net_err_i32(strerror(errno));
+    int one = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    if (o.reuseport) {
+#ifdef SO_REUSEPORT
+        if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one)) != 0) {
+            int e = errno; close(fd);
+            return sl_net_err_i32(strerror(e));
+        }
+#else
+        close(fd);
+        return sl_net_err_i32("listen_with: reuseport is not supported on this system");
+#endif
+    }
+    if (ss.ss_family == AF_INET6) {
+        /* Pin it either way: the default differs between systems (and a
+           sysctl), so "::" would mean IPv4 too on one host and not on
+           another. */
+        int v = o.v6only;
+        setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &v, sizeof(v));
+    } else if (o.v6only) {
+        close(fd);
+        return sl_net_err_i32("listen_with: v6only needs an IPv6 host");
+    }
+    if (bind(fd, (struct sockaddr *)&ss, alen) != 0) {
+        int e = errno; close(fd);
+        return sl_net_err_i32(strerror(e));
+    }
+    if (o.fastopen > 0) {
+#if defined(TCP_FASTOPEN) && defined(__linux__)
+        int q = o.fastopen;
+        setsockopt(fd, IPPROTO_TCP, TCP_FASTOPEN, &q, sizeof(q));
+#elif defined(TCP_FASTOPEN)
+        int on = 1; /* macOS takes a flag, not a queue length */
+        setsockopt(fd, IPPROTO_TCP, TCP_FASTOPEN, &on, sizeof(on));
+#endif
+        /* best effort: a kernel with Fast Open turned off still listens */
+    }
+    if (listen(fd, o.backlog > 0 ? o.backlog : 1024) != 0) {
+        int e = errno; close(fd);
+        return sl_net_err_i32(strerror(e));
+    }
+    sl_net_set_nonblocking(fd);
+    sl_rt_preempt_disable();
+    sl_reactor_clear_closing(fd);
+    sl_rt_preempt_enable();
+    return sl_net_ok_i32((int32_t)fd);
+}
+
+static sl_res_int_str *sl_net_ok_int(long long v) {
+    sl_res_int_str *r = (sl_res_int_str *)sl_gc_alloc(
+        sizeof(sl_res_int_str), sl_gc_trace_sl_res_int_str);
+    r->ok = true;
+    r->v = v;
+    return r;
+}
+
+static sl_res_int_str *sl_net_err_int(const char *msg) {
+    sl_res_int_str *r = (sl_res_int_str *)sl_gc_alloc(
+        sizeof(sl_res_int_str), sl_gc_trace_sl_res_int_str);
+    r->ok = false;
+    r->e = sl_strdup(msg);
+    return r;
+}
+
+static int sl_net_family(int fd) {
+    struct sockaddr_storage ss;
+    socklen_t n = sizeof(ss);
+    if (getsockname(fd, (struct sockaddr *)&ss, &n) != 0)
+        return AF_INET;
+    return ss.ss_family;
+}
+
+/* An option name to (level, optname). Returns 0, or -1 for an unknown
+ * name, -2 for one this system lacks. "linger" is handled by the
+ * callers. */
+static int sl_net_opt_of(int fd, const char *name, int *level, int *opt) {
+    int v6 = sl_net_family(fd) == AF_INET6;
+    if (!strcmp(name, "nodelay")) { *level = IPPROTO_TCP; *opt = TCP_NODELAY; return 0; }
+    if (!strcmp(name, "keepalive")) { *level = SOL_SOCKET; *opt = SO_KEEPALIVE; return 0; }
+    if (!strcmp(name, "keepidle")) {
+        *level = IPPROTO_TCP;
+#if defined(TCP_KEEPIDLE)
+        *opt = TCP_KEEPIDLE;
+#elif defined(TCP_KEEPALIVE)
+        *opt = TCP_KEEPALIVE; /* macOS's name for the idle time */
+#else
+        return -2;
+#endif
+        return 0;
+    }
+    if (!strcmp(name, "keepintvl")) {
+#ifdef TCP_KEEPINTVL
+        *level = IPPROTO_TCP; *opt = TCP_KEEPINTVL; return 0;
+#else
+        return -2;
+#endif
+    }
+    if (!strcmp(name, "keepcnt")) {
+#ifdef TCP_KEEPCNT
+        *level = IPPROTO_TCP; *opt = TCP_KEEPCNT; return 0;
+#else
+        return -2;
+#endif
+    }
+    if (!strcmp(name, "quickack")) {
+#ifdef TCP_QUICKACK
+        *level = IPPROTO_TCP; *opt = TCP_QUICKACK; return 0;
+#else
+        return -2;
+#endif
+    }
+    if (!strcmp(name, "rcvbuf")) { *level = SOL_SOCKET; *opt = SO_RCVBUF; return 0; }
+    if (!strcmp(name, "sndbuf")) { *level = SOL_SOCKET; *opt = SO_SNDBUF; return 0; }
+    if (!strcmp(name, "broadcast")) { *level = SOL_SOCKET; *opt = SO_BROADCAST; return 0; }
+    if (!strcmp(name, "ttl")) {
+        if (v6) { *level = IPPROTO_IPV6; *opt = IPV6_UNICAST_HOPS; }
+        else { *level = IPPROTO_IP; *opt = IP_TTL; }
+        return 0;
+    }
+    if (!strcmp(name, "multicast_ttl")) {
+        if (v6) { *level = IPPROTO_IPV6; *opt = IPV6_MULTICAST_HOPS; }
+        else { *level = IPPROTO_IP; *opt = IP_MULTICAST_TTL; }
+        return 0;
+    }
+    if (!strcmp(name, "multicast_loop")) {
+        if (v6) { *level = IPPROTO_IPV6; *opt = IPV6_MULTICAST_LOOP; }
+        else { *level = IPPROTO_IP; *opt = IP_MULTICAST_LOOP; }
+        return 0;
+    }
+    return -1;
+}
+
+static const char *sl_net_opt_err(int rc) {
+    return rc == -2 ? "option not supported on this system"
+                    : "unknown option (want nodelay, keepalive, keepidle, "
+                      "keepintvl, keepcnt, quickack, rcvbuf, sndbuf, linger, "
+                      "broadcast, ttl, multicast_ttl, multicast_loop)";
+}
+
+/* IPv4 multicast ttl and loop are a byte on BSD and macOS, an int or a
+ * byte on Linux: pass a byte for those two everywhere. */
+static int sl_net_opt_is_byte(int level, int opt) {
+    return level == IPPROTO_IP &&
+           (opt == IP_MULTICAST_TTL || opt == IP_MULTICAST_LOOP);
+}
+
+static sl_res_bool_str *sl_net_set_opt(int fd, const char *name, int value) {
+    if (!strcmp(name, "linger")) {
+        /* seconds to block close() flushing unsent data; -1 turns it off
+           (the default), 0 resets the connection on close */
+        struct linger l;
+        l.l_onoff = value >= 0;
+        l.l_linger = value >= 0 ? value : 0;
+        if (setsockopt(fd, SOL_SOCKET, SO_LINGER, &l, sizeof(l)) != 0)
+            return sl_net_err_bool(strerror(errno));
+        return sl_net_ok_bool(true);
+    }
+    int level = 0, opt = 0;
+    int rc = sl_net_opt_of(fd, name, &level, &opt);
+    if (rc != 0)
+        return sl_net_err_bool(sl_net_opt_err(rc));
+    int r;
+    if (sl_net_opt_is_byte(level, opt)) {
+        unsigned char b = (unsigned char)value;
+        r = setsockopt(fd, level, opt, &b, sizeof(b));
+    } else {
+        r = setsockopt(fd, level, opt, &value, sizeof(value));
+    }
+    if (r != 0)
+        return sl_net_err_bool(strerror(errno));
+    return sl_net_ok_bool(true);
+}
+
+static sl_res_int_str *sl_net_get_opt(int fd, const char *name) {
+    if (!strcmp(name, "linger")) {
+        struct linger l;
+        socklen_t n = sizeof(l);
+        if (getsockopt(fd, SOL_SOCKET, SO_LINGER, &l, &n) != 0)
+            return sl_net_err_int(strerror(errno));
+        return sl_net_ok_int(l.l_onoff ? l.l_linger : -1);
+    }
+    int level = 0, opt = 0;
+    int rc = sl_net_opt_of(fd, name, &level, &opt);
+    if (rc != 0)
+        return sl_net_err_int(sl_net_opt_err(rc));
+    if (sl_net_opt_is_byte(level, opt)) {
+        unsigned char b = 0;
+        socklen_t n = sizeof(b);
+        if (getsockopt(fd, level, opt, &b, &n) != 0)
+            return sl_net_err_int(strerror(errno));
+        return sl_net_ok_int(b);
+    }
+    int v = 0;
+    socklen_t n = sizeof(v);
+    if (getsockopt(fd, level, opt, &v, &n) != 0)
+        return sl_net_err_int(strerror(errno));
+    /* boolean options read back as any non-zero value: report 1 */
+    if ((level == IPPROTO_TCP && opt == TCP_NODELAY) ||
+        (level == SOL_SOCKET && (opt == SO_KEEPALIVE || opt == SO_BROADCAST)))
+        v = v != 0;
+    return sl_net_ok_int(v);
+}
+
+/* ---- send_file ----------------------------------------------------------
+ *
+ * A file's bytes to a socket without copying them through the program:
+ * sendfile(2) on Linux and macOS moves them from the page cache to the
+ * socket inside the kernel. Elsewhere, and for TLS (which must encrypt
+ * in user space), the bytes go through one pooled 64 KB buffer, never the
+ * slang heap. A page-cache miss still blocks this worker on the disk read,
+ * as fs.pread does. */
+
+#define SL_SENDFILE_CHUNK (64 * 1024)
+
+#if defined(__APPLE__)
+/* <sys/socket.h> declares it only without the POSIX feature macros the
+   generated code sets; this is its documented prototype. */
+struct sf_hdtr;
+int sendfile(int, int, off_t, off_t *, struct sf_hdtr *, int);
+#endif
+
+static sl_res_int_str *sl_sendfile_ok(long long v) {
+    sl_res_int_str *r = (sl_res_int_str *)sl_gc_alloc(
+        sizeof(sl_res_int_str), sl_gc_trace_sl_res_int_str);
+    r->ok = true;
+    r->v = v;
+    return r;
+}
+
+static sl_res_int_str *sl_sendfile_err(const char *msg) {
+    sl_res_int_str *r = (sl_res_int_str *)sl_gc_alloc(
+        sizeof(sl_res_int_str), sl_gc_trace_sl_res_int_str);
+    r->ok = false;
+    r->e = sl_strdup(msg);
+    return r;
+}
+
+/* The byte count to send: count, or (count < 0) the rest of the file
+ * from off. Returns -1 with *msg set for bad arguments. */
+static long long sl_sendfile_span(int file, long long off, long long count,
+                                  const char **msg) {
+    if (off < 0) { *msg = "send_file: negative offset"; return -1; }
+    if (count >= 0) return count;
+    struct stat st;
+    if (fstat(file, &st) != 0) { *msg = strerror(errno); return -1; }
+    if (!S_ISREG(st.st_mode)) { *msg = "send_file: not a regular file"; return -1; }
+    return st.st_size > off ? (long long)st.st_size - off : 0;
+}
+
+static sl_res_int_str *sl_net_send_file_u(int sock, int file, long long off,
+                                          long long count, sl_until u) {
+    const char *msg = NULL;
+    long long want = sl_sendfile_span(file, off, count, &msg);
+    if (want < 0) return sl_sendfile_err(msg);
+    if (want == 0) return sl_sendfile_ok(0);
+    if (u && sl_until_hit(u)) return sl_sendfile_err("timeout");
+    int user_nb = sl_net_user_nonblock_contains((void *)(intptr_t)sock);
+    int epoch = sl_reactor_close_epoch(sock);
+    long long sent = 0;
+    while (sent < want) {
+        long long step = want - sent;
+        if (step > (1LL << 30)) step = 1LL << 30;
+        long long n = 0;
+        int e = 0;
+#if defined(__linux__)
+        off_t o = (off_t)(off + sent);
+        ssize_t r = sendfile(sock, file, &o, (size_t)step);
+        if (r > 0) n = r;
+        else if (r == 0) break;          /* the file ended early */
+        else e = errno;
+#elif defined(__APPLE__)
+        off_t len = (off_t)step;
+        int r = sendfile(file, sock, (off_t)(off + sent), &len, NULL, 0);
+        n = (long long)len;               /* set even on EAGAIN */
+        if (r != 0) e = errno;
+        else if (len == 0) break;         /* the file ended early */
+#else
+        unsigned char *buf = (unsigned char *)sl_recv_buf_get(SL_SENDFILE_CHUNK);
+        ssize_t got = pread(file, buf, (size_t)(step < SL_SENDFILE_CHUNK ? step : SL_SENDFILE_CHUNK),
+                            (off_t)(off + sent));
+        if (got <= 0) {
+            sl_recv_buf_put(buf);
+            if (got == 0) break;
+            return sl_sendfile_err(strerror(errno));
+        }
+        /* a datagram-free stream socket: send all of it, parking as needed */
+        ssize_t done = 0;
+        while (done < got) {
+            ssize_t w = send(sock, buf + done, (size_t)(got - done), 0);
+            if (w >= 0) { done += w; continue; }
+            if (errno == EINTR) continue;
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                int we = errno; sl_recv_buf_put(buf);
+                return sl_sendfile_err(strerror(we));
+            }
+            int wt = sl_reactor_wait_epoch(sock, SL_REACTOR_WRITE, 0, u, epoch);
+            if (wt == -2) { sl_recv_buf_put(buf); return sl_sendfile_err("timeout"); }
+            if (wt == SL_REACTOR_CLOSED) { sl_recv_buf_put(buf); return sl_sendfile_err("closed"); }
+        }
+        sl_recv_buf_put(buf);
+        n = got;
+#endif
+        sent += n;
+        if (e == 0 || e == EINTR) continue;
+        if (e != EAGAIN && e != EWOULDBLOCK)
+            return sl_sendfile_err(strerror(e));
+        if (user_nb) {
+            /* net.nonblock's contract: never park. What went out is
+               reported; nothing is lost. */
+            if (sent > 0) return sl_sendfile_ok(sent);
+            return sl_sendfile_err("would block");
+        }
+        int w = sl_reactor_wait_epoch(sock, SL_REACTOR_WRITE, 0, u, epoch);
+        if (w == -2) return sl_sendfile_err("timeout");
+        if (w == SL_REACTOR_CLOSED) return sl_sendfile_err("closed");
+    }
+    return sl_sendfile_ok(sent);
+}
+
+static sl_res_int_str *sl_net_send_file(int sock, int file, long long off,
+                                        long long count) {
+    return sl_net_send_file_u(sock, file, off, count, 0);
+}
+
+static sl_res_int_str *sl_net_send_file_until(int sock, int file,
+                                              long long off, long long count,
+                                              sl_until u) {
+    return sl_net_send_file_u(sock, file, off, count, u);
+}
+
+/* Listening sockets passed in by a parent (proc.spawn_fds) or by systemd
+ * socket activation: LISTEN_FDS of them from fd 3 up. A LISTEN_PID, when
+ * set, must be this process (systemd sets it; spawn_fds cannot know the
+ * pid in advance and leaves it out). The variables are removed once read,
+ * so this program's own children do not take the count for theirs, and a
+ * second call returns nothing. */
+static sl_arr *sl_net_inherited(void) {
+    sl_arr *out = sl_arr_new(sizeof(int32_t), SL_ELEM_NOPTR);
+    sl_rt_preempt_disable();
+    const char *n_s = getenv("LISTEN_FDS");
+    const char *pid_s = getenv("LISTEN_PID");
+    long n = n_s ? strtol(n_s, NULL, 10) : 0;
+    int mine = !pid_s || strtol(pid_s, NULL, 10) == (long)getpid();
+    unsetenv("LISTEN_FDS");
+    unsetenv("LISTEN_PID");
+    unsetenv("LISTEN_FDNAMES");
+    sl_rt_preempt_enable();
+    if (!mine || n <= 0 || n > 64)
+        return out;
+    for (int fd = 3; fd < 3 + (int)n; fd++) {
+        if (fcntl(fd, F_GETFD) < 0)
+            continue;
+        sl_net_set_nonblocking(fd);
+        fcntl(fd, F_SETFD, FD_CLOEXEC);
+        sl_rt_preempt_disable();
+        sl_reactor_clear_closing(fd);
+        sl_rt_preempt_enable();
+        int32_t v = (int32_t)fd;
+        sl_arr_push(out, &v, sizeof(int32_t));
+    }
+    return out;
+}
+
 static int sl_link_fault_kind(int e) {
     if (e == ETIMEDOUT)
         return SL_FAULT_TIMEOUT;
@@ -2429,49 +3405,17 @@ static sl_res_link_fault sl_link_accept(sl_link *ln, sl_until u) {
 
 static sl_res_link_fault sl_link_dial(const char *host, long long port,
                                      sl_until u) {
-    char portstr[16];
-    sl_rt_preempt_disable();
-    snprintf(portstr, sizeof(portstr), "%d", (int)port);
-    sl_rt_preempt_enable();
-    struct addrinfo *res = NULL;
-    int rc = sl_dns_lookup(host, portstr, &res);
-    if (rc != 0 || !res)
-        return sl_link_err_link(sl_fault_op(SL_FAULT_REFUSED, rc, "dial"));
-    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd < 0) {
-        freeaddrinfo(res);
-        return sl_link_err_link(sl_link_fault_op("dial", errno));
-    }
-    sl_net_set_nonblocking(fd);
-    int cres = connect(fd, res->ai_addr, res->ai_addrlen);
-    freeaddrinfo(res);
-    if (cres == 0) {
-        sl_reactor_mark_persistent(fd);
+    int err = 0, gai = 0;
+    int fd = sl_net_dial_fd(host, (int)port, u, &err, &gai);
+    if (fd >= 0)
         return sl_link_ok_link(sl_link_from_fd(fd));
-    }
-    if (errno != EINPROGRESS) {
-        int e = errno;
-        close(fd);
-        return sl_link_err_link(sl_link_fault_op("connect", e));
-    }
-    int w = sl_reactor_wait_until(fd, SL_REACTOR_WRITE, 1, u);
-    if (w == -2) {
-        close(fd);
+    if (err == -2)
         return sl_link_err_link(sl_fault_op(SL_FAULT_TIMEOUT, 0, "connect"));
-    }
-    if (w < 0) {
-        close(fd);
+    if (err == -3)
+        return sl_link_err_link(sl_fault_op(SL_FAULT_REFUSED, gai, "dial"));
+    if (err == EINTR)
         return sl_link_err_link(sl_fault_op(SL_FAULT_CLOSED, 0, "connect"));
-    }
-    int so_err = 0;
-    socklen_t slen = sizeof(so_err);
-    getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_err, &slen);
-    if (so_err != 0) {
-        close(fd);
-        return sl_link_err_link(sl_link_fault_op("connect", so_err));
-    }
-    sl_reactor_mark_persistent(fd);
-    return sl_link_ok_link(sl_link_from_fd(fd));
+    return sl_link_err_link(sl_link_fault_op("connect", err));
 }
 
 static sl_res_int_fault sl_link_send(sl_link *l, sl_wire w, sl_until u) {

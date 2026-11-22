@@ -38,6 +38,42 @@ const NatSig NET_SIGS[] = {
      * which would call every dead connection alive. */
     {"net", "idle_alive", 1, {NA_INT}, "bool", 0},
     {"net", "nonblock", 1, {NA_INT}, "result[bool,str]", 0},
+    /* listeners passed in by proc.spawn_fds or systemd socket activation
+       (LISTEN_FDS); empty when there are none */
+    {"net", "inherited", 0, {0}, "[i32]", 0},
+    /* A file's bytes (from fs.open) to a socket: count bytes from off, or
+     * to the end of the file for a negative count. sendfile(2) on Linux
+     * and macOS, so the bytes never pass through the program. Returns the
+     * count sent, short only if the file ended first. */
+    {"net", "send_file", 4, {NA_INT, NA_INT, NA_I64, NA_I64}, "result[int,str]", 0},
+    {"net", "send_file_until", 5, {NA_INT, NA_INT, NA_I64, NA_I64, NA_UNTIL},
+     "result[int,str]", 0},
+    /* A listener on one address with options: "reuseport" (one accept
+     * queue per socket, the kernel spreading connections), "v6only",
+     * "backlog=N", "fastopen=N". host is an IP literal or "" (any IPv4). */
+    {"net", "listen_with", 3, {NA_STR, NA_INT, NA_STR}, "result[i32,str]", 0},
+    /* Socket options by name: nodelay, keepalive, keepidle, keepintvl,
+     * keepcnt, quickack, rcvbuf, sndbuf, linger, broadcast, ttl,
+     * multicast_ttl, multicast_loop. Booleans are 0/1, times seconds. */
+    {"net", "set_opt", 3, {NA_INT, NA_STR, NA_INT}, "result[bool,str]", 0},
+    {"net", "get_opt", 2, {NA_INT, NA_STR}, "result[int,str]", 0},
+    /* UDP. An address (udp_addr, recv_from's second element) is an opaque
+     * bytes value send_to takes back as is; addr_str prints it. recv_from
+     * gives [data, sender]; a datagram over max is the error "truncated".
+     * udp_bind_shared lets several sockets bind one port (multicast). */
+    {"net", "udp_bind", 2, {NA_STR, NA_INT}, "result[i32,str]", 0},
+    {"net", "udp_bind_shared", 2, {NA_STR, NA_INT}, "result[i32,str]", 0},
+    {"net", "udp_dial", 3, {NA_STR, NA_INT, NA_UNTIL}, "result[i32,str]", 0},
+    {"net", "udp_addr", 3, {NA_STR, NA_INT, NA_UNTIL}, "result[bytes,str]", 0},
+    {"net", "addr_str", 1, {NA_BYTES}, "str", 0},
+    {"net", "send_to", 3, {NA_INT, NA_BYTES, NA_BYTES}, "result[i32,str]", 0},
+    {"net", "send_to_until", 4, {NA_INT, NA_BYTES, NA_BYTES, NA_UNTIL},
+     "result[i32,str]", 0},
+    {"net", "recv_from", 2, {NA_INT, NA_INT}, "result[[bytes],str]", 0},
+    {"net", "recv_from_until", 3, {NA_INT, NA_INT, NA_UNTIL},
+     "result[[bytes],str]", 0},
+    {"net", "udp_join", 3, {NA_INT, NA_STR, NA_STR}, "result[bool,str]", 0},
+    {"net", "udp_leave", 3, {NA_INT, NA_STR, NA_STR}, "result[bool,str]", 0},
     {"net", "tls_server_ctx", 2, {NA_STR, NA_STR}, "result[rawptr,str]", 1},
     {"net", "tls_client_ctx", 1, {NA_STR}, "result[rawptr,str]", 1},
     {"net", "tls_accept", 2, {NA_INT, NA_RAWPTR}, "result[rawptr,str]", 1},
@@ -60,6 +96,11 @@ const NatSig NET_SIGS[] = {
     {"net", "tls_close", 1, {NA_RAWPTR}, NULL, 1},
     /* idle_alive for a TLS connection: also false when OpenSSL already
        holds decrypted-but-unread bytes (a close_notify, or anything). */
+    /* send_file over TLS: through one pooled 64 KB chunk */
+    {"net", "tls_send_file", 4, {NA_RAWPTR, NA_INT, NA_I64, NA_I64},
+     "result[int,str]", 1},
+    {"net", "tls_send_file_until", 5,
+     {NA_RAWPTR, NA_INT, NA_I64, NA_I64, NA_UNTIL}, "result[int,str]", 1},
     {"net", "tls_idle_alive", 1, {NA_RAWPTR}, "bool", 1},
     {"net", "tls_ctx_require_client", 2, {NA_RAWPTR, NA_STR}, "result[bool,str]", 1},
     {"net", "tls_ctx_use_cert", 3, {NA_RAWPTR, NA_STR, NA_STR}, "result[bool,str]", 1},

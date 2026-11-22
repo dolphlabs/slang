@@ -1,0 +1,9 @@
+options: read back
+reuseport: shared, plain refused
+ipv6 listener: bound
+listen_with: unknown option (want reuseport, v6only, backlog=N, fastopen=N)
+listen_with: bad number in option
+listen_with: host must be an IP address or ""
+listen_with: v6only needs an IPv6 host
+unknown option (want nodelay, keepalive, keepidle, keepintvl, keepcnt, quickack, rcvbuf, sndbuf, linger, broadcast, ttl, multicast_ttl, multicast_loop)
+done

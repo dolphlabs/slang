@@ -1,0 +1,4 @@
+handoff: child accepted on both ports, fds 3 and 4 in order
+proc.spawn_fds: not an open fd
+proc.spawn_fds: no fds to pass
+wait_idle_until: false at the deadline, then true

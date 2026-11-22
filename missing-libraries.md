@@ -1,165 +1,137 @@
 # Missing libraries
 
-What slang's packages lack for building backend services, found 2026-10-27
-by checking the builtins (`src/codegen/core.c`), the standard library
-(`stdlib/`, `src/codegen/pkg_*`), the separate packages (`slangpackages/`),
-zokor, and what the `say` and `sendbyte` services had to write by hand.
+What slang needs to be a rich language for server and network programming,
+written 2026-11-22 after the earlier plan (core library, money and
+identity, integrations, formats, math for servers) had landed; that plan
+is in this file's git history up to #596.
 
-Tick a box when the package (or the item within it) has landed on `dev`, and
-add the PR number. Each item is its own branch and PR, as AGENTS.md says.
+Work the sections in order, one item at a time: one branch and one PR to
+`dev` per item, never stacked, as AGENTS.md says. Tick a box when the item
+has landed on `dev` and add the PR number. Record before/after numbers for
+anything on a hot path.
 
-**Where it lives:** *stdlib* means a package in this repo (`stdlib/` or a
-native `src/codegen/pkg_*`); *package* means a standalone repo like
-`slangpackages/jwt`.
+**Where it lives:** *stdlib* means this repo (`stdlib/` or a native
+`src/codegen/pkg_*` with its runtime in `runtime/`); *package* means a
+standalone repo under `slangpackages/`.
 
-## 1. Core library
+## 1. Networking primitives
 
-The basics nearly every program needs. None of these exist as a builtin or in
-any package.
+`net` has TCP and Unix stream sockets only.
 
-- [x] **`sort`** (stdlib): sort lists of ints, floats and strings, and lists
-  of structs by a key function; stable sort; binary search on sorted lists.
-  PR #468.
-- [x] **`math`** (stdlib): `abs`, `min`, `max`, `clamp`, `floor`, `ceil`,
-  `round`, `sqrt`, `pow`, `log`, `exp`, trigonometry, `is_nan`/`is_inf`, and
-  overflow-checked integer helpers (`checked_add`, `checked_mul`, ...).
-  Evidence: `say` wrote its own `checked_mul` for money
-  (`say/src/ledger/domain/money.sl`). Planned in full in `math-plan.md`.
-  PR #477 (`math`), #481 (`math/stats`, `math/numtheory`), #483, #485.
-  Still to build, per `math-plan.md` phases 3 to 5:
-  - [ ] `math/complex`
-  - [ ] `math/linalg` (fixed-size)
-  - [x] `math/big`: Int and Rat, Karatsuba, Montgomery `mod_pow`. PR #595.
-- [x] **`rand`** (stdlib): a fast, non-cryptographic random number generator
-  with an explicit seed, so tests stay deterministic: ints in a range,
-  floats, shuffle, pick, and jitter for retry backoff. `crypto.rand` stays
-  the source for secrets. PR #506.
-- [x] **`uuid`** (stdlib): v4 (random) and v7 (time-ordered, good as a
-  database key), parse, validate, format. Evidence: `say` builds UUIDs by
-  hand in five places (`platform/app/app.sl`, `markets/service/service.sl`,
-  `exchange/domain/types.sl`, `ledger/domain/money.sl`, a test helper), and
-  the main one always forces the variant digit to `a`. PR #505.
-- [x] **Unicode / UTF-8** (stdlib, `strings` or its own package): iterate a
-  string by character, validate UTF-8, count characters (not bytes),
-  case-fold. Needed for username rules and text length limits. Built as
-  the native `unicode` package, with NFC/NFD normalisation as well.
-  Compatibility normalisation (NFKC) and grapheme clusters are not in it.
+- [x] **UDP** (stdlib, `net`): bind, `send_to`, `recv_from` with deadlines
+  on the reactor, connected UDP, and multicast join/leave. DNS, syslog,
+  StatsD, game and voice servers, and later QUIC need it. PR #600 (open).
+- [x] **Socket options** (stdlib, `net`): `SO_REUSEPORT` listeners (one
+  accept queue per core), `TCP_NODELAY`, keepalive idle/interval/count,
+  listen backlog, and `TCP_FASTOPEN` where the OS has it. PR #601 (open).
+- [x] **Zero-copy file sends** (stdlib, `net`/`fs`): `sendfile` (and
+  `splice` on Linux) from a file to a socket, used by `http` for static
+  files. PR #602 (open).
+- [x] **PROXY protocol v1/v2** (stdlib): parse the header HAProxy and AWS
+  NLB put in front of a connection, so servers see the real client address. PR #606 (open).
+- [ ] **DNS resolver** (stdlib): A/AAAA/CNAME lookups over UDP with TCP
+  fallback, `/etc/resolv.conf` and `/etc/hosts`, a TTL cache, timeouts,
+  and happy-eyeballs dialing (RFC 8305). `net.dial` resolves IPv4 only
+  today, so it cannot reach an IPv6 address: #614 fixes that.
+  Status: IPv6 dialing with happy eyeballs is in #614; the
+  wire-protocol client with a TTL cache waits for UDP (#600) to merge.
+- [x] **Graceful restart and draining** (stdlib): hand listening sockets to
+  a new process, stop accepting, and drain open connections with a
+  deadline. PR #626 (open).
 
-## 2. Money and identity
+## 2. Resilience
 
-What `say` (the exchange) needs and currently hand-rolls.
+- [x] **Cancellation contexts** (stdlib): a deadline and cancel signal that
+  flows from a request through `httpc`, `pg`, `redis` and the other
+  clients, so one timeout stops everything under it. PR #603 (open).
+- [x] **Generic connection pool** (stdlib): health checks, max idle/open,
+  idle and lifetime limits, fair FIFO waiting, wait-time metrics. The
+  speed audit found Slang's pool-acquisition p99 above Go's on every route. PR #604 (open).
+- [x] **Failure handling** (stdlib): circuit breaker, bulkhead, retry with a
+  retry budget (over `rand.backoff`), token-bucket and GCRA rate limiters,
+  and request hedging. PR #611 (open).
+- [x] **Singleflight** (stdlib): concurrent identical calls share one
+  execution, for cache stampedes. PR #612 (open).
 
-- [x] **`decimal`** (stdlib): fixed-point decimal arithmetic for money: parse
-  and format, add, subtract, multiply and divide with an explicit scale and
-  rounding mode, compare, overflow as an error rather than a wrap. JSON and
-  Postgres `numeric` round-trips. Evidence: `say` writes its own decimal
-  encoding (`exchange/domain/bytes.sl`). 38 digits, seven rounding modes,
-  split/allocate, JSON (exact string) and `pg.arg_decimal`/`get_decimal`.
-- [x] **`crypto` additions** (stdlib). It has SHA-256/HMAC-SHA256, SHA-1,
-  MD5, PBKDF2, Argon2id and RSA verify (SHA-256) only. Missing:
-  - [x] authenticated encryption: AES-256-GCM and ChaCha20-Poly1305, for
-    data at rest and encrypted cookies (zokor's cookies are signed, not
-    encrypted)
-  - [x] Ed25519 sign and verify
-  - [x] ECDSA P-256 sign and verify
-  - [x] RSA sign (PKCS#1 v1.5 and PSS, SHA-256)
-  - [x] SHA-512 and HMAC-SHA512
-  - [x] HKDF
-  - [x] constant-time comparison as a public function
-- [x] **`jwt` algorithms and JWKS** (package `slangpackages/jwt`). It
-  supports HS256 only. Missing:
-  - [x] RS256 (verify and sign)
-  - [x] ES256 (needs ECDSA above)
-  - [x] EdDSA (needs Ed25519 above)
-  - [x] a JWKS client: fetch, cache by `kid`, refresh on an unknown `kid`,
-    rate-limited (evidence: `say/src/accounts/service/google.sl` hand-writes
-    all of this for Google sign-in)
-  - [x] OIDC ID-token verification helper (issuer, audience, expiry, nonce)
-  Done in dolphlabs/jwt#3 (v0.2.0, needs slang with #513): also PS256,
-  HS384/512, JWK publishing.
+## 3. Observability
 
-## 3. Integrations
+- [x] **Prometheus metrics** (stdlib): counters, gauges and histograms with
+  labels, text exposition format, histograms over `math/sketch`. PR #607 (open).
+- [x] **OpenTelemetry export** (stdlib or package): OTLP over HTTP/protobuf
+  for traces, metrics and logs, with W3C `traceparent` propagation in
+  `http` and `httpc`. PR #608 (open).
+- [x] **Runtime stats API** (stdlib): GC cycles and pauses, heap and RSS,
+  task count, reactor queue depth. PR #627 (open).
+- [ ] **Profiler endpoint** (stdlib): sampled CPU profiles, allocation
+  sites and task dumps, readable by standard tools.
+  Status: not started. Needs a design first: sampling by signal next to
+  the preemption signals, and symbolising static functions in generated C.
 
-Common backend needs with no package today.
+## 4. Compression and formats
 
-- [x] **Message broker client** (package). None exists; only Redis streams.
-  Pick one to start: NATS (simplest protocol), Kafka, or RabbitMQ (AMQP
-  0-9-1). AGENTS.md's architecture rules lean on events and queues for
-  decoupling. Built as `stdlib/nats` (core NATS: pub/sub, queue groups,
-  headers, request/reply, reconnection, NKey/creds/TLS), in the standard
-  library beside `redis` rather than a separate repo. JetStream is not in
-  it.
-- [x] **S3-compatible object storage** (package): put, get, delete, list,
-  multipart upload, presigned URLs, with AWS SigV4 signing. Works against
-  S3, R2, MinIO. zokor handles uploads but has nowhere durable to put them.
-  Built as `stdlib/s3` (beside `redis`), with range gets and bucket
-  create/delete; tested against AWS's SigV4 examples and a live server.
-- [x] **Templating with auto-escaping** (stdlib): HTML templates that escape
-  by context, plus plain-text templates. Evidence: `say` has an email
-  `templates/` folder and no safe engine to render it with.
-  Built as `stdlib/template` (Go syntax and escaping model), with
-  `strings.escape_html`/`escape_js` and `encoding.json_tape` added as the
-  natives it renders through.
-- [x] **WebSocket client** (stdlib, beside `httpc`): dial, TLS, ping/pong,
-  close handshake, size limits. zokor has the server side only.
-  Built as `stdlib/websocket`, with permessage-deflate, keepalive and
-  `encoding.xor_mask` for masking; passes the Autobahn client suite.
-- [x] **MySQL / MariaDB driver** (stdlib or package): only Postgres, SQLite
-  and Mongo exist.
-
-## 4. Smaller formats and protocols
-
-- [x] **CSV** (stdlib): RFC 4180 read and write, streaming, quoted fields,
-  row and field size limits.
-- [x] **base32** (stdlib, in `encoding`): RFC 4648, for TOTP secrets and
-  readable codes. Built as `encoding.base32_*`, `base32hex_*` and
-  `crockford_*`, checked against Python's base64 module.
+- [ ] **zstd, brotli and lz4** (stdlib, `compress`): streaming encode and
+  decode; zstd and brotli as HTTP `Content-Encoding`, lz4 for Kafka.
+  Status: needs a decision. The libraries are not on the build machines;
+  system dependencies or vendored sources?
+- [x] **MessagePack and CBOR** (stdlib): encode and decode, structs
+  included, with size limits. PR #615 (open).
+- [x] **Protobuf codec** (stdlib or package): wire-format encode and decode
+  outside gRPC. PR #605 (open).
+- [x] **HTTP extras** (stdlib, `http`): Server-Sent Events, streaming
+  multipart/form-data uploads, and range requests. PR #610 (open).
 - [ ] **gRPC streaming** (package `slangpackages/grpc`): server, client and
   bidirectional streams; the package is unary only.
+  Status: in progress on feat/grpc-streaming in the grpc repo; left alone here.
+- [ ] **HTTP/3 and QUIC** (stdlib): after UDP.
+  Status: not started; after UDP.
 
-## 5. Math for servers
+## 5. Identity and security
 
-Follow-ups to `math`, chosen for backend use (metrics, sharding, money,
-search, experiments) over the graphics-leaning parts of `math-plan.md`.
-Added 2026-11-21. `math/big` (section 1) comes after these; `math/complex`
-and fixed-size `math/linalg` after that.
+- [x] **OAuth2 and OpenID Connect client** (stdlib or package):
+  authorization code with PKCE, client credentials, refresh, discovery,
+  ID-token checks against JWKS. PR #624 (open).
+- [x] **ACME** (stdlib): automatic certificates from Let's Encrypt with
+  renewal, served through `tls_ctx_add_sni`. PR #622 (open).
+- [x] **TOTP and HOTP** (stdlib): RFC 6238/4226 codes and checks with skew. PR #617 (open).
+- [ ] **WebAuthn / passkeys** (package): registration and assertion.
+  Status: waits for the CBOR PR (feat/msgpack-cbor) to merge.
+- [x] **Envelope encryption** (stdlib, `crypto`): AES-GCM data keys wrapped
+  by a key-encryption key, with key ids for rotation. PR #618 (open).
 
-- [x] **Sampling from distributions** (`math/stats`): `sample(rng)` on
-  every distribution, taking a `rand.Rng`, so load generators and
-  simulations replay from one seed. PR #587.
-- [x] **`math/sketch`** (stdlib): fixed-memory, mergeable estimates for
-  live servers. HyperLogLog (distinct counts), Count-Min sketch, top-k
-  heavy hitters, Bloom and cuckoo filters, an HDR-style latency histogram
-  with Prometheus buckets, and reservoir sampling. PR #588.
-- [x] **`math/shard`** (stdlib): map a key to a node stably. Jump
-  consistent hash, rendezvous (highest random weight) hashing, and a
-  consistent-hash ring with virtual nodes and weights. PR #589.
-- [x] **`math/optimize`** (stdlib): root finding (bisection, Brent,
-  safeguarded Newton), 1-D minimisation (golden section, Brent) and
-  numerical integration (adaptive Simpson, Gauss-Kronrod). PR #590.
-- [x] **`math/interp`** (stdlib): lookup tables and curves. Piecewise
-  linear, step, monotone cubic and natural cubic splines, for fee
-  schedules, tiered rates and pricing curves. PR #592.
-- [x] **`math/finance`** (stdlib, over `decimal`): splitting an amount
-  without losing cents (largest remainder, pro rata), NPV, IRR, loan
-  payments and amortisation, compound interest, VWAP/TWAP, OHLC candles,
-  basis points. PR #593.
-- [x] **`math/vec`** (native): bulk operations on `[float]` and `[f32]`
-  (dot, axpy, norms, cosine similarity, top-k, int8 quantisation), built
-  for embedding search and recommendations. PR #584.
-- [x] **`math/geo`** (stdlib): haversine and Vincenty distance, bearing,
-  destination point, bounding box for a radius query, geohash,
-  point-in-polygon. PR #591.
-- [x] **Experiment statistics** (`math/stats`): two-proportion z-test,
-  Welch's t-test, chi-square test, Wilson intervals, sample size and power,
-  and a sequential probability ratio test, for A/B tests. PR #594.
+## 6. Data and integrations
+
+- [x] **SMTP client and MIME** (stdlib): STARTTLS, AUTH, multipart mail. PR #609 (open).
+- [ ] **ClickHouse client** (package).
+  Status: needs a new slangpackages repository; not created without approval.
+- [ ] **OpenSearch / Elasticsearch client** (package).
+  Status: needs a new slangpackages repository; not created without approval.
+- [ ] **Cassandra / Scylla client** (package).
+  Status: needs a new slangpackages repository; not created without approval.
+- [x] **memcached client** (stdlib or package). PR #619 (open).
+- [ ] **etcd and Consul** (package): key/value, watches, service discovery.
+  Status: needs a new slangpackages repository; not created without approval.
+
+## 7. Distributed systems
+
+- [x] **Leases and leader election** (stdlib): over Redis and Postgres
+  advisory locks. PR #621 (open).
+- [x] **Outbox and idempotency keys** (stdlib): transactional outbox and a
+  store for idempotent handlers. PR #616 (open).
+- [x] **CRDTs** (stdlib): G-counter, PN-counter, OR-set, LWW-map, mergeable
+  like `math/sketch`. PR #613 (open).
+- [x] **Client-side load balancing** (stdlib): pick a backend by
+  consistent hash (`math/shard`), least-loaded or power of two choices. PR #620 (open).
 
 ## Already covered
 
-For reference, so these are not re-proposed: HTTP/1.1 server and client,
-HTTP/2 (server and multiplexed client), TLS, JSON, Postgres, Redis, SQLite,
-MongoDB, regex, gzip/deflate, `time` and `timez` (zones, cron), logging,
-command-line flags, filesystem, environment and process, terminal I/O,
-GraphQL, unary gRPC, JWT (HS256), Argon2id, and zokor's web framework
-(routing, validation, auth, rate limiting, WebSocket server, jobs,
+So these are not re-proposed: HTTP/1.1 server and client, HTTP/2 (server
+and multiplexed client), WebSocket server and client, TLS (mTLS, SNI,
+ALPN), JSON, CSV, XML, YAML, TOML, templates with auto-escaping, Postgres,
+MySQL, SQLite, Redis, MongoDB, NATS, Kafka, AMQP, SQS, SNS, S3, GCS,
+GraphQL, unary gRPC, JWT and JWKS, Argon2id, crypto (SHA-2, HMAC, AEAD,
+signatures), x509, uuid, decimal, regex, gzip/deflate, tar, zip, `time`
+and `timez` (zones, cron), logging, flags, filesystem, environment and
+process, Unicode, `sort`, `rand`, `math` with `stats`, `numtheory`, `vec`,
+`sketch`, `shard`, `optimize`, `interp`, `geo`, `finance` and `big`, and
+zokor's web framework (routing, validation, auth, rate limiting, jobs,
 migrations, metrics, tracing, OpenAPI).

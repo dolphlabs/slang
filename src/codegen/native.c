@@ -273,6 +273,10 @@ const char *native_check(CG *cg, const char *pkg, const char *fname,
             ok = is_arr(at) && is_str(arr_elem(at));
             want = "a [str]";
             break;
+        case NA_ARR_I32:
+            ok = is_arr(at) && !strcmp(arr_elem(at), "i32");
+            want = "an [i32]";
+            break;
         case NA_ARR_BYTES:
             ok = is_arr(at) && is_bytes(arr_elem(at));
             want = "a [bytes]";
@@ -373,6 +377,8 @@ char *native_gen(CG *cg, const char *pkg, const char *fname,
         } else if (ak == NA_ARR_STR) {
             cast_t = "[str]"; /* already sl_arr *; must not fall through
                                  to the i32 default below */
+        } else if (ak == NA_ARR_I32) {
+            cast_t = "[i32]"; /* already sl_arr *, like [str] above */
         } else if (ak == NA_ARR_BYTES) {
             cast_t = "[bytes]"; /* already sl_arr *, like [str] above */
         } else if (ak == NA_VEC) {
