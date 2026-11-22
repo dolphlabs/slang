@@ -55,8 +55,8 @@ standalone repo under `slangpackages/`.
 
 ## 3. Observability
 
-- [ ] **Prometheus metrics** (stdlib): counters, gauges and histograms with
-  labels, text exposition format, histograms over `math/sketch`.
+- [x] **Prometheus metrics** (stdlib): counters, gauges and histograms with
+  labels, text exposition format, histograms over `math/sketch`. PR #607 (open).
 - [ ] **OpenTelemetry export** (stdlib or package): OTLP over HTTP/protobuf
   for traces, metrics and logs, with W3C `traceparent` propagation in
   `http` and `httpc`.
