@@ -3674,6 +3674,42 @@ that case.
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
 
+#### `proxyproto`
+
+The PROXY protocol, versions 1 and 2: the header HAProxy, AWS NLB and
+other balancers put in front of a connection so the server sees the
+real client address instead of the balancer's.
+
+```slang
+import "net";
+import "proxyproto";
+import "time";
+
+let hr = proxyproto.read_until(fd, until_of(time.mono() + 5000000000));
+guard let h = hr else let e = err_of(hr) { net.close(fd); return; }
+println(h.src_addr + ":" + to_str(h.src_port));   // the real client
+// h.rest: bytes that came after the header, the start of the stream
+```
+
+- `parse(b)` reads a header from the start of `b`: `some(header)`,
+  `none` when `b` is a prefix of one and more bytes are needed, or an
+  error when `b` is not a PROXY header. `header.size` is its length.
+- `read_until(fd, deadline)` reads one off a socket and keeps any bytes
+  that arrived after it in `header.rest`.
+- A `Header` has `version`, `family` (`tcp4`, `tcp6`, `udp4`, `udp6`,
+  `unix`, `unknown`), the source and destination addresses and ports, and
+  v2's `tlvs` (`kind`, `value`): ALPN, the TLS server name (0x02), AWS's
+  VPC endpoint id (0xEA) and so on. `local` is true for a v2 LOCAL
+  header, a balancer's health check, which carries no addresses.
+- `encode_v1(h)` and `encode_v2(h)` build headers, for a proxy written
+  in slang or a test. IPv6 addresses are printed in RFC 5952 form.
+
+The header is only bytes the peer sent. Require it on a listener that
+only the balancer can reach, or check the peer address first: otherwise
+any client can claim any address. The header comes before any TLS
+handshake, and `net.tls_accept` does its own accept on the listener, so
+a PROXY header in front of TLS needs a server-side TLS upgrade of an
+accepted fd, which `net` does not have yet.
 #### `protobuf`
 
 The Protocol Buffers wire format, written and read field by field

@@ -221,6 +221,7 @@ PACKAGE_SECTIONS = {
     "http": ["`http`"],
     "httpc": ["`httpc`"],
     "websocket": ["`websocket`"],
+    "proxyproto": ["`proxyproto`"],
     "protobuf": ["`protobuf`"],
     "pool": ["`pool`"],
     "context": ["`context`"],

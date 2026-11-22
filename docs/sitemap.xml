@@ -48,6 +48,7 @@
   <url><loc>https://slang.dolphlabs.com/packages/pool</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/proc</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/protobuf</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/proxyproto</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/rand</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/redis</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/regex</loc></url>
