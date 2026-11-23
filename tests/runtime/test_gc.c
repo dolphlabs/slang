@@ -186,14 +186,16 @@ static int sl_gc_test_owned_buffers(void) {
         }
         if (m->cap == old_cap) { sl_rt_safepoint_exit(); return 1; }
         if (sl_gc_test_gen(m->keys) != 1 || sl_gc_test_gen(m->vals) != 1 ||
-            sl_gc_test_gen(m->state) != 1 || sl_gc_test_gen(m->order) != 1) {
+            sl_gc_test_gen(m->state) != 1 || sl_gc_test_gen(m->order) != 1 ||
+            sl_gc_test_gen(m->pos) != 1) {
             sl_rt_safepoint_exit();
             return 1;
         }
         roots[0] = NULL; /* the map dies */
         sl_gc_collect_minor();
         if (!sl_gc_test_on_heap(m->keys) || !sl_gc_test_on_heap(m->vals) ||
-            !sl_gc_test_on_heap(m->state) || !sl_gc_test_on_heap(m->order)) {
+            !sl_gc_test_on_heap(m->state) || !sl_gc_test_on_heap(m->order) ||
+            !sl_gc_test_on_heap(m->pos)) {
             sl_rt_safepoint_exit();
             return 1;
         }
