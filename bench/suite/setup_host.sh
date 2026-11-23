@@ -59,7 +59,11 @@ apt-get install -y -qq build-essential pkg-config git curl unzip xz-utils ca-cer
 apt-get install -y -qq "python3.$(python3 -c 'import sys; print(sys.version_info[1])')-venv" >/dev/null
 
 echo "== wrk2 ($WRK2_COMMIT)"
-if ! command -v wrk2 >/dev/null; then
+# A wrk2 whose embedded Lua did not link panics on every run ("attempt to
+# index a nil value") without measuring anything; rebuild it then too.
+wrk2_ok() { command -v wrk2 >/dev/null &&
+    ! wrk2 -t1 -c1 -d1s -R1 http://127.0.0.1:9/ 2>&1 | grep -q PANIC; }
+if ! wrk2_ok; then
     rm -rf /tmp/wrk2 && git clone -q https://github.com/giltene/wrk2.git /tmp/wrk2
     (cd /tmp/wrk2 && git checkout -q "$WRK2_COMMIT")
     if [ "$ARCH" = aarch64 ]; then
@@ -68,8 +72,16 @@ if ! command -v wrk2 >/dev/null; then
         (cd /tmp/wrk2 && make -s WITH_LUAJIT=/usr WITH_OPENSSL=/usr >/dev/null)
     else
         (cd /tmp/wrk2 && make -s >/dev/null)
+        # The bundled LuaJIT 2.0 writes wrk.lua's bytecode as an ELF object
+        # that newer binutils (Ubuntu 26.04's) read as corrupt, so wrk2
+        # links without its Lua and panics on start. Emit it as C instead
+        # and relink.
+        (cd /tmp/wrk2/deps/luajit/src && ./luajit -b /tmp/wrk2/src/wrk.lua /tmp/wrk2/obj/bytecode.c)
+        cc -c /tmp/wrk2/obj/bytecode.c -o /tmp/wrk2/obj/bytecode.o
+        (cd /tmp/wrk2 && make -s >/dev/null)
     fi
     install -m 755 /tmp/wrk2/wrk /usr/local/bin/wrk2
+    wrk2_ok || { echo "wrk2 still panics on start" >&2; exit 1; }
 fi
 
 echo "== Go $GO_VERSION"
