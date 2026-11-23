@@ -498,16 +498,11 @@ static void check_stmt(CG *cg, Stmt *s) {
         const char *it = infer_type(cg, s->as.for_in.iter);
         int n = cg->vars.count;
         var_scope_push(cg);
-        if (is_arr(it))
-            var_push(cg, s->as.for_in.name, arr_elem(it));
-        else if (is_bytes(it))
-            var_push(cg, s->as.for_in.name, "int");
-        else if (is_map(it)) {
-            char *k, *v;
-            map_kv(it, &k, &v);
-            var_push(cg, s->as.for_in.name, k);
-            if (s->as.for_in.name2)
-                var_push(cg, s->as.for_in.name2, v);
+        const char *t1, *t2;
+        if (for_in_types(it, s->as.for_in.name2 != NULL, &t1, &t2)) {
+            var_push(cg, s->as.for_in.name, t1);
+            if (t2)
+                var_push(cg, s->as.for_in.name2, t2);
         }
         for (;;) {
             int *start = snap_moved(cg, n);

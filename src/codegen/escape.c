@@ -357,21 +357,13 @@ static void walk_stmt(CG *cg, Esc *esc, Stmt *s) {
             const char *it = infer_type(cg, s->as.for_in.iter);
             int mark = esc->ncand;
             var_scope_push(cg);
-            if (is_arr(it)) {
-                char *elem = arr_elem(it);
+            const char *t1, *t2;
+            if (for_in_types(it, s->as.for_in.name2 != NULL, &t1, &t2)) {
                 esc_push(esc, s->as.for_in.name, NULL);
-                var_push(cg, s->as.for_in.name, elem);
-            } else if (is_bytes(it)) {
-                esc_push(esc, s->as.for_in.name, NULL);
-                var_push(cg, s->as.for_in.name, "int");
-            } else if (is_map(it)) {
-                char *k, *v;
-                map_kv(it, &k, &v);
-                esc_push(esc, s->as.for_in.name, NULL);
-                var_push(cg, s->as.for_in.name, k);
-                if (s->as.for_in.name2) {
+                var_push(cg, s->as.for_in.name, t1);
+                if (t2) {
                     esc_push(esc, s->as.for_in.name2, NULL);
-                    var_push(cg, s->as.for_in.name2, v);
+                    var_push(cg, s->as.for_in.name2, t2);
                 }
             }
             walk_block(cg, esc, s->as.for_in.body);

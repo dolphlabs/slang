@@ -738,6 +738,7 @@ int is_arr(const char *t);
 int is_map(const char *t);
 void check_extern_type(const char *t, int line, const char *what);
 void map_kv(const char *t, char **k, char **v);
+int for_in_types(const char *it, int two, const char **t1, const char **t2);
 int is_map_key(CG *cg, const char *t);
 int is_opt(const char *t);
 int is_result(const char *t);
