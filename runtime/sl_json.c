@@ -222,7 +222,10 @@ static char *sl_jparse_string_raw(sl_jparser *p) {
                     sl_jerr(p, "unpaired UTF-16 surrogate");
                     return NULL;
                 } else {
-                    sl_utf8_append(&buf, &len, &cap, cp);
+                    /* \u0000 ended the str at its zero byte: "id\u0000zz"
+                     * matched the field "id". U+FFFD, as to_str writes a
+                     * zero byte (sl_str_from_n). */
+                    sl_utf8_append(&buf, &len, &cap, cp ? cp : 0xFFFD);
                 }
                 break;
             }
@@ -1323,7 +1326,7 @@ static bool sl_jd_skip(sl_jparser *p) {
 
 /* The key of the next member and its colon. A key without escapes is read
  * in place (*k points into the input, *klen bytes); one with escapes is
- * decoded, and like the tree's key it ends at its first NUL. */
+ * decoded like the tree's key, \u0000 as U+FFFD. */
 static bool sl_jd_key(sl_jparser *p, const char **k, long long *klen) {
     if (!sl_jd_eat(p, '"')) return false;
     long long start = p->pos;

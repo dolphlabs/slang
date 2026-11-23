@@ -21,7 +21,9 @@ let n3 = wire_put_bytes(w, 0, to_bytes("XY"));
 println(to_str(n3));
 println(to_str(w[0..n3]));
 
-// to_str(wire) on a full wire and on a zero-copy slice of one
+// to_str(wire) on a full wire and on a zero-copy slice of one. The full
+// wire's last 7 bytes were never written: zeros, which a str holds as
+// U+FFFD rather than stopping at the first one.
 println(to_str(w));
 println(to_str(w[0..2]));
 

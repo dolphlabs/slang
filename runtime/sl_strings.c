@@ -294,7 +294,7 @@ static char *sl_strings_from_bytes(sl_bytes *b, long long lo, long long hi) {
     if (lo < 0) lo = 0;
     if (hi > n) hi = n;
     if (!b || lo >= n || hi <= lo) return sl_strings_dupn("", 0);
-    return sl_strings_dupn((const char *)(b->ptr + lo), (size_t)(hi - lo));
+    return sl_str_from_n(b->ptr + lo, (size_t)(hi - lo));
 }
 
 /* from_bytes, lowercasing ASCII during the copy. */
@@ -306,8 +306,8 @@ static char *sl_strings_from_bytes_lower(sl_bytes *b, long long lo,
     if (lo < 0) lo = 0;
     if (hi > n) hi = n;
     if (!b || lo >= n || hi <= lo) return sl_strings_dupn("", 0);
-    char *out = sl_strings_dupn((const char *)(b->ptr + lo), (size_t)(hi - lo));
-    for (long long i = 0; i < hi - lo; i++) {
+    char *out = sl_str_from_n(b->ptr + lo, (size_t)(hi - lo));
+    for (long long i = 0; out[i]; i++) {
         if (out[i] >= 'A' && out[i] <= 'Z') out[i] = (char)(out[i] + 32);
     }
     return out;
@@ -323,7 +323,7 @@ static char *sl_strings_from_wire(sl_wire w, long long lo, long long hi) {
     if (lo < 0) lo = 0;
     if (hi > n) hi = n;
     if (lo >= n || hi <= lo) return sl_strings_dupn("", 0);
-    return sl_strings_dupn((const char *)(w.ptr + lo), (size_t)(hi - lo));
+    return sl_str_from_n(w.ptr + lo, (size_t)(hi - lo));
 }
 
 /* from_wire, lowercasing ASCII during the copy. */
@@ -335,8 +335,8 @@ static char *sl_strings_from_wire_lower(sl_wire w, long long lo,
     if (lo < 0) lo = 0;
     if (hi > n) hi = n;
     if (lo >= n || hi <= lo) return sl_strings_dupn("", 0);
-    char *out = sl_strings_dupn((const char *)(w.ptr + lo), (size_t)(hi - lo));
-    for (long long i = 0; i < hi - lo; i++) {
+    char *out = sl_str_from_n(w.ptr + lo, (size_t)(hi - lo));
+    for (long long i = 0; out[i]; i++) {
         if (out[i] >= 'A' && out[i] <= 'Z') out[i] = (char)(out[i] + 32);
     }
     return out;
