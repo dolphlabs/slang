@@ -288,6 +288,17 @@
   `map` hashes with byte-at-a-time FNV-1a. Storing the length with the
   string, or hashing a word at a time (as `strings.hash` does), would
   help every map and cache. Measure on a dedicated Linux host first.
+  **2026-11-23, perf/map-str-probe and perf/map-delete:** the map now
+  tags each slot with seven hash bits (a probe strcmp's only on a tag
+  match), hashes a word at a time, and deletes in O(1) (it was O(count):
+  23.8 us on 100,000 keys, now 173 ns). bench/map on the dev Mac: misses
+  -33%, 64-byte keys -25%, int hits -23%, but short-key hits unchanged
+  (about 190 ns a lookup). A profile puts a hit's time in strlen and
+  strcmp touching key bytes for the first time -- cache misses, which a
+  stored length would not remove either. What is left: `if has(m, k) {
+  m[k] }` probes twice (no single-lookup builtin), and keys and values
+  live in separate arrays (two misses where one would do). Still to
+  confirm on a dedicated Linux host.
 
 - [x] **YAML (2026-11-17, feat/yaml).** `stdlib/yaml`: `decode[T]`,
   `decode_all[T]`, `to_json`, `to_json_all`, for configuration files:
