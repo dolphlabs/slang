@@ -1,0 +1,8 @@
+{
+  "status": "failed",
+  "measured_ms": 3220,
+  "baseline_ms": 1577,
+  "tolerance_pct": 20,
+  "note": "outside 1261-1892 ms",
+  "steal_pct": 0.0
+}
