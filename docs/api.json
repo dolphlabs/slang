@@ -19272,7 +19272,7 @@
           "name": "send_text_bytes",
           "decl": "fn",
           "sig": "fn send_text_bytes(c: Conn, data: bytes, deadline: until) -> result[bool, str]",
-          "doc": "Send a text message given as bytes, checked to be UTF-8 first: for text holding U+0000, which a str cannot (it ends at the first zero byte), and for text already in a byte buffer.",
+          "doc": "Send a text message given as bytes, checked to be UTF-8 first: for text holding U+0000, which a str cannot (to_str writes it as U+FFFD), and for text already in a byte buffer.",
           "file": "stdlib/websocket/websocket.sl",
           "line": 656
         },
@@ -19304,7 +19304,7 @@
           "name": "text",
           "decl": "fn",
           "sig": "fn text(m: Message) -> str",
-          "doc": "The text of a text message. A str ends at its first zero byte, so text holding U+0000 is cut there: m.data has every byte.",
+          "doc": "The text of a text message. A str cannot hold a zero byte, so each U+0000 comes back as U+FFFD: m.data has every byte.",
           "file": "stdlib/websocket/websocket.sl",
           "line": 714
         },

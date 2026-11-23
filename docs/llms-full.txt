@@ -266,7 +266,9 @@ the infinities as `null`, since JSON has neither.
 - `push(xs, v)` / `pop(xs)` — append to / remove the last element of a list
 - `has(m, k)` — does map `m` contain key `k`?
 - `del(m, k)` — remove key `k` (and its value) from map `m`
-- `to_str(x)` — convert any scalar or bytes value to `str`
+- `to_str(x)` — convert any scalar or bytes value to `str`. A `str` is
+  NUL-terminated, so a zero byte in bytes becomes U+FFFD (`EF BF BD`)
+  rather than ending the string; keep data that may hold zeros as `bytes`
 - `inspect(x)` — render any value as a `str` in JavaScript-console
   style: strings double-quoted, lists `[1, 2]`, maps and structs
   `{k: v}`, `opt` as `none` / `some(v)`, `result` as `ok(v)` / `err(e)`,
@@ -462,6 +464,20 @@ signed type, logical (zero-filling) on an unsigned one, exactly as in C.
 value being shifted, so `x << n` never silently widens a narrow `x`
 because `n` happens to be an `int`.
 
+#### str
+
+```slang
+let s = "héllo";
+println(len(s));           // 6: bytes, not characters
+for b in s { ... }         // each byte as an int, read in place (no copy)
+for i, b in s { ... }      // with its byte index
+```
+
+A `str` is immutable, NUL-terminated UTF-8. It cannot hold a zero byte:
+`to_str` of bytes writes each one as U+FFFD, so text is never cut short at
+one. Keep data that may hold zeros as `bytes`. Indexing (`s[i]`) is not
+allowed; loop over the bytes, or use `to_bytes(s)` for random access.
+
 #### bytes
 
 ```slang
@@ -473,6 +489,7 @@ let head = b[..2];         // slicing: b[a..b], b[..n], b[n..], b[..]
 let both = b"ab" + b"cd";  // concatenation
 if b == other { ... }      // content equality via ==
 for byte in b { ... }      // iterate byte values
+for i, byte in b { ... }   // with each one's index
 ```
 
 `bytes` values carry an explicit length and may contain NULs — safe for
@@ -491,6 +508,7 @@ push(xs, 40);                  // grow (amortized O(1))
 println(pop(xs));              // shrink from the end
 xs[0] = 5;                     // bounds-checked index assignment
 for x in xs { println(x); }    // iteration
+for i, x in xs { ... }         // with the index
 let ys = xs[0..2] + xs[1..];   // slicing + concatenation
 let grid = [[1, 2], [3, 4]];   // nested lists
 ```
@@ -1069,7 +1087,9 @@ the infinities as `null`, since JSON has neither.
 - `push(xs, v)` / `pop(xs)` — append to / remove the last element of a list
 - `has(m, k)` — does map `m` contain key `k`?
 - `del(m, k)` — remove key `k` (and its value) from map `m`
-- `to_str(x)` — convert any scalar or bytes value to `str`
+- `to_str(x)` — convert any scalar or bytes value to `str`. A `str` is
+  NUL-terminated, so a zero byte in bytes becomes U+FFFD (`EF BF BD`)
+  rather than ending the string; keep data that may hold zeros as `bytes`
 - `inspect(x)` — render any value as a `str` in JavaScript-console
   style: strings double-quoted, lists `[1, 2]`, maps and structs
   `{k: v}`, `opt` as `none` / `some(v)`, `result` as `ok(v)` / `err(e)`,
@@ -1265,6 +1285,20 @@ signed type, logical (zero-filling) on an unsigned one, exactly as in C.
 value being shifted, so `x << n` never silently widens a narrow `x`
 because `n` happens to be an `int`.
 
+#### str
+
+```slang
+let s = "héllo";
+println(len(s));           // 6: bytes, not characters
+for b in s { ... }         // each byte as an int, read in place (no copy)
+for i, b in s { ... }      // with its byte index
+```
+
+A `str` is immutable, NUL-terminated UTF-8. It cannot hold a zero byte:
+`to_str` of bytes writes each one as U+FFFD, so text is never cut short at
+one. Keep data that may hold zeros as `bytes`. Indexing (`s[i]`) is not
+allowed; loop over the bytes, or use `to_bytes(s)` for random access.
+
 #### bytes
 
 ```slang
@@ -1276,6 +1310,7 @@ let head = b[..2];         // slicing: b[a..b], b[..n], b[n..], b[..]
 let both = b"ab" + b"cd";  // concatenation
 if b == other { ... }      // content equality via ==
 for byte in b { ... }      // iterate byte values
+for i, byte in b { ... }   // with each one's index
 ```
 
 `bytes` values carry an explicit length and may contain NULs — safe for
@@ -1294,6 +1329,7 @@ push(xs, 40);                  // grow (amortized O(1))
 println(pop(xs));              // shrink from the end
 xs[0] = 5;                     // bounds-checked index assignment
 for x in xs { println(x); }    // iteration
+for i, x in xs { ... }         // with the index
 let ys = xs[0..2] + xs[1..];   // slicing + concatenation
 let grid = [[1, 2], [3, 4]];   // nested lists
 ```
@@ -1907,6 +1943,7 @@ let head = b[..2];         // slicing: b[a..b], b[..n], b[n..], b[..]
 let both = b"ab" + b"cd";  // concatenation
 if b == other { ... }      // content equality via ==
 for byte in b { ... }      // iterate byte values
+for i, byte in b { ... }   // with each one's index
 ```
 
 `bytes` values carry an explicit length and may contain NULs — safe for
@@ -1925,6 +1962,7 @@ push(xs, 40);                  // grow (amortized O(1))
 println(pop(xs));              // shrink from the end
 xs[0] = 5;                     // bounds-checked index assignment
 for x in xs { println(x); }    // iteration
+for i, x in xs { ... }         // with the index
 let ys = xs[0..2] + xs[1..];   // slicing + concatenation
 let grid = [[1, 2], [3, 4]];   // nested lists
 ```
@@ -6492,9 +6530,9 @@ for the whole connection reads correctly. No 32 KiB window per direction
 stays alive between messages. A message is sent compressed only when
 that makes it smaller.
 
-**Text with U+0000.** A `str` ends at its first zero byte, so
-`websocket.text(m)` stops there. `m.data` holds every byte, and
-`send_text_bytes` sends one.
+**Text with U+0000.** A `str` cannot hold a zero byte, so
+`websocket.text(m)` gives each one as U+FFFD. `m.data` holds every byte,
+and `send_text_bytes` sends one.
 
 Frames are masked with keys drawn from a 4 KiB pool of `crypto.rand`
 bytes, refilled as it empties. A frame is built in one allocation by
@@ -20996,9 +21034,9 @@ for the whole connection reads correctly. No 32 KiB window per direction
 stays alive between messages. A message is sent compressed only when
 that makes it smaller.
 
-**Text with U+0000.** A `str` ends at its first zero byte, so
-`websocket.text(m)` stops there. `m.data` holds every byte, and
-`send_text_bytes` sends one.
+**Text with U+0000.** A `str` cannot hold a zero byte, so
+`websocket.text(m)` gives each one as U+FFFD. `m.data` holds every byte,
+and `send_text_bytes` sends one.
 
 Frames are masked with keys drawn from a 4 KiB pool of `crypto.rand`
 bytes, refilled as it empties. A frame is built in one allocation by
@@ -21030,7 +21068,7 @@ Send a text message.
 
 ### `fn send_text_bytes(c: Conn, data: bytes, deadline: until) -> result[bool, str]`
 
-Send a text message given as bytes, checked to be UTF-8 first: for text holding U+0000, which a str cannot (it ends at the first zero byte), and for text already in a byte buffer.
+Send a text message given as bytes, checked to be UTF-8 first: for text holding U+0000, which a str cannot (to_str writes it as U+FFFD), and for text already in a byte buffer.
 
 ### `fn send_binary(c: Conn, data: bytes, deadline: until) -> result[bool, str]`
 
@@ -21046,7 +21084,7 @@ The next message, or none when the deadline passes first (nothing is lost: a lat
 
 ### `fn text(m: Message) -> str`
 
-The text of a text message. A str ends at its first zero byte, so text holding U+0000 is cut there: m.data has every byte.
+The text of a text message. A str cannot hold a zero byte, so each U+0000 comes back as U+FFFD: m.data has every byte.
 
 ### `fn close(c: Conn, code: int, reason: str, deadline: until) -> result[bool, str]`
 
