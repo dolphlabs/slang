@@ -4102,11 +4102,17 @@ prerequisite, not a different plan).
       address is taken last, since the value may grow the list. A GC field
       takes `sl_arr_remember_at`. tests/list_elem_field_store (clean under
       the minor verifier), tests/fail_list_elem_field_oob.
-- [ ] **`m[k].f = v` on a map of value structs** is refused with a slang
-      error naming the workaround (read, change, `m[k] = v`) since
-      2026-11-20; it was a C compile error before. Storing in place needs
-      the map's barrier rules for a write into its value slot.
-      tests/fail_map_value_field_store.
+- [x] **`m[k].f = v` on a map of value structs** (done 2026-11-23,
+      feat/map-value-field-store). It was refused with a slang error
+      since 2026-11-20, and a C compile error before. Now it stores into
+      the value's slot in place, through nested value-struct fields and
+      with compound assignment; the address is taken after the value is
+      evaluated (which may grow the map), a missing key fails as `m[k]`
+      does, and a field holding GC pointers takes the barrier an update
+      through `sl_map_put` takes (`sl_map_value_stored`: the whole map
+      dirty, then remembered). tests/map_value_field_store (also in the
+      minor verifier: without the barrier it reports 3,934 missed),
+      tests/fail_map_value_field_store_missing.
 
 - [x] **Five stores left young objects held only by old ones, with no
       write barrier.** Fixed 2026-09-30, found by the minor-collection

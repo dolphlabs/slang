@@ -1443,6 +1443,15 @@ static void sl_map_put(sl_map *m, const void *k, const void *v) {
     sl_rt_preempt_enable();
 }
 
+/* The barrier for a store into a value already in the map, through the
+ * address sl_map_get returned (`m[k].f = v`). Like an update through
+ * sl_map_put, the slot's order position is not known, so the whole map
+ * is dirty. Caller holds the preempt bracket. */
+static void sl_map_value_stored(sl_map *m) {
+    m->gc_clean = 0;
+    sl_gc_remember_obj((sl_gc_obj *)m - 1);
+}
+
 static void *sl_map_get(sl_map *m, const void *k) {
     unsigned long long h = sl_map_hash(m, k);
     long long s = sl_map_probe(m, k, h);

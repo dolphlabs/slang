@@ -921,11 +921,59 @@ void gen_stmt(CG *cg, Stmt *s) {
                 const char *lt = cur->kind == EX_INDEX
                                      ? infer_type(cg, cur->as.index.base)
                                      : NULL;
-                if (lt && is_map(lt))
-                    cg_error(s->line,
-                             "cannot assign to a field of a map value "
-                             "(it is a copy); read it into a local, change "
-                             "the field, and store it back with m[k] = v");
+                /* m[k].f = v: the same store through the value's slot.
+                 * The address is taken after the value is evaluated, since
+                 * the value may insert into the map and grow it. A missing
+                 * key fails as reading m[k] does. The store takes the
+                 * barrier an update through sl_map_put takes. */
+                if (lt && is_map(lt)) {
+                    char *mk, *mv;
+                    map_kv(lt, &mk, &mv);
+                    const char *kc = ctype_of(cg, mk);
+                    const char *vc = ctype_of(cg, mv);
+                    const char *ft = sd->ftypes[fi];
+                    StrBuf prelude;
+                    sb_init(&prelude);
+                    int lid = cg->tmp_id++;
+                    int ambient_mark = cg->ambient_count;
+                    char *mb = gen_expr(cg, cur->as.index.base);
+                    mb = sequence_one(cg, lid, 0, ctype_of(cg, lt), lt, mb,
+                                      cur->as.index.base, &prelude);
+                    const char *ikt = infer_type(cg, cur->as.index.index);
+                    char *key = maybe_cast(cg, mk, ikt,
+                                           gen_expr(cg, cur->as.index.index));
+                    key = sequence_one(cg, lid, 1, kc, mk, key,
+                                       cur->as.index.index, &prelude);
+                    const char *se8 = expect_push(cg, ft);
+                    char *val = maybe_cast(cg, ft, vt,
+                                           gen_expr(cg, s->as.assign.value));
+                    cg->expect = se8;
+                    val = sequence_one(cg, lid, 2, ctype_of(cg, ft), ft, val,
+                                       s->as.assign.value, &prelude);
+                    cg->ambient_count = ambient_mark;
+                    move_consume(cg, s->as.assign.value);
+                    int id = cg->tmp_id++;
+                    char *kname = xasprintf("_sl_k%d", id);
+                    char *miss = map_miss_call(cg, mk, kname,
+                                               panic_at(cg, s->line));
+                    emit_line(cg,
+                              "{ %s%s %s = %s; void *_sl_p%d = sl_map_get(%s, "
+                              "&%s); if (!_sl_p%d) %s; ((%s *)_sl_p%d)->%s%s%s "
+                              "= %s;%s }",
+                              prelude.data, kc, kname, key, id, mb, kname, id,
+                              miss, vc, id,
+                              mid[0] ? mid + 1 : sanitize_ident(sd->fields[fi]),
+                              mid[0] ? "." : "",
+                              mid[0] ? sanitize_ident(sd->fields[fi]) : "",
+                              val,
+                              type_has_gc_roots(cg, ft)
+                                  ? xasprintf(" sl_rt_preempt_disable(); "
+                                              "sl_map_value_stored(%s); "
+                                              "sl_rt_preempt_enable();",
+                                              mb)
+                                  : "");
+                    break;
+                }
                 if (lt && is_arr(lt)) {
                     char *elem = arr_elem(lt);
                     const char *ec = ctype_of(cg, elem);
