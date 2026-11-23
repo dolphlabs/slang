@@ -146,14 +146,31 @@ fn tcp_loop(f: Fake) {
 }
 
 fn fake() -> Fake {
-    let ur = net.udp_bind("127.0.0.1", 0);
-    guard let u = ur else let e = err_of(ur) { panic("udp_bind: " + e); }
-    let port = net.port(u as int) ?? 0;
-    let tr = net.listen_with("127.0.0.1", port as int, "");
-    guard let t = tr else let e = err_of(tr) { panic("listen: " + e); }
+    // UDP and TCP ports are separate: the free UDP port the kernel picks
+    // can be taken for TCP by another process, which failed the run with
+    // "Address already in use". Try another port when it is.
+    let tries = 0;
+    while true {
+        let ur = net.udp_bind("127.0.0.1", 0);
+        guard let u = ur else let e = err_of(ur) { panic("udp_bind: " + e); }
+        let port = net.port(u as int) ?? 0;
+        let tr = net.listen_with("127.0.0.1", port as int, "");
+        if let t = tr {
+            return fake_on(u, t, port as int);
+        }
+        net.close(u as int);
+        tries += 1;
+        if tries == 20 {
+            panic("listen: " + err_of(tr));
+        }
+    }
+    panic("unreachable");
+}
+
+fn fake_on(u: i32, t: i32, port: int) -> Fake {
     let z: map[str][Record] = {};
     let nx: map[str]bool = {};
-    let f = Fake { mu: make_mutex(), udp: u, tcp: t, port: port as int, zone: z, nx: nx, soa: none,
+    let f = Fake { mu: make_mutex(), udp: u, tcp: t, port: port, zone: z, nx: nx, soa: none,
                    truncate: false, servfail: false, silent: false, spoof_first: false,
                    garbage_first: false, no_chase: false, queries: 0, tcp_queries: 0, stop: false };
     spawn udp_loop(f);
