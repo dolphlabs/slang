@@ -838,9 +838,12 @@ static void emit_json_enc_body(CG *cg, JsonInst *it) {
         emit_line(cg, "sl_json_sb_reserve_items(out, v->count, %lld);",
                   item_hint);
         emit_line(cg, "sl_json_sb_append(out, \"{\");");
-        emit_line(cg, "for (long long i = 0; i < v->count; i++) {");
+        /* order[i] is -1 where a key was deleted (sl_map). */
+        emit_line(cg, "int sep = 0;");
+        emit_line(cg, "for (long long i = 0; i < v->olen; i++) {");
         cg->indent++;
-        emit_line(cg, "if (i) sl_json_sb_append(out, \",\");");
+        emit_line(cg, "if (v->order[i] < 0) continue;");
+        emit_line(cg, "if (sep++) sl_json_sb_append(out, \",\");");
         emit_line(cg, "sl_json_enc_str(sl_json_map_key_at(v, i), out);");
         emit_line(cg, "sl_json_sb_append(out, \":\");");
         emit_line(cg, "%s *vp = (%s *)sl_json_map_val_at(v, i);", vct, vct);
