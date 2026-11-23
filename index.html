@@ -204,25 +204,25 @@
 
       <figure class="card perf-cpu">
         <figcaption>
-          <span class="card-kicker">{{perf.cpu_kicker}}</span>
-          <span class="card-sub">{{perf.cpu_sub}}</span>
+          <span class="card-kicker">{{perf.api_kicker}}</span>
+          <span class="card-sub">{{perf.api_sub}}</span>
         </figcaption>
         <table class="mini-table">
-          <thead><tr><th scope="col">{{perf.th_language}}</th><th scope="col">ms</th><th scope="col">RSS</th></tr></thead>
+          <thead><tr><th scope="col">{{perf.th_language}}</th><th scope="col">req/s</th><th scope="col">RSS</th></tr></thead>
           <tbody>
-            <tr><td>Node.js</td><td>{{n:3237}}</td><td>{{n:81.7}} MB</td></tr>
-            <tr><td>Rust</td><td>{{n:3247}}</td><td>{{n:13.2}} MB</td></tr>
-            <tr><td>Bun</td><td>{{n:3408}}</td><td>{{n:93.7}} MB</td></tr>
-            <tr><td>Java</td><td>{{n:3428}}</td><td>{{n:104.7}} MB</td></tr>
-            <tr class="is-slang"><td>slang</td><td>{{n:3709}}</td><td>{{n:8.7}} MB</td></tr>
-            <tr><td>Go</td><td>{{n:3921}}</td><td>{{n:8.2}} MB</td></tr>
+            <tr class="is-slang"><td>slang</td><td>{{n:5592}}</td><td>{{n:38.2}} MB</td></tr>
+            <tr><td>Rust</td><td>{{n:5183}}</td><td>{{n:48.0}} MB</td></tr>
+            <tr><td>Go</td><td>{{n:4035}}</td><td>{{n:90.7}} MB</td></tr>
+            <tr><td>Bun</td><td>{{n:3914}}</td><td>{{n:312.7}} MB</td></tr>
+            <tr><td>Java</td><td>{{n:3601}}</td><td>{{n:713.2}} MB</td></tr>
+            <tr><td>Node.js</td><td>{{n:2850}}</td><td>{{n:366.2}} MB</td></tr>
           </tbody>
         </table>
       </figure>
 
       <div class="card perf-rps">
         <span class="card-kicker">{{perf.rps_kicker}}</span>
-        <p class="big-num">{{n:5592}} <small>req/s</small></p>
+        <p class="big-num">{{n:38065}} <small>req/s</small></p>
         <p class="card-text">{{perf.rps_text}}</p>
       </div>
 
