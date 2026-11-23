@@ -1362,12 +1362,18 @@ Found building zokor's logger (2026-10-12), not fixed:
   Still no explicit instantiation syntax (`f[int]` would collide with
   indexing), so a generic function cannot supply a type parameter itself.
   tests/generic_fn_values, tests/fail_generic_fn_value_*.
-- [ ] **The move check is not path-sensitive**: in
+- [x] **The move check is not path-sensitive** (fixed 2026-11-23,
+  fix/move-path-sensitive): in
   `if !ok { refuse(c); return ""; } spawn serve(c);` the second use of `c`
-  is "use of moved value", though the branch that moved it returns. The
-  workaround is an `if`/`else` with one move per arm (zokor's
-  `accept_one`). A move on a path that cannot reach the use should not
-  count.
+  was "use of moved value", though the branch that moved it returns. A
+  branch that ends in return, break, continue, exit, panic or a call
+  compute_noreturn found no longer joins into the state after an if, if
+  let, switch or select, and a guard's else (which must leave) no longer
+  leaks its moves past the guard. A break or continue carries its moves
+  into the loop's next iteration and the code after the loop.
+  tests/move_path_sensitive, fail_move_break,
+  fail_move_branch_falls_through. zokor's `accept_one` can drop its
+  if/else workaround.
 
 ## G. gRPC and GraphQL
 
