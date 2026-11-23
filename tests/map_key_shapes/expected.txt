@@ -1,0 +1,3 @@
+str keys ok 1036 1072260
+int keys ok 1005
+bool keys ok

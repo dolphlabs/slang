@@ -1065,7 +1065,7 @@ typedef struct {
     int gc_clean;        /* order positions; see sl_arr's gc_clean */
     unsigned char *keys; /* cap slots */
     unsigned char *vals; /* cap slots */
-    unsigned char *state;/* 1 = occupied */
+    unsigned char *state;/* 0 = empty, else a hash tag (sl_map_tag) */
     long long *order;    /* occupied slot indices, insertion order */
 } sl_map;
 
@@ -1136,16 +1136,57 @@ static void sl_gc_dirty_all(void *obj) {
         ((sl_map *)obj)->gc_clean = 0;
 }
 
-static unsigned long long sl_hash_bytes(const unsigned char *p, size_t n) {
-    unsigned long long h = 1469598103934665603ULL;
-    for (size_t i = 0; i < n; i++) { h ^= p[i]; h *= 1099511628211ULL; }
+/* Map hashing, eight bytes at a time with a murmur3-style finish. The
+ * byte-at-a-time FNV-1a this replaces cost a multiply per byte, and its
+ * low bits -- the ones that pick a slot -- mixed poorly. Word reads make
+ * the result differ between little and big endian: it never leaves the
+ * process, and iteration follows insertion order, not hashes. */
+static unsigned long long sl_hash_mix(unsigned long long h) {
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdULL;
+    h ^= h >> 33;
+    h *= 0xc4ceb9fe1a85ec53ULL;
+    h ^= h >> 33;
     return h;
 }
 
+static unsigned long long sl_hash_bytes(const unsigned char *p, size_t n) {
+    unsigned long long h = 0x9E3779B97F4A7C15ULL ^ (unsigned long long)n;
+    while (n >= 8) {
+        unsigned long long w;
+        memcpy(&w, p, 8);
+        h = (h ^ w) * 0xff51afd7ed558ccdULL;
+        h ^= h >> 32;
+        p += 8;
+        n -= 8;
+    }
+    unsigned long long w = 0;
+    memcpy(&w, p, n);
+    return sl_hash_mix(h ^ w);
+}
+
 static unsigned long long sl_hash_str(const char *s) {
-    unsigned long long h = 1469598103934665603ULL;
-    for (; *s; s++) { h ^= (unsigned char)*s; h *= 1099511628211ULL; }
-    return h;
+    return sl_hash_bytes((const unsigned char *)s, strlen(s));
+}
+
+static unsigned long long sl_map_hash(const sl_map *m, const void *k) {
+    if (m->kstr)
+        return sl_hash_str(*(const char *const *)k);
+    if (m->ksz == 8) {
+        unsigned long long w;
+        memcpy(&w, k, 8);
+        return sl_hash_mix(w ^ 0x9E3779B97F4A7C15ULL);
+    }
+    return sl_hash_bytes((const unsigned char *)k, m->ksz);
+}
+
+/* A slot's state byte: 0 when empty, otherwise the top seven bits of its
+ * key's hash with the high bit set. A probe compares keys only where the
+ * tag matches, so a string key is strcmp'd against about one key in 128
+ * of those it passes instead of every one. Slots come from the hash's low
+ * bits, so the tag is independent of the slot. */
+static unsigned char sl_map_tag(unsigned long long h) {
+    return (unsigned char)(0x80 | (h >> 57));
 }
 
 static sl_map *sl_map_new(size_t ksz, size_t vsz, int kstr,
@@ -1171,15 +1212,19 @@ static long long sl_map_probe(sl_map *m, const void *k,
                               unsigned long long h) {
     long long mask = m->cap - 1;
     long long i = (long long)(h & (unsigned long long)mask);
+    unsigned char tag = sl_map_tag(h);
     for (;;) {
-        if (!m->state[i])
+        unsigned char st = m->state[i];
+        if (!st)
             return -i - 1;
-        void *kk = m->keys + (size_t)i * m->ksz;
-        int eq = m->kstr
-                    ? !strcmp(*(const char **)kk, *(const char *const *)k)
-                    : memcmp(kk, k, m->ksz) == 0;
-        if (eq)
-            return i;
+        if (st == tag) {
+            void *kk = m->keys + (size_t)i * m->ksz;
+            int eq = m->kstr
+                        ? !strcmp(*(const char **)kk, *(const char *const *)k)
+                        : memcmp(kk, k, m->ksz) == 0;
+            if (eq)
+                return i;
+        }
         i = (i + 1) & mask;
     }
 }
@@ -1232,14 +1277,11 @@ static void sl_map_grow(sl_map *m) {
         long long slot = oorder[i];
         void *k = ok + (size_t)slot * m->ksz;
         void *v = ov + (size_t)slot * m->vsz;
-        unsigned long long h = m->kstr
-                                  ? sl_hash_str(*(const char **)k)
-                                  : sl_hash_bytes((const unsigned char *)k,
-                                                  m->ksz);
+        unsigned long long h = sl_map_hash(m, k);
         long long s = -sl_map_probe(m, k, h) - 1;
         memcpy(m->keys + (size_t)s * m->ksz, k, m->ksz);
         memcpy(m->vals + (size_t)s * m->vsz, v, m->vsz);
-        m->state[s] = 1;
+        m->state[s] = sl_map_tag(h);
         m->order[m->count++] = s;
     }
     sl_rt_preempt_enable();
@@ -1261,10 +1303,7 @@ static void sl_map_put(sl_map *m, const void *k, const void *v) {
      * is the same discipline sl_gc_alloc/sl_task_park/every other
      * fully-bracketed function in this codebase already follows. */
     sl_rt_preempt_disable();
-    unsigned long long h = m->kstr
-                              ? sl_hash_str(*(const char *const *)k)
-                              : sl_hash_bytes((const unsigned char *)k,
-                                              m->ksz);
+    unsigned long long h = sl_map_hash(m, k);
     if ((m->count + 1) * 4 >= m->cap * 3)
         sl_map_grow(m);
     long long s = sl_map_probe(m, k, h);
@@ -1281,7 +1320,7 @@ static void sl_map_put(sl_map *m, const void *k, const void *v) {
     s = -s - 1;
     memcpy(m->keys + (size_t)s * m->ksz, k, m->ksz);
     memcpy(m->vals + (size_t)s * m->vsz, v, m->vsz);
-    m->state[s] = 1;
+    m->state[s] = sl_map_tag(h);
     /* A new key lands at the end of the order array: only it is new. */
     if (m->count < m->gc_clean)
         m->gc_clean = (int)m->count;
@@ -1291,10 +1330,7 @@ static void sl_map_put(sl_map *m, const void *k, const void *v) {
 }
 
 static void *sl_map_get(sl_map *m, const void *k) {
-    unsigned long long h = m->kstr
-                              ? sl_hash_str(*(const char *const *)k)
-                              : sl_hash_bytes((const unsigned char *)k,
-                                              m->ksz);
+    unsigned long long h = sl_map_hash(m, k);
     long long s = sl_map_probe(m, k, h);
     if (s < 0)
         return NULL;
@@ -1307,10 +1343,7 @@ static int sl_map_has(sl_map *m, const void *k) {
 
 /* The slot a key hashes to before any probing. */
 static long long sl_map_home(sl_map *m, const void *k) {
-    unsigned long long h = m->kstr
-                              ? sl_hash_str(*(const char *const *)k)
-                              : sl_hash_bytes((const unsigned char *)k,
-                                              m->ksz);
+    unsigned long long h = sl_map_hash(m, k);
     return (long long)(h & (unsigned long long)(m->cap - 1));
 }
 
@@ -1340,10 +1373,7 @@ static void sl_map_del(sl_map *m, const void *k) {
     /* Tier 11 eighth slice: bracketed entry-to-every-return -- same
      * reasoning as sl_map_put's own bracket just above. */
     sl_rt_preempt_disable();
-    unsigned long long h = m->kstr
-                              ? sl_hash_str(*(const char *const *)k)
-                              : sl_hash_bytes((const unsigned char *)k,
-                                              m->ksz);
+    unsigned long long h = sl_map_hash(m, k);
     long long s = sl_map_probe(m, k, h);
     if (s < 0) {
         sl_rt_preempt_enable();
@@ -1379,7 +1409,7 @@ static void sl_map_del(sl_map *m, const void *k) {
                m->keys + (size_t)j * m->ksz, m->ksz);
         memcpy(m->vals + (size_t)hole * m->vsz,
                m->vals + (size_t)j * m->vsz, m->vsz);
-        m->state[hole] = 1;
+        m->state[hole] = m->state[j];
         sl_map_order_move(m, j, hole);
         hole = j;
     }

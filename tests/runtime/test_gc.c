@@ -207,7 +207,7 @@ static int sl_gc_test_owned_buffers(void) {
         if (m->count != 40) { sl_rt_safepoint_exit(); return 1; }
         for (long long i = 0; i < m->count; i++) {
             long long slot = m->order[i];
-            if (slot < 0 || slot >= m->cap || m->state[slot] != 1 ||
+            if (slot < 0 || slot >= m->cap || !m->state[slot] ||
                 *(long long *)(m->vals + (size_t)slot * m->vsz) != i) {
                 sl_rt_safepoint_exit();
                 return 1;
