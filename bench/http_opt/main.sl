@@ -1,7 +1,5 @@
 import "proc";
 
-extern fn atoi(s: str) -> i32;
-
 fn serve(c: link) {
     let a = arena_new(4096);
     let buf = a.wire(2048);
@@ -20,10 +18,8 @@ fn accept_loop(ln: link) {
     }
 }
 
-let port_str: str = proc.getenv("HTTP_PORT") ?? "0";
-let port = atoi(port_str);
-let n_str: str = proc.getenv("HTTP_ACCEPTORS") ?? "1";
-let n = atoi(n_str);
+let port = to_int(proc.getenv("HTTP_PORT") ?? "0") ?? 0;
+let n = to_int(proc.getenv("HTTP_ACCEPTORS") ?? "1") ?? 1;
 if n < 1 { n = 1; }
 
 let i = 0;

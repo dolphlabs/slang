@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Prepare a dedicated Ubuntu 24.04 host (x86_64 or arm64) for bench/suite.
+# Prepare a dedicated Ubuntu 24.04 or 26.04 host (x86_64 or arm64) for
+# bench/suite.
 #
 #   sudo bench/suite/setup_host.sh
 #
-# Installs pinned toolchains, Postgres 16 tuned per bench/suite/db, wrk and
+# Installs pinned toolchains, Postgres (16 where the OS ships it, else the
+# OS's own: 18 on 26.04) tuned per bench/suite/db, wrk and
 # wrk2, and raises OS limits for tens of thousands of connections. Safe to
 # re-run. Do NOT run it on a machine that serves anything: it changes
 # sysctls, restarts Postgres and pins it to cores.
@@ -11,7 +13,7 @@ set -euo pipefail
 
 [ "$(id -u)" = 0 ] || { echo "run with sudo" >&2; exit 1; }
 . /etc/os-release
-[ "$ID" = ubuntu ] || echo "warning: tested on Ubuntu 24.04, this is $PRETTY_NAME" >&2
+[ "$ID" = ubuntu ] || echo "warning: tested on Ubuntu 24.04 and 26.04, this is $PRETTY_NAME" >&2
 
 ARCH=$(uname -m)                      # x86_64 | aarch64
 GOARCH=$([ "$ARCH" = aarch64 ] && echo arm64 || echo amd64)
@@ -36,11 +38,19 @@ DB_CPUS=${DB_CPUS:-"$((HALF + QUARTER))-$((NCPU - 1))"}
 echo "== packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
+# 24.04 ships Postgres 16, 26.04 only 18. Keep 16 wherever it exists so
+# runs stay comparable, and record the version (run.sh's env.json does).
+if [ -z "${PG_VERSION:-}" ]; then
+    for v in 16 17 18; do
+        if apt-cache show "postgresql-$v" >/dev/null 2>&1; then PG_VERSION=$v; break; fi
+    done
+fi
+[ -n "${PG_VERSION:-}" ] || { echo "no postgresql-16/17/18 package" >&2; exit 1; }
 apt-get install -y -qq build-essential pkg-config git curl unzip xz-utils ca-certificates \
     libpq-dev libssl-dev zlib1g-dev libsqlite3-dev \
     python3 python3-venv python3-dev \
     openjdk-21-jdk-headless maven \
-    postgresql-16 postgresql-client-16 \
+    "postgresql-$PG_VERSION" "postgresql-client-$PG_VERSION" \
     wrk sysstat numactl >/dev/null
 # python3-venv is a versioned virtual package (python3.NN-venv) and doesn't
 # always get pulled in transitively (seen empty on a plain Ubuntu 24.04
@@ -49,7 +59,11 @@ apt-get install -y -qq build-essential pkg-config git curl unzip xz-utils ca-cer
 apt-get install -y -qq "python3.$(python3 -c 'import sys; print(sys.version_info[1])')-venv" >/dev/null
 
 echo "== wrk2 ($WRK2_COMMIT)"
-if ! command -v wrk2 >/dev/null; then
+# A wrk2 whose embedded Lua did not link panics on every run ("attempt to
+# index a nil value") without measuring anything; rebuild it then too.
+wrk2_ok() { command -v wrk2 >/dev/null &&
+    ! wrk2 -t1 -c1 -d1s -R1 http://127.0.0.1:9/ 2>&1 | grep -q PANIC; }
+if ! wrk2_ok; then
     rm -rf /tmp/wrk2 && git clone -q https://github.com/giltene/wrk2.git /tmp/wrk2
     (cd /tmp/wrk2 && git checkout -q "$WRK2_COMMIT")
     if [ "$ARCH" = aarch64 ]; then
@@ -58,8 +72,16 @@ if ! command -v wrk2 >/dev/null; then
         (cd /tmp/wrk2 && make -s WITH_LUAJIT=/usr WITH_OPENSSL=/usr >/dev/null)
     else
         (cd /tmp/wrk2 && make -s >/dev/null)
+        # The bundled LuaJIT 2.0 writes wrk.lua's bytecode as an ELF object
+        # that newer binutils (Ubuntu 26.04's) read as corrupt, so wrk2
+        # links without its Lua and panics on start. Emit it as C instead
+        # and relink.
+        (cd /tmp/wrk2/deps/luajit/src && ./luajit -b /tmp/wrk2/src/wrk.lua /tmp/wrk2/obj/bytecode.c)
+        cc -c /tmp/wrk2/obj/bytecode.c -o /tmp/wrk2/obj/bytecode.o
+        (cd /tmp/wrk2 && make -s >/dev/null)
     fi
     install -m 755 /tmp/wrk2/wrk /usr/local/bin/wrk2
+    wrk2_ok || { echo "wrk2 still panics on start" >&2; exit 1; }
 fi
 
 echo "== Go $GO_VERSION"
@@ -94,18 +116,18 @@ sudo -u "$TARGET_USER" -H bash -c "
   (\$HOME/.bun/bin/bun --version 2>/dev/null | grep -qx $BUN_VERSION) || curl -fsSL https://bun.sh/install | bash -s bun-v$BUN_VERSION >/dev/null"
 ln -sf "$TARGET_HOME/.bun/bin/bun" /usr/local/bin/bun
 
-echo "== Postgres 16"
-CONF=/etc/postgresql/16/main/postgresql.conf
+echo "== Postgres $PG_VERSION"
+CONF=/etc/postgresql/$PG_VERSION/main/postgresql.conf
 if ! grep -q 'slang bench' "$CONF"; then
     { echo; echo "# ---- slang bench (bench/suite/db/postgresql.bench.conf) ----"; cat "$(dirname "$0")/db/postgresql.bench.conf"; } >>"$CONF"
 fi
-mkdir -p /etc/systemd/system/postgresql@16-main.service.d
-cat >/etc/systemd/system/postgresql@16-main.service.d/bench-cpus.conf <<EOF
+mkdir -p "/etc/systemd/system/postgresql@$PG_VERSION-main.service.d"
+cat >"/etc/systemd/system/postgresql@$PG_VERSION-main.service.d/bench-cpus.conf" <<EOF
 [Service]
 CPUAffinity=$(echo "$DB_CPUS" | tr ',' ' ')
 EOF
 systemctl daemon-reload
-systemctl restart postgresql@16-main
+systemctl restart "postgresql@$PG_VERSION-main"
 sudo -u postgres psql -q -c "DO \$\$BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'bench') THEN CREATE ROLE bench LOGIN PASSWORD 'bench'; END IF;
 END\$\$;"
