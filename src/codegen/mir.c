@@ -408,22 +408,14 @@ static void lower_stmt(Lower *L, Stmt *s) {
     }
     case ST_FOR_IN: {
         const char *it = infer_type(L->cg, s->as.for_in.iter);
-        const char *n1 = "int";
-        const char *n2 = NULL;
+        const char *n1, *n2;
         var_scope_push(L->cg);
-        if (is_arr(it)) {
-            n1 = arr_elem(it);
+        if (for_in_types(it, s->as.for_in.name2 != NULL, &n1, &n2)) {
             var_push(L->cg, s->as.for_in.name, n1);
-        } else if (is_bytes(it)) {
-            var_push(L->cg, s->as.for_in.name, n1);
-        } else if (is_map(it)) {
-            char *k, *v;
-            map_kv(it, &k, &v);
-            n1 = k;
-            n2 = v;
-            var_push(L->cg, s->as.for_in.name, n1);
-            if (s->as.for_in.name2)
+            if (n2)
                 var_push(L->cg, s->as.for_in.name2, n2);
+        } else {
+            n1 = "int";
         }
         add_local(L, s->as.for_in.name, n1);
         if (s->as.for_in.name2)

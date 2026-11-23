@@ -74,6 +74,8 @@ push(xs, 4);
 let last = pop(xs);
 xs[0] = 9;                           // bounds-checked
 for x in xs { print(x); }
+for i, x in xs { print(i); }         // index first; also over bytes and str
+for b in "hé" { print(b); }          // a str's bytes as ints, no copy
 println(" len=${len(xs)} last=${last}");
 let part = xs[0..2];                 // slice
 
@@ -85,6 +87,7 @@ for key, v in ages { println(key + "=" + to_str(v)); }   // insertion order
 
 let raw = b"hi";                     // bytes: binary-safe
 println(len(raw));
+println(to_str(b"a\x00b"));          // a, U+FFFD, b: a str holds no zero byte
 println(inspect(part));              // [9, 1]; println only takes scalars
 push(names, "x");
 ```

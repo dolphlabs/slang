@@ -3614,9 +3614,9 @@ for the whole connection reads correctly. No 32 KiB window per direction
 stays alive between messages. A message is sent compressed only when
 that makes it smaller.
 
-**Text with U+0000.** A `str` ends at its first zero byte, so
-`websocket.text(m)` stops there. `m.data` holds every byte, and
-`send_text_bytes` sends one.
+**Text with U+0000.** A `str` cannot hold a zero byte, so
+`websocket.text(m)` gives each one as U+FFFD. `m.data` holds every byte,
+and `send_text_bytes` sends one.
 
 Frames are masked with keys drawn from a 4 KiB pool of `crypto.rand`
 bytes, refilled as it empties. A frame is built in one allocation by

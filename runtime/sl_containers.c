@@ -752,11 +752,72 @@ static int sl_bytes_eq(sl_bytes *a, sl_bytes *b) {
     return a->len == 0 || memcmp(a->ptr, b->ptr, (size_t)a->len) == 0;
 }
 
+/* ---- bytes -> str: a str never holds a zero byte ----
+ *
+ * A str is a NUL-terminated C string, so a zero byte copied into one
+ * silently ended it there: to_str(b"admin\0.evil") compared equal to
+ * "admin", and a JSON key "id\u0000zz" filled the field "id". Wherever
+ * outside bytes become a str, each zero byte is written as U+FFFD (EF BF
+ * BD) instead -- nothing is cut short, the result differs visibly from
+ * any string without it, and no input can make the conversion fail.
+ * memchr finds no zero in the common case at about the cost of the copy
+ * itself. */
+static size_t sl_nul_fffd_len(const unsigned char *p, size_t n) {
+    size_t out = n;
+    const unsigned char *z = n ? (const unsigned char *)memchr(p, 0, n) : NULL;
+    while (z) {
+        out += 2;
+        size_t rest = n - (size_t)(z + 1 - p);
+        z = rest ? (const unsigned char *)memchr(z + 1, 0, rest) : NULL;
+    }
+    return out;
+}
+
+/* Copies n bytes to dst, each zero as EF BF BD; dst holds
+ * sl_nul_fffd_len(p, n) bytes. Returns the bytes written. */
+static size_t sl_nul_fffd_copy(unsigned char *dst, const unsigned char *p,
+                               size_t n) {
+    size_t w = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (p[i]) {
+            dst[w++] = p[i];
+        } else {
+            dst[w++] = 0xEF;
+            dst[w++] = 0xBF;
+            dst[w++] = 0xBD;
+        }
+    }
+    return w;
+}
+
+/* A new str from n outside bytes. */
+static char *sl_str_from_n(const void *src, size_t n) {
+    const unsigned char *p = (const unsigned char *)src;
+    if (!n || !memchr(p, 0, n)) {
+        char *out = (char *)sl_gc_alloc_leaf_uninit(n + 1, NULL);
+        if (n) memcpy(out, p, n);
+        out[n] = 0;
+        return out;
+    }
+    size_t m = sl_nul_fffd_len(p, n);
+    char *out = (char *)sl_gc_alloc_leaf_uninit(m + 1, NULL);
+    sl_nul_fffd_copy((unsigned char *)out, p, n);
+    out[m] = 0;
+    return out;
+}
+
+/* buf (GC, n + 1 bytes) filled by a decoder: terminated in place when it
+ * holds no zero byte, else copied with each one replaced. */
+static char *sl_str_seal(char *buf, size_t n) {
+    if (!n || !memchr(buf, 0, n)) {
+        buf[n] = 0;
+        return buf;
+    }
+    return sl_str_from_n(buf, n);
+}
+
 static char *sl_str_from_bytes(sl_bytes *b) {
-    char *p = (char *)sl_gc_alloc((size_t)b->len + 1, NULL);
-    if (b->len) memcpy(p, b->ptr, (size_t)b->len);
-    p[b->len] = 0;
-    return p;
+    return sl_str_from_n(b->ptr, (size_t)b->len);
 }
 
 /* The wire counterpart. A wire is a view into arena (non-GC) memory, so
@@ -764,10 +825,7 @@ static char *sl_str_from_bytes(sl_bytes *b) {
  * way sl_bytes has one, which is what makes to_str(w[a..b]) one
  * allocation where to_str(to_bytes(w[a..b])) was three. */
 static char *sl_str_from_wire(sl_wire w) {
-    char *p = (char *)sl_gc_alloc((size_t)w.len + 1, NULL);
-    if (w.len) memcpy(p, w.ptr, (size_t)w.len);
-    p[w.len] = 0;
-    return p;
+    return sl_str_from_n(w.ptr, (size_t)w.len);
 }
 
 /* to_str(peer): "1.2.3.4:5678", as println and inspect render a peer.

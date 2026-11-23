@@ -63,9 +63,9 @@ for the whole connection reads correctly. No 32 KiB window per direction
 stays alive between messages. A message is sent compressed only when
 that makes it smaller.
 
-**Text with U+0000.** A `str` ends at its first zero byte, so
-`websocket.text(m)` stops there. `m.data` holds every byte, and
-`send_text_bytes` sends one.
+**Text with U+0000.** A `str` cannot hold a zero byte, so
+`websocket.text(m)` gives each one as U+FFFD. `m.data` holds every byte,
+and `send_text_bytes` sends one.
 
 Frames are masked with keys drawn from a 4 KiB pool of `crypto.rand`
 bytes, refilled as it empties. A frame is built in one allocation by
@@ -97,7 +97,7 @@ Send a text message.
 
 ### `fn send_text_bytes(c: Conn, data: bytes, deadline: until) -> result[bool, str]`
 
-Send a text message given as bytes, checked to be UTF-8 first: for text holding U+0000, which a str cannot (it ends at the first zero byte), and for text already in a byte buffer.
+Send a text message given as bytes, checked to be UTF-8 first: for text holding U+0000, which a str cannot (to_str writes it as U+FFFD), and for text already in a byte buffer.
 
 ### `fn send_binary(c: Conn, data: bytes, deadline: until) -> result[bool, str]`
 
@@ -113,7 +113,7 @@ The next message, or none when the deadline passes first (nothing is lost: a lat
 
 ### `fn text(m: Message) -> str`
 
-The text of a text message. A str ends at its first zero byte, so text holding U+0000 is cut there: m.data has every byte.
+The text of a text message. A str cannot hold a zero byte, so each U+0000 comes back as U+FFFD: m.data has every byte.
 
 ### `fn close(c: Conn, code: int, reason: str, deadline: until) -> result[bool, str]`
 

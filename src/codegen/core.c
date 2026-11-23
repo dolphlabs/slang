@@ -712,6 +712,35 @@ void check_extern_type(const char *t, int line, const char *what) {
              what, t);
 }
 
+/* The types a for-in over `it` binds: *t1 for its first name, *t2 for its
+ * second (NULL with one name). A list gives its elements, bytes and a str
+ * their bytes as ints; with two names those three bind the index first
+ * (`for i, b in s`). A map binds key and value. 0 when `it` cannot be
+ * iterated. Every pass that declares the loop's names (escape, MIR, move,
+ * liveness, codegen) asks here, so they cannot disagree. */
+int for_in_types(const char *it, int two, const char **t1, const char **t2) {
+    *t1 = NULL;
+    *t2 = NULL;
+    const char *each = NULL;
+    if (is_arr(it))
+        each = arr_elem(it);
+    else if (is_bytes(it) || is_str(it))
+        each = "int";
+    if (each) {
+        *t1 = two ? "int" : each;
+        *t2 = two ? each : NULL;
+        return 1;
+    }
+    if (is_map(it)) {
+        char *k, *v;
+        map_kv(it, &k, &v);
+        *t1 = k;
+        *t2 = two ? v : NULL;
+        return 1;
+    }
+    return 0;
+}
+
 /* "map[K]V" -> K and V (heap-allocated). Caller must pass a map type.
  * Values may be any type. */
 void map_kv(const char *t, char **k, char **v) {

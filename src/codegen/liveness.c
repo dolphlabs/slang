@@ -1016,15 +1016,11 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
         const char *it = infer_type(cg, s->as.for_in.iter);
         var_scope_push(cg);
         LiveVar *bound1 = NULL, *bound2 = NULL;
-        if (is_arr(it)) {
-            bound1 = declare_var(cg, s->as.for_in.name, arr_elem(it));
-        } else if (is_bytes(it)) {
-            declare_var(cg, s->as.for_in.name, "int");
-        } else if (is_map(it)) {
-            char *k, *v;
-            map_kv(it, &k, &v);
-            bound1 = declare_var(cg, s->as.for_in.name, k);
-            bound2 = declare_var(cg, s->as.for_in.name2, v);
+        const char *t1, *t2;
+        if (for_in_types(it, s->as.for_in.name2 != NULL, &t1, &t2)) {
+            bound1 = declare_var(cg, s->as.for_in.name, t1);
+            if (t2)
+                bound2 = declare_var(cg, s->as.for_in.name2, t2);
         }
         /* the bound variable(s) are redefined fresh every iteration
          * (var_push happens once per generated C loop, but the C

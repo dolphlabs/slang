@@ -6,7 +6,7 @@ dup bad second: ok {"id":1,"name":"n","tags":["a","b"],"inner":{"city":"c","zip"
 dup bad syntax second: err unexpected character '}' (at byte 132)
 unknown keys: ok {"id":1,"name":"n","tags":["a","b"],"inner":{"city":"c","zip":null},"score":null,"small":1,"flag":true,"raw":"aGk=","counts":{"x":1},"kind":"Small"}
 escaped key: ok {"id":1,"name":"n","tags":[],"inner":{"city":"c","zip":null},"score":null,"small":1,"flag":true,"raw":"","counts":{},"kind":"Small"}
-nul in key: ok {"id":7,"name":"n","tags":[],"inner":{"city":"c","zip":null},"score":null,"small":1,"flag":true,"raw":"","counts":{},"kind":"Small"}
+nul in key: err missing required field 'id'
 map dup last wins: ok {"id":1,"name":"n","tags":["a","b"],"inner":{"city":"c","zip":null},"score":null,"small":1,"flag":true,"raw":"aGk=","counts":{"a":2,"b":3},"kind":"Small"}
 missing required: err missing required field 'id'
 missing before type: err missing required field 'id'
@@ -44,5 +44,5 @@ top int junk: err trailing garbage after JSON value (at byte 2)
 top neg zero: ok 0
 surrogate pair: ok len=4 "😀"
 utf8 raw: ok len=9 "café ☕"
-escaped nul: ok len=1 "a"
+escaped nul: ok len=5 "a�b"
 escapes: ok len=8 "\"\\/\b\f\n\r\t"
