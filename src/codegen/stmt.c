@@ -2246,7 +2246,7 @@ static int block_has_return(Block *b) {
 /* Is e a call to a package function known never to return? Only a plain
  * call by name counts: a function value, a method or a generic function
  * is never assumed to diverge, so this can only under-claim. */
-static int call_never_returns(CG *cg, Expr *e) {
+int call_never_returns(CG *cg, Expr *e) {
     if (e->kind != EX_CALL || e->as.call.callee || !e->as.call.name)
         return 0;
     const char *n = e->as.call.name;

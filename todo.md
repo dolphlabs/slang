@@ -364,16 +364,21 @@
   dev (pg, http, the main task) and 0 with the fix. x86-64 Linux only;
   clang on macOS was not checked.
 
-- [ ] **`&xs[i]` on a list of value structs fails in the C compiler (found
-  2026-11-10, feat/decimal-package; not fixed).** Borrowing an element
-  emits `&(({ ... sl_arr_get(...) }))`, the address of a statement
-  expression, and cc stops with "cannot take the address of an rvalue":
-  raw C output, which a slang error must never be. Four lines reproduce it:
-  `struct P { x: int }`, `fn get(p: &P) -> int { return p.x; }`,
-  `let ps: [P] = [P { x: 1 }]`, `println(get(&ps[0]));`. The element
-  should be borrowed through a pointer into the list's storage (or the
-  borrow rejected with a slang error saying to bind it first). decimal's
-  allocate binds the element to a local instead.
+- [x] **`&xs[i]` on a list of value structs fails in the C compiler (found
+  2026-11-10, feat/decimal-package; fixed 2026-11-23,
+  fix/borrow-list-elem).** Borrowing an element emitted the address of a
+  statement expression, and cc stopped with "cannot take the address of
+  an rvalue". Now every borrow of an element (`&`/`&mut` of a list, map,
+  bytes or wire index) is a slang error naming the way out: copy it to a
+  local, and for `&mut` store it back or use `xs[i].f = v`. A pointer into
+  a list's storage was the other option and is not sound: lists are
+  shared by reference (`let qs = ps;` aliases), so a push through an alias
+  the borrow checker cannot see moves the storage, and a `&` is not a GC
+  root, so the old storage can be freed under the reference. `&mut xs[i]`
+  on elements holding GC pointers used to compile into that pointer and is
+  refused too (nothing in stdlib, tests or examples used it).
+  tests/fail_borrow_list_elem, fail_borrow_list_elem_mut,
+  fail_borrow_map_value, fail_borrow_bytes_elem.
 
 - [ ] **A call from user code into a non-leaf function costs a ~25 ns
   bracket (measured 2026-11-10, feat/decimal-package; not changed).** In a
@@ -396,14 +401,12 @@
   record this test as flaky under TSan; this was a plain run. If it
   recurs, look at the client's read racing the server's drain.
 
-- [ ] **`str` literals have no Unicode escape (found 2026-11-09,
-  feat/unicode-package; not fixed).** The lexer accepts `\xHH` only in
-  `b"..."` literals and has no `\u{...}` for `str`, so a string holding a
-  combining mark (U+0301) or a look-alike (U+2126 OHM SIGN, which editors
-  silently normalise to U+03A9) has to be written as
-  `to_str(b"e\xCC\x81")`. tests/unicode does that. A `\u{HEX}` escape
-  in `str` literals (Swift, Rust and JavaScript spell it that way) is a
-  language change, so it needs a decision first.
+- [x] **`str` literals have no Unicode escape (found 2026-11-09,
+  feat/unicode-package; fixed in v0.2.9, feat/str-escapes).** `str`
+  literals now accept `\xHH`, `\uXXXX` and `\u{...}`, so a combining mark
+  (U+0301) or a look-alike (U+2126 OHM SIGN) no longer has to be written
+  as `to_str(b"e\xCC\x81")`. tests/str_escapes,
+  tests/fail_escape_surrogate, fail_escape_u_past_max, fail_escape_x_short.
 
 - [x] **`unicode.equal_fold` on non-ASCII text cost about 190 ns (found
   2026-11-09, feat/unicode-package; fixed 2026-11-10,
@@ -1333,9 +1336,10 @@ Found building zokor's logger (2026-10-12), not fixed:
   and invalid UTF-8 as three-digit octal: its `\xHH` swallowed a hex digit
   that followed (a raw ESC then `1` compiled to one wrong byte). Tests:
   tests/str_escapes, tests/fail_escape_*.
-- [ ] **A str cannot be read byte by byte without a copy**: `s[i]` is "cannot
-  index a value of type str", so a scan of a str allocates `to_bytes(s)`.
-  A read-only `byte_at(s, i)` (or indexing) would make escape checks free.
+- [x] **A str cannot be read byte by byte without a copy** (fixed in
+  v0.2.9, #642): `s[i]` is still "cannot index a value of type
+  str", but `for b in s` and `for i, b in s` read the bytes in place, with
+  no `to_bytes(s)` copy. tests/for_in_str.
 - [x] **CR/LF in a header field was written as a line break**
   (GHSA-3j69-rqv8-pr45, fixed in fix/http-header-crlf). `http.write` and
   `serialize`, `httpc`'s request writer and `http2`'s header encoder now
@@ -1358,12 +1362,18 @@ Found building zokor's logger (2026-10-12), not fixed:
   Still no explicit instantiation syntax (`f[int]` would collide with
   indexing), so a generic function cannot supply a type parameter itself.
   tests/generic_fn_values, tests/fail_generic_fn_value_*.
-- [ ] **The move check is not path-sensitive**: in
+- [x] **The move check is not path-sensitive** (fixed 2026-11-23,
+  fix/move-path-sensitive): in
   `if !ok { refuse(c); return ""; } spawn serve(c);` the second use of `c`
-  is "use of moved value", though the branch that moved it returns. The
-  workaround is an `if`/`else` with one move per arm (zokor's
-  `accept_one`). A move on a path that cannot reach the use should not
-  count.
+  was "use of moved value", though the branch that moved it returns. A
+  branch that ends in return, break, continue, exit, panic or a call
+  compute_noreturn found no longer joins into the state after an if, if
+  let, switch or select, and a guard's else (which must leave) no longer
+  leaks its moves past the guard. A break or continue carries its moves
+  into the loop's next iteration and the code after the loop.
+  tests/move_path_sensitive, fail_move_break,
+  fail_move_branch_falls_through. zokor's `accept_one` can drop its
+  if/else workaround.
 
 ## G. gRPC and GraphQL
 

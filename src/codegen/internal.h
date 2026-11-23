@@ -943,6 +943,7 @@ char *gen_structlit(CG *cg, Expr *e);
 char *gen_index(CG *cg, Expr *e);
 char *map_miss_call(CG *cg, const char *k, const char *kname,
                     const char *at);
+void index_borrow_refused(CG *cg, Expr *e, int mut, int line);
 char *gen_slice(CG *cg, Expr *e);
 char *gen_list(CG *cg, Expr *e, const char *expect_elem);
 char *gen_expr(CG *cg, Expr *e);
@@ -950,6 +951,7 @@ void gen_print(CG *cg, Expr *call, int newline);
 void gen_stmt(CG *cg, Stmt *s);
 void gen_stmts(CG *cg, Stmt **stmts, int count);
 int block_leaves_scope(CG *cg, Block *b);
+int call_never_returns(CG *cg, Expr *e);
 void compute_noreturn(CG *cg, Package *pkgs, int npkgs);
 void compute_leaf_fns(CG *cg, Package *pkgs, int npkgs);
 int user_leaf_call(CG *cg, Expr *e);
