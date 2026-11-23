@@ -118,8 +118,8 @@
   <div class="hero-shade" aria-hidden="true"></div>
 
   <div class="hero-inner">
-    <a class="pill" href="https://github.com/dolphlabs/slang/releases/tag/v0.2.8">
-      <span class="pill-tag">v0.2.8 rex</span>
+    <a class="pill" href="https://github.com/dolphlabs/slang/releases/tag/v0.2.9">
+      <span class="pill-tag">v0.2.9 rex</span>
       <span class="pill-long">{{hero.pill_long}}</span>
       <span class="pill-short">{{hero.pill_short}}</span>
       <span aria-hidden="true">→</span>
@@ -581,7 +581,7 @@ println(sqlite3_libversion());</code></pre>
     </div>
     <div class="code-card install-code">
       <div class="term-bar"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><span>{{install.terminal}}</span><button type="button" class="copy" data-copy="install-cmds" data-copied="{{text:install.copied}}" data-failed="{{text:install.copy_failed}}">{{install.copy}}</button></div>
-      <pre id="install-cmds"><code data-lang="shell">~$ git clone https://github.com/dolphlabs/slang && cd slang
+      <pre id="install-cmds"><code data-lang="shell">~$ git clone -b v0.2.9 https://github.com/dolphlabs/slang && cd slang
 ~/slang$ sudo make install
 ~/slang$ slangc new hello && cd hello
 ~/hello$ slangc main.sl --run

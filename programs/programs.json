@@ -1,5 +1,5 @@
 {
-  "recorded_with": "slangc 0.2.7",
+  "recorded_with": "slangc 0.2.9",
   "programs": [
     {
       "name": "hello",
@@ -9,7 +9,7 @@
       "name": "tasks",
       "exit": 0,
       "recorded": {
-        "ms": "583"
+        "ms": "476"
       }
     },
     {

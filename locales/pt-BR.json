@@ -34,7 +34,7 @@
   "search.unavailable": "A pesquisa fica disponível quando a documentação for publicada com o site.",
   "search.pages": "Páginas",
 
-  "hero.pill_long": "Assinatura AWS SigV4, para os pacotes SQS, SNS e GCS",
+  "hero.pill_long": "38 pacotes novos: DNS, passkeys, ACME, OIDC e mais",
   "hero.pill_short": "Novidades",
   "hero.title_1": "Diga em slang.",
   "hero.title_2": "Entregue como C.",
@@ -83,7 +83,7 @@
 
   "conc.title": "Estacione a tarefa, não a thread.",
   "conc.lede": "<code>spawn</code> coloca uma tarefa verde em um pool com um worker por núcleo. Sockets, sleeps, canais e locks estacionam a tarefa e devolvem a thread. Não existe <code>async</code>, nem <code>await</code>, nem uma segunda cor de função: o código que parece bloqueante continua simples.",
-  "conc.tick_1": "<b>10.000 tarefas</b> que dormem 100&nbsp;ms cada terminam em cerca de 0,6&nbsp;s num notebook.",
+  "conc.tick_1": "<b>10.000 tarefas</b> que dormem 100&nbsp;ms cada terminam em cerca de 0,5&nbsp;s num notebook.",
   "conc.tick_2": "<b>Preemptivo</b> quando uma tarefa passa da sua fatia, então um laço quente não consegue deixar um worker sem CPU.",
   "conc.tick_3": "<b>TLS e DNS também estacionam.</b> Handshakes rodam no reactor; consultas, em uma thread própria.",
   "conc.tick_4": "<b>Um GC preciso e geracional</b> com write barrier e um modo verificador na CI.",
