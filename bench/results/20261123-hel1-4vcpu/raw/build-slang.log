@@ -1,0 +1,112 @@
+src/main.c: In function ‘cmd_new’:
+src/main.c:113:45: warning: ‘%s’ directive output may be truncated writing up to 4095 bytes into a region of size 256 [-Wformat-truncation=]
+  113 |         snprintf(namebuf, sizeof(namebuf), "%s", slash ? slash + 1 : dir);
+      |                                             ^~
+In file included from /usr/include/stdio.h:974,
+                 from src/common.h:5,
+                 from src/main.c:17:
+In function ‘snprintf’,
+    inlined from ‘cmd_new’ at src/main.c:113:9:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:68:10: note: ‘__builtin_snprintf’ output between 1 and 4096 bytes into a destination of size 256
+   68 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   69 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   70 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+src/main.c: In function ‘cmd_test’:
+src/main.c:483:46: warning: ‘__builtin___snprintf_chk’ output may be truncated before the last format character [-Wformat-truncation=]
+  483 |         snprintf(fpath, sizeof(fpath), "%s/%s", treal, files[i]);
+      |                                              ^
+In function ‘snprintf’,
+    inlined from ‘cmd_test’ at src/main.c:483:9:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:68:10: note: ‘__builtin___snprintf_chk’ output 2 or more bytes (assuming 4097) into a destination of size 4096
+   68 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   69 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   70 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+src/main.c: In function ‘cmd_test’:
+src/main.c:597:49: warning: ‘/main.sl’ directive output may be truncated writing 8 bytes into a region of size between 1 and 4096 [-Wformat-truncation=]
+  597 |     snprintf(runner_src, sizeof(runner_src), "%s/main.sl", tmpreal);
+      |                                                 ^~~~~~~~
+In function ‘snprintf’,
+    inlined from ‘cmd_test’ at src/main.c:597:5:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:68:10: note: ‘__builtin___snprintf_chk’ output between 9 and 4104 bytes into a destination of size 4096
+   68 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   69 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   70 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+src/main.c: In function ‘cmd_test’:
+src/main.c:598:49: warning: ‘/runner’ directive output may be truncated writing 7 bytes into a region of size between 1 and 4096 [-Wformat-truncation=]
+  598 |     snprintf(runner_bin, sizeof(runner_bin), "%s/runner", tmpreal);
+      |                                                 ^~~~~~~
+In function ‘snprintf’,
+    inlined from ‘cmd_test’ at src/main.c:598:5:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:68:10: note: ‘__builtin___snprintf_chk’ output between 8 and 4103 bytes into a destination of size 4096
+   68 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   69 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   70 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+src/main.c: In function ‘cmd_test’:
+src/main.c:607:35: warning: ‘.gen.c’ directive output may be truncated writing 6 bytes into a region of size between 1 and 4096 [-Wformat-truncation=]
+  607 |     snprintf(gen, sizeof(gen), "%s.gen.c", runner_bin);
+      |                                   ^~~~~~
+In function ‘snprintf’,
+    inlined from ‘cmd_test’ at src/main.c:607:5:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:68:10: note: ‘__builtin___snprintf_chk’ output between 7 and 4102 bytes into a destination of size 4096
+   68 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   69 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   70 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+src/codegen/infer.c: In function ‘infer_type’:
+src/codegen/infer.c:1181:9: warning: this statement may fall through [-Wimplicit-fallthrough=]
+ 1181 |         cg_error(e->line, "unknown unary operator '%s'", op);
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/codegen/infer.c:1183:5: note: here
+ 1183 |     case EX_BINARY:
+      |     ^~~~
+src/codegen/infer.c:1263:9: warning: this statement may fall through [-Wimplicit-fallthrough=]
+ 1263 |         cg_error(e->line, "cannot index a value of type %s", bt);
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/codegen/infer.c:1265:5: note: here
+ 1265 |     case EX_SLICE: {
+      |     ^~~~
+src/codegen/infer.c:1285:9: warning: this statement may fall through [-Wimplicit-fallthrough=]
+ 1285 |         cg_error(e->line, "cannot slice a value of type %s", bt);
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/codegen/infer.c:1287:5: note: here
+ 1287 |     case EX_LIST: {
+      |     ^~~~
+src/codegen/infer.c:1375:9: warning: this statement may fall through [-Wimplicit-fallthrough=]
+ 1375 |         cg_error(e->line, "struct '%s' has no field '%s'%s", sd->canonical,
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 1376 |                  e->as.field.name, suggest_field(sd, e->as.field.name));
+      |                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/codegen/infer.c:1378:5: note: here
+ 1378 |     case EX_STRUCTLIT: {
+      |     ^~~~
+In file included from /usr/include/string.h:580,
+                 from src/codegen/../common.h:7,
+                 from src/codegen/internal.h:10,
+                 from src/codegen/borrow.c:1:
+In function ‘memcpy’,
+    inlined from ‘compute_liveness’ at src/codegen/borrow.c:591:17,
+    inlined from ‘check_fn’ at src/codegen/borrow.c:1207:5,
+    inlined from ‘compute_borrowck’ at src/codegen/borrow.c:1246:9:
+/usr/include/x86_64-linux-gnu/bits/string_fortified.h:29:10: warning: ‘__builtin_memcpy’ specified bound between 18446744071562067968 and 18446744073709551615 exceeds maximum object size 9223372036854775807 [-Wstringop-overflow=]
+   29 |   return __builtin___memcpy_chk (__dest, __src, __len,
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   30 |                                  __glibc_objsize0 (__dest));
+      |                                  ~~~~~~~~~~~~~~~~~~~~~~~~~~
+compiled /root/slang/bench/http_opt/main.sl -> /root/slang/bench/.build/slang/http
+compiled /root/slang/stress_test/programs/concurrent_compute/main.sl -> /root/slang/bench/.build/slang/compute
+compiled /root/slang/bench/suite/api/slang/main.sl -> /root/slang/bench/.build/slang/api
+compiled /root/slang/bench/suite/batch/slang/main.sl -> /root/slang/bench/.build/slang/batch
