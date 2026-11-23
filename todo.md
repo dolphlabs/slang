@@ -396,14 +396,12 @@
   record this test as flaky under TSan; this was a plain run. If it
   recurs, look at the client's read racing the server's drain.
 
-- [ ] **`str` literals have no Unicode escape (found 2026-11-09,
-  feat/unicode-package; not fixed).** The lexer accepts `\xHH` only in
-  `b"..."` literals and has no `\u{...}` for `str`, so a string holding a
-  combining mark (U+0301) or a look-alike (U+2126 OHM SIGN, which editors
-  silently normalise to U+03A9) has to be written as
-  `to_str(b"e\xCC\x81")`. tests/unicode does that. A `\u{HEX}` escape
-  in `str` literals (Swift, Rust and JavaScript spell it that way) is a
-  language change, so it needs a decision first.
+- [x] **`str` literals have no Unicode escape (found 2026-11-09,
+  feat/unicode-package; fixed in v0.2.9, feat/str-escapes).** `str`
+  literals now accept `\xHH`, `\uXXXX` and `\u{...}`, so a combining mark
+  (U+0301) or a look-alike (U+2126 OHM SIGN) no longer has to be written
+  as `to_str(b"e\xCC\x81")`. tests/str_escapes,
+  tests/fail_escape_surrogate, fail_escape_u_past_max, fail_escape_x_short.
 
 - [x] **`unicode.equal_fold` on non-ASCII text cost about 190 ns (found
   2026-11-09, feat/unicode-package; fixed 2026-11-10,
@@ -1333,9 +1331,10 @@ Found building zokor's logger (2026-10-12), not fixed:
   and invalid UTF-8 as three-digit octal: its `\xHH` swallowed a hex digit
   that followed (a raw ESC then `1` compiled to one wrong byte). Tests:
   tests/str_escapes, tests/fail_escape_*.
-- [ ] **A str cannot be read byte by byte without a copy**: `s[i]` is "cannot
-  index a value of type str", so a scan of a str allocates `to_bytes(s)`.
-  A read-only `byte_at(s, i)` (or indexing) would make escape checks free.
+- [x] **A str cannot be read byte by byte without a copy** (fixed in
+  v0.2.9, #642): `s[i]` is still "cannot index a value of type
+  str", but `for b in s` and `for i, b in s` read the bytes in place, with
+  no `to_bytes(s)` copy. tests/for_in_str.
 - [x] **CR/LF in a header field was written as a line break**
   (GHSA-3j69-rqv8-pr45, fixed in fix/http-header-crlf). `http.write` and
   `serialize`, `httpc`'s request writer and `http2`'s header encoder now
