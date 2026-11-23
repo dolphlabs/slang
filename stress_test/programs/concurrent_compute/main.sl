@@ -18,8 +18,6 @@
 import "time";
 import "proc";
 
-extern fn atoi(s: str) -> i32;
-
 fn count_primes_range(lo: int, hi: int) -> int {
     let count = 0;
     for i in lo..hi {
@@ -65,12 +63,9 @@ fn worker(work_n: int, alloc_n: int, results: chan[TaskResult]) {
     chan_send(results, TaskResult { primes: primes, alloc_sum: alloc_sum });
 }
 
-let tasks_str: str = proc.getenv("CC_TASKS") ?? "1000";
-let tasks = atoi(tasks_str);
-let work_str: str = proc.getenv("CC_WORK") ?? "20000";
-let work_n = atoi(work_str);
-let alloc_str: str = proc.getenv("CC_ALLOC") ?? "200";
-let alloc_n = atoi(alloc_str);
+let tasks = to_int(proc.getenv("CC_TASKS") ?? "1000") ?? 1000;
+let work_n = to_int(proc.getenv("CC_WORK") ?? "20000") ?? 20000;
+let alloc_n = to_int(proc.getenv("CC_ALLOC") ?? "200") ?? 200;
 
 println("concurrent_compute: tasks=" + to_str(tasks)
         + " work_n=" + to_str(work_n) + " alloc_n=" + to_str(alloc_n));

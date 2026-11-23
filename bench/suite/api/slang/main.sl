@@ -145,12 +145,11 @@ fn with_pg_profile(r: http.Response, q: PGQueryProfile,
 
 // A positive integer of digits only, or -1.
 fn parse_id(s: str) -> int {
-    let b = to_bytes(s);
-    if len(b) == 0 || len(b) > 18 {
+    if len(s) == 0 || len(s) > 18 {
         return -1;
     }
     let n = 0;
-    for c in b {
+    for c in s {
         if c < 48 || c > 57 {
             return -1;
         }
