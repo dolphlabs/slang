@@ -293,6 +293,121 @@ static void join_moved(CG *cg, int *a, int *b, int n) {
 static void check_block(CG *cg, Block *b);
 static void check_stmts(CG *cg, Stmt **stmts, int count);
 
+/* Path sensitivity. `mv_dead` is set when control cannot reach the
+ * statement after the one just checked: a return, a break or continue,
+ * or a call that never returns. A branch that ends dead does not take
+ * part in the join after an if, switch or select, so a move on a path
+ * that leaves cannot make a later use an error. A break or continue
+ * hands its state to the enclosing loop (MvLoop.carry), which joins it
+ * into both the next iteration and the state after the loop. */
+static int mv_dead;
+
+typedef struct MvLoop {
+    int *carry;
+    int n;
+    struct MvLoop *up;
+} MvLoop;
+
+static MvLoop *mv_loop;
+/* break inside a switch leaves only the switch: depth of switches
+ * entered since the innermost loop */
+static int mv_switch_depth;
+
+static void loop_carry(CG *cg) {
+    if (!mv_loop)
+        return;
+    for (int i = 0; i < mv_loop->n; i++)
+        mv_loop->carry[i] |= cg->vars.items[i].moved;
+}
+
+/* Join of mutually exclusive arms: each arm is checked from the same
+ * state, and afterwards Arms holds the union of the arms that fall
+ * through. */
+typedef struct {
+    int *acc;
+    int live;
+} Arms;
+
+static void arms_add(CG *cg, Arms *a, int n) {
+    if (mv_dead) {
+        mv_dead = 0;
+        return;
+    }
+    int *arm = snap_moved(cg, n);
+    if (!a->acc) {
+        a->acc = arm;
+    } else {
+        for (int i = 0; i < n; i++)
+            a->acc[i] |= arm[i];
+    }
+    a->live = 1;
+}
+
+/* Leaves cg holding the join; when no arm falls through, the code after
+ * is unreachable and stays dead. */
+static void arms_end(CG *cg, Arms *a, int *before, int n) {
+    if (a->live) {
+        restore_moved(cg, a->acc, n);
+        mv_dead = 0;
+    } else {
+        restore_moved(cg, before, n);
+        mv_dead = 1;
+    }
+}
+
+/* One loop body to a fixed point. The state at the top of an iteration
+ * is the entry state joined with every way back to it: the body's end
+ * when it falls through, and each break or continue. The state after
+ * the loop is the same join (the loop can exit at its condition, or by a
+ * break), so it is left in cg. */
+typedef void (*mv_body_fn)(CG *cg, void *ctx);
+
+static void check_loop(CG *cg, int n, mv_body_fn body, void *ctx) {
+    MvLoop lp;
+    lp.n = n;
+    lp.carry = (int *)xmalloc((size_t)(n > 0 ? n : 1) * sizeof(int));
+    memset(lp.carry, 0, (size_t)(n > 0 ? n : 1) * sizeof(int));
+    lp.up = mv_loop;
+    int saved_sw = mv_switch_depth;
+    mv_loop = &lp;
+    mv_switch_depth = 0;
+    for (;;) {
+        int *start = snap_moved(cg, n);
+        mv_dead = 0;
+        body(cg, ctx);
+        int changed = 0;
+        for (int i = 0; i < n; i++) {
+            int j = start[i] || lp.carry[i] ||
+                    (!mv_dead && cg->vars.items[i].moved);
+            if (j != start[i])
+                changed = 1;
+            cg->vars.items[i].moved = j;
+        }
+        if (!changed)
+            break;
+    }
+    mv_loop = lp.up;
+    mv_switch_depth = saved_sw;
+    mv_dead = 0;
+}
+
+typedef struct {
+    Stmt **stmts;
+    int count;
+    Block *blk;
+} LoopBody;
+
+static void loop_body(CG *cg, void *ctx) {
+    LoopBody *lb = (LoopBody *)ctx;
+    var_scope_push(cg);
+    if (lb->blk)
+        check_block(cg, lb->blk);
+    else
+        check_stmts(cg, lb->stmts, lb->count);
+    var_scope_pop(cg);
+}
+
+
 static void check_stmt(CG *cg, Stmt *s) {
     if (s->file)
         diag_file = s->file;
@@ -338,9 +453,10 @@ static void check_stmt(CG *cg, Stmt *s) {
         /* The arms are mutually exclusive, so a move inside one must
          * not be visible to the others -- each starts from the same
          * pre-select state, exactly like if/else, and the joined
-         * result is the union. */
+         * result is the union of the arms that fall through. */
         int i, n;
-        int *before, *acc = NULL;
+        int *before;
+        Arms arms = {0};
         for (i = 0; i < s->as.select_stmt.ncases; i++) {
             SelectCase *sc = &s->as.select_stmt.cases[i];
             check_rvalue(cg, sc->ch);
@@ -351,7 +467,6 @@ static void check_stmt(CG *cg, Stmt *s) {
         before = snap_moved(cg, n);
         for (i = 0; i < s->as.select_stmt.ncases; i++) {
             SelectCase *sc = &s->as.select_stmt.cases[i];
-            int *arm;
             restore_moved(cg, before, n);
             var_scope_push(cg);
             if (sc->bind) {
@@ -362,38 +477,28 @@ static void check_stmt(CG *cg, Stmt *s) {
             }
             check_block(cg, sc->body);
             var_scope_pop(cg);
-            arm = snap_moved(cg, n);
-            if (!acc) {
-                acc = arm;
-            } else {
-                /* join_moved leaves cg holding the union, so re-snap to
-                   keep the running accumulator in step */
-                join_moved(cg, acc, arm, n);
-                acc = snap_moved(cg, n);
-            }
+            arms_add(cg, &arms, n);
         }
         if (s->as.select_stmt.def) {
-            int *d;
             restore_moved(cg, before, n);
             check_block(cg, s->as.select_stmt.def);
-            d = snap_moved(cg, n);
-            join_moved(cg, acc, d, n);
-            acc = snap_moved(cg, n);
+            arms_add(cg, &arms, n);
         }
-        restore_moved(cg, acc, n);
+        arms_end(cg, &arms, before, n);
         return;
     }
     case ST_IF: {
         check_rvalue(cg, s->as.if_stmt.cond);
         int n = cg->vars.count;
         int *before = snap_moved(cg, n);
+        Arms arms = {0};
         check_block(cg, s->as.if_stmt.then_blk);
-        int *then_m = snap_moved(cg, n);
+        arms_add(cg, &arms, n);
         restore_moved(cg, before, n);
         if (s->as.if_stmt.else_blk)
             check_block(cg, s->as.if_stmt.else_blk);
-        int *else_m = snap_moved(cg, n);
-        join_moved(cg, then_m, else_m, n);
+        arms_add(cg, &arms, n);
+        arms_end(cg, &arms, before, n);
         return;
     }
     case ST_SWITCH: {
@@ -404,67 +509,38 @@ static void check_stmt(CG *cg, Stmt *s) {
         check_rvalue(cg, s->as.switch_stmt.scrut);
         int n = cg->vars.count;
         int *before = snap_moved(cg, n);
-        int *acc = NULL;
+        Arms arms = {0};
         for (int i = 0; i < s->as.switch_stmt.ncases; i++) {
             for (int j = 0; j < s->as.switch_stmt.cases[i].nvals; j++)
                 check_rvalue(cg, s->as.switch_stmt.cases[i].vals[j]);
         }
+        mv_switch_depth++;
         for (int i = 0; i < s->as.switch_stmt.ncases; i++) {
-            int *arm;
             restore_moved(cg, before, n);
             var_scope_push(cg);
             check_block(cg, s->as.switch_stmt.cases[i].body);
             var_scope_pop(cg);
-            arm = snap_moved(cg, n);
-            if (!acc) {
-                acc = arm;
-            } else {
-                join_moved(cg, acc, arm, n);
-                acc = snap_moved(cg, n);
-            }
+            arms_add(cg, &arms, n);
         }
         if (s->as.switch_stmt.def) {
-            int *d;
             restore_moved(cg, before, n);
             var_scope_push(cg);
             check_block(cg, s->as.switch_stmt.def);
             var_scope_pop(cg);
-            d = snap_moved(cg, n);
-            if (!acc) {
-                acc = d;
-            } else {
-                join_moved(cg, acc, d, n);
-                acc = snap_moved(cg, n);
-            }
-        } else if (!acc) {
-            acc = before;
+            arms_add(cg, &arms, n);
         } else {
-            join_moved(cg, acc, before, n);
-            acc = snap_moved(cg, n);
+            restore_moved(cg, before, n);
+            arms_add(cg, &arms, n);
         }
-        restore_moved(cg, acc, n);
+        mv_switch_depth--;
+        arms_end(cg, &arms, before, n);
         return;
     }
     case ST_WHILE: {
         check_rvalue(cg, s->as.while_stmt.cond);
-        int n = cg->vars.count;
-        for (;;) {
-            int *start = snap_moved(cg, n);
-            var_scope_push(cg);
-            check_stmts(cg, s->as.while_stmt.body->stmts,
-                        s->as.while_stmt.body->count);
-            var_scope_pop(cg);
-            int *end = snap_moved(cg, n);
-            int changed = 0;
-            for (int i = 0; i < n; i++) {
-                int j = start[i] || end[i];
-                if (j != start[i])
-                    changed = 1;
-                cg->vars.items[i].moved = j;
-            }
-            if (!changed)
-                break;
-        }
+        LoopBody lb = {s->as.while_stmt.body->stmts,
+                       s->as.while_stmt.body->count, NULL};
+        check_loop(cg, cg->vars.count, loop_body, &lb);
         return;
     }
     case ST_FOR: {
@@ -473,23 +549,9 @@ static void check_stmt(CG *cg, Stmt *s) {
         int n = cg->vars.count;
         var_scope_push(cg);
         var_push(cg, s->as.for_stmt.name, "int");
-        for (;;) {
-            int *start = snap_moved(cg, n);
-            var_scope_push(cg);
-            check_stmts(cg, s->as.for_stmt.body->stmts,
-                        s->as.for_stmt.body->count);
-            var_scope_pop(cg);
-            int *end = snap_moved(cg, n);
-            int changed = 0;
-            for (int i = 0; i < n; i++) {
-                int j = start[i] || end[i];
-                if (j != start[i])
-                    changed = 1;
-                cg->vars.items[i].moved = j;
-            }
-            if (!changed)
-                break;
-        }
+        LoopBody lb = {s->as.for_stmt.body->stmts, s->as.for_stmt.body->count,
+                       NULL};
+        check_loop(cg, n, loop_body, &lb);
         var_scope_pop(cg);
         return;
     }
@@ -504,31 +566,20 @@ static void check_stmt(CG *cg, Stmt *s) {
             if (t2)
                 var_push(cg, s->as.for_in.name2, t2);
         }
-        for (;;) {
-            int *start = snap_moved(cg, n);
-            var_scope_push(cg);
-            check_block(cg, s->as.for_in.body);
-            var_scope_pop(cg);
-            int *end = snap_moved(cg, n);
-            int changed = 0;
-            for (int i = 0; i < n; i++) {
-                int j = start[i] || end[i];
-                if (j != start[i])
-                    changed = 1;
-                cg->vars.items[i].moved = j;
-            }
-            if (!changed)
-                break;
-        }
+        LoopBody lb = {NULL, 0, s->as.for_in.body};
+        check_loop(cg, n, loop_body, &lb);
         var_scope_pop(cg);
         return;
     }
     case ST_RETURN:
         if (s->as.ret.value)
             check_rvalue(cg, s->as.ret.value);
+        mv_dead = 1;
         return;
     case ST_EXPR:
         check_rvalue(cg, s->as.expr_stmt.expr);
+        if (call_never_returns(cg, s->as.expr_stmt.expr))
+            mv_dead = 1;
         return;
     case ST_SPAWN:
         check_rvalue(cg, s->as.spawn.call);
@@ -557,7 +608,14 @@ static void check_stmt(CG *cg, Stmt *s) {
             var_redecl_check(cg, s->as.guard_let.err_name, s->line);
             var_push(cg, s->as.guard_let.err_name, tev);
         }
+        /* The else must leave the scope (check_guard_else_leaves), so
+         * what it moves is gone only on a path that never reaches the
+         * statements after the guard. */
+        int gn = cg->vars.count;
+        int *gbefore = snap_moved(cg, gn);
         check_block(cg, s->as.guard_let.body);
+        restore_moved(cg, gbefore, gn);
+        mv_dead = 0;
         if (s->as.guard_let.err_name)
             var_scope_pop(cg);
         if (inner) {
@@ -593,9 +651,10 @@ static void check_stmt(CG *cg, Stmt *s) {
             var_redecl_check(cg, s->as.if_let.name, s->line);
             var_push(cg, s->as.if_let.name, inner);
         }
+        Arms arms = {0};
         check_block(cg, s->as.if_let.then_blk);
         var_scope_pop(cg);
-        int *then_m = snap_moved(cg, n);
+        arms_add(cg, &arms, n);
         restore_moved(cg, before, n);
         if (s->as.if_let.else_blk) {
             var_scope_push(cg);
@@ -606,15 +665,26 @@ static void check_stmt(CG *cg, Stmt *s) {
             check_block(cg, s->as.if_let.else_blk);
             var_scope_pop(cg);
         }
-        int *else_m = snap_moved(cg, n);
-        join_moved(cg, then_m, else_m, n);
+        arms_add(cg, &arms, n);
+        arms_end(cg, &arms, before, n);
         return;
     }
     case ST_UNSAFE:
         check_block(cg, s->as.unsafe_blk.body);
         return;
     case ST_BREAK:
+        /* inside a switch, break leaves only the switch: its state
+         * reaches the statement after it, as a falling-through arm's
+         * does */
+        if (mv_switch_depth)
+            return;
+        loop_carry(cg);
+        mv_dead = 1;
+        return;
     case ST_CONTINUE:
+        loop_carry(cg);
+        mv_dead = 1;
+        return;
     case ST_STRUCT:
     case ST_ENUM:
     case ST_IMPL:
@@ -637,6 +707,9 @@ static void check_fn(CG *cg, Block *body, char **params,
                      const char **param_types, int nparams) {
     var_scope_reset(cg);
     var_scope_push(cg);
+    mv_dead = 0;
+    mv_loop = NULL;
+    mv_switch_depth = 0;
     for (int i = 0; i < nparams; i++)
         var_push(cg, params[i], param_types[i]);
     check_stmts(cg, body->stmts, body->count);
