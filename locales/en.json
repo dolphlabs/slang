@@ -34,7 +34,7 @@
   "search.unavailable": "Search is available once the docs are deployed with the site.",
   "search.pages": "Pages",
 
-  "hero.pill_long": "AWS SigV4 signing, for SQS, SNS and GCS packages",
+  "hero.pill_long": "38 new packages: DNS, passkeys, ACME, OIDC and more",
   "hero.pill_short": "What's new",
   "hero.title_1": "Say it in slang.",
   "hero.title_2": "Ship it as C.",
@@ -83,7 +83,7 @@
 
   "conc.title": "Park the task, not the thread.",
   "conc.lede": "<code>spawn</code> puts a green task on a pool with one worker per core. Sockets, sleeps, channels and locks park the task and hand the thread back. There is no <code>async</code>, no <code>await</code> and no second colour of function: code that looks blocking stays simple.",
-  "conc.tick_1": "<b>10,000 tasks</b> that each sleep 100&nbsp;ms finish in about 0.6&nbsp;s on a laptop.",
+  "conc.tick_1": "<b>10,000 tasks</b> that each sleep 100&nbsp;ms finish in about 0.5&nbsp;s on a laptop.",
   "conc.tick_2": "<b>Preempted</b> when a task spins past its slice, so one hot loop cannot starve a worker.",
   "conc.tick_3": "<b>TLS and DNS park too.</b> Handshakes run on the reactor; lookups on their own thread.",
   "conc.tick_4": "<b>A precise, generational GC</b> with a write barrier and a verifier mode in CI.",

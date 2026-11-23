@@ -34,7 +34,7 @@
   "search.unavailable": "La recherche sera disponible une fois la documentation déployée avec le site.",
   "search.pages": "Pages",
 
-  "hero.pill_long": "Signature AWS SigV4, pour les paquets SQS, SNS et GCS",
+  "hero.pill_long": "38 nouveaux paquets : DNS, passkeys, ACME, OIDC et plus",
   "hero.pill_short": "Nouveautés",
   "hero.title_1": "Dites-le en slang.",
   "hero.title_2": "Livrez-le en C.",
@@ -83,7 +83,7 @@
 
   "conc.title": "Mettez la tâche en pause, pas le thread.",
   "conc.lede": "<code>spawn</code> place une tâche verte sur un pool avec un worker par cœur. Les sockets, les sleeps, les canaux et les verrous mettent la tâche en pause et rendent le thread. Il n'y a ni <code>async</code>, ni <code>await</code>, ni seconde couleur de fonction : le code qui a l'air bloquant reste simple.",
-  "conc.tick_1": "<b>10 000 tâches</b> qui dorment chacune 100&nbsp;ms se terminent en environ 0,6&nbsp;s sur un portable.",
+  "conc.tick_1": "<b>10 000 tâches</b> qui dorment chacune 100&nbsp;ms se terminent en environ 0,5&nbsp;s sur un portable.",
   "conc.tick_2": "<b>Préemptif</b> quand une tâche dépasse sa tranche, donc une boucle chaude ne peut pas affamer un worker.",
   "conc.tick_3": "<b>TLS et DNS se mettent aussi en pause.</b> Les handshakes tournent sur le reactor ; les résolutions, sur leur propre thread.",
   "conc.tick_4": "<b>Un GC précis et générationnel</b> avec barrière d'écriture et un mode vérificateur en CI.",

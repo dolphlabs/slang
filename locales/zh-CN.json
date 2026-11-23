@@ -34,7 +34,7 @@
   "search.unavailable": "文档随站点一起部署后即可使用搜索。",
   "search.pages": "页面",
 
-  "hero.pill_long": "AWS SigV4 签名，用于 SQS、SNS 和 GCS 软件包",
+  "hero.pill_long": "38 个新包：DNS、通行密钥、ACME、OIDC 等",
   "hero.pill_short": "新特性",
   "hero.title_1": "用 slang 写出来。",
   "hero.title_2": "以 C 的形态交付。",
@@ -83,7 +83,7 @@
 
   "conc.title": "挂起任务，而不是线程。",
   "conc.lede": "<code>spawn</code> 把一个绿色任务放进每核一个 worker 的线程池。套接字、睡眠、通道和锁会挂起任务并交还线程。没有 <code>async</code>，没有 <code>await</code>，也没有函数的“第二种颜色”：看起来阻塞的代码依然简单。",
-  "conc.tick_1": "<b>一万个任务</b>各睡 100&nbsp;ms，在笔记本上约 0.6&nbsp;秒就能全部完成。",
+  "conc.tick_1": "<b>一万个任务</b>各睡 100&nbsp;ms，在笔记本上约 0.5&nbsp;秒就能全部完成。",
   "conc.tick_2": "<b>抢占式调度</b>：任务超出时间片就会被打断，所以一个热循环不会饿死 worker。",
   "conc.tick_3": "<b>TLS 与 DNS 同样会挂起。</b>握手跑在 reactor 上，域名解析跑在独立线程上。",
   "conc.tick_4": "<b>精确的分代 GC</b>，带写屏障，并在 CI 中提供校验模式。",

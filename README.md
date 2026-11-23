@@ -148,7 +148,7 @@ Every number on the page comes from somewhere you can check:
 | ~3k tokens | `docs/llms-small.txt`: 12,419 bytes, about 4 bytes a token |
 | 3M rows under 20 MB, ~0.8 ms minors | README, *Memory management* |
 | 0.53 s over HTTP/2 | README, `http2` |
-| 10,000 tasks in ~0.6 s | `programs/tasks`, measured on an i5-8279U |
+| 10,000 tasks in ~0.5 s | `programs/tasks`, measured on an i5-8279U |
 | Compiler errors, test output | real `slangc` output, copied |
 | The runner's output | `programs/*/expected.txt`, checked in CI |
 

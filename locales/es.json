@@ -34,7 +34,7 @@
   "search.unavailable": "La búsqueda estará disponible cuando la documentación se despliegue con el sitio.",
   "search.pages": "Páginas",
 
-  "hero.pill_long": "Firma AWS SigV4, para los paquetes SQS, SNS y GCS",
+  "hero.pill_long": "38 paquetes nuevos: DNS, passkeys, ACME, OIDC y más",
   "hero.pill_short": "Novedades",
   "hero.title_1": "Dilo en slang.",
   "hero.title_2": "Despliégalo como C.",
@@ -83,7 +83,7 @@
 
   "conc.title": "Aparca la tarea, no el hilo.",
   "conc.lede": "<code>spawn</code> pone una tarea verde en un pool con un worker por núcleo. Los sockets, las esperas, los canales y los bloqueos aparcan la tarea y devuelven el hilo. No hay <code>async</code>, ni <code>await</code>, ni un segundo color de función: el código que parece bloqueante sigue siendo simple.",
-  "conc.tick_1": "<b>10.000 tareas</b> que duermen 100&nbsp;ms cada una terminan en unos 0,6&nbsp;s en un portátil.",
+  "conc.tick_1": "<b>10.000 tareas</b> que duermen 100&nbsp;ms cada una terminan en unos 0,5&nbsp;s en un portátil.",
   "conc.tick_2": "<b>Con expropiación</b> cuando una tarea se pasa de su porción, así que un bucle caliente no puede dejar sin CPU a un worker.",
   "conc.tick_3": "<b>TLS y DNS también aparcan.</b> Los handshakes corren en el reactor; las consultas, en su propio hilo.",
   "conc.tick_4": "<b>Un GC preciso y generacional</b> con barrera de escritura y un modo verificador en la CI.",
