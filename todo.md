@@ -364,16 +364,21 @@
   dev (pg, http, the main task) and 0 with the fix. x86-64 Linux only;
   clang on macOS was not checked.
 
-- [ ] **`&xs[i]` on a list of value structs fails in the C compiler (found
-  2026-11-10, feat/decimal-package; not fixed).** Borrowing an element
-  emits `&(({ ... sl_arr_get(...) }))`, the address of a statement
-  expression, and cc stops with "cannot take the address of an rvalue":
-  raw C output, which a slang error must never be. Four lines reproduce it:
-  `struct P { x: int }`, `fn get(p: &P) -> int { return p.x; }`,
-  `let ps: [P] = [P { x: 1 }]`, `println(get(&ps[0]));`. The element
-  should be borrowed through a pointer into the list's storage (or the
-  borrow rejected with a slang error saying to bind it first). decimal's
-  allocate binds the element to a local instead.
+- [x] **`&xs[i]` on a list of value structs fails in the C compiler (found
+  2026-11-10, feat/decimal-package; fixed 2026-11-23,
+  fix/borrow-list-elem).** Borrowing an element emitted the address of a
+  statement expression, and cc stopped with "cannot take the address of
+  an rvalue". Now every borrow of an element (`&`/`&mut` of a list, map,
+  bytes or wire index) is a slang error naming the way out: copy it to a
+  local, and for `&mut` store it back or use `xs[i].f = v`. A pointer into
+  a list's storage was the other option and is not sound: lists are
+  shared by reference (`let qs = ps;` aliases), so a push through an alias
+  the borrow checker cannot see moves the storage, and a `&` is not a GC
+  root, so the old storage can be freed under the reference. `&mut xs[i]`
+  on elements holding GC pointers used to compile into that pointer and is
+  refused too (nothing in stdlib, tests or examples used it).
+  tests/fail_borrow_list_elem, fail_borrow_list_elem_mut,
+  fail_borrow_map_value, fail_borrow_bytes_elem.
 
 - [ ] **A call from user code into a non-leaf function costs a ~25 ns
   bracket (measured 2026-11-10, feat/decimal-package; not changed).** In a

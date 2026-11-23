@@ -1762,6 +1762,34 @@ char *gen_index(CG *cg, Expr *e) {
         prelude.data, ec, b, i, ec, at);
 }
 
+/* No element of a container can be borrowed. A map value and a byte of
+ * bytes or wire are read out as copies, with no address. A list element
+ * has one, but no reference into a list's storage is sound: lists are
+ * shared by reference (`let qs = ps;` aliases), so a push through any
+ * alias can move the storage under the borrow, and the collector does
+ * not count a `&` as a root, so the old storage can be freed while the
+ * reference lives. So the borrow is refused with the way out, instead of
+ * reaching the C compiler ("cannot take the address of an rvalue"). */
+void index_borrow_refused(CG *cg, Expr *e, int mut, int line) {
+    const char *bt = infer_type(cg, e->as.index.base);
+    const char *how = mut ? "&mut" : "&";
+    if (is_arr(bt)) {
+        if (mut)
+            cg_error(line,
+                     "cannot borrow an element of a list with &mut: copy it "
+                     "out, change the copy, and store it back (`let v = "
+                     "xs[i]; f(&mut v); xs[i] = v;`), or store a field "
+                     "directly (`xs[i].f = v`)");
+        cg_error(line,
+                 "cannot borrow an element of a list with &: copy it to a "
+                 "local first (`let v = xs[i];`) and borrow that");
+    }
+    cg_error(line,
+             "cannot borrow an element of a %s with %s: copy it to a local "
+             "first (`let v = ...;`) and borrow that",
+             is_map(bt) ? "map" : bt, how);
+}
+
 char *gen_slice(CG *cg, Expr *e) {
     const char *bt = infer_type(cg, e->as.slice.base);
     const char *bc = ctype_of(cg, bt);
@@ -1967,28 +1995,12 @@ char *gen_expr(CG *cg, Expr *e) {
                         "({ sl_rt_preempt_disable(); sl_gc_remember((void *)(%s)); sl_rt_preempt_enable(); (&(%s)); })",
                         b, o);
                 }
-            } else if (op->kind == EX_INDEX) {
-                const char *bt = infer_type(cg, op->as.index.base);
-                if (is_arr(bt)) {
-                    char *elem = arr_elem(bt);
-                    if (type_has_gc_roots(cg, elem)) {
-                        char *b = gen_expr(cg, op->as.index.base);
-                        char *ix = gen_expr(cg, op->as.index.index);
-                        char *at = panic_at(cg, e->line);
-                        const char *ec = ctype_of(cg, elem);
-                        char *o = xasprintf(
-                            "(*(%s *)(void *)sl_arr_get(%s, %s, "
-                            "sizeof(%s), %s))",
-                            ec, b, ix, ec, at);
-                        return xasprintf(
-                            "({ sl_rt_preempt_disable(); sl_gc_remember((void *)(%s)); sl_rt_preempt_enable(); (&(%s)); })",
-                            b, o);
-                    }
-                }
-                /* Map/bytes/wire interiors need no barrier here (map stores
-                 * commit via sl_map_put; bytes/wire hold no GC pointers). */
             }
         }
+        if ((!strcmp(e->as.unary.op, "&") || !strcmp(e->as.unary.op, "&mut")) &&
+            e->as.unary.operand->kind == EX_INDEX)
+            index_borrow_refused(cg, e->as.unary.operand,
+                                 !strcmp(e->as.unary.op, "&mut"), e->line);
         char *o = gen_expr(cg, e->as.unary.operand);
         /* keep narrow-int wrap semantics across unary minus */
         if (!strcmp(e->as.unary.op, "-") && is_int(infer_type(cg, e)))
