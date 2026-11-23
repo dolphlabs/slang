@@ -858,7 +858,8 @@ fn test_should_send_text_bytes_with_nul_and_refuse_invalid_utf8() {
     let f = frame_from(frames);
     assert(f.op == 1 && f.payload == b"a\x00b", "the NUL is sent");
     let m = next(c);
-    assert(m.kind == Kind.Text && m.data == b"a\x00b" && text(m) == "a", "data keeps it; text() stops at it");
+    assert(m.kind == Kind.Text && m.data == b"a\x00b" && text(m) == to_str(b"a\xEF\xBF\xBDb"),
+           "data keeps it; text() gives it as U+FFFD");
     assert(strings.contains(err_of(send_text_bytes(c, b"\xff", soon())), "must be UTF-8"), "invalid");
     close_now(c);
 }

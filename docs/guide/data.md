@@ -13,6 +13,7 @@ let head = b[..2];         // slicing: b[a..b], b[..n], b[n..], b[..]
 let both = b"ab" + b"cd";  // concatenation
 if b == other { ... }      // content equality via ==
 for byte in b { ... }      // iterate byte values
+for i, byte in b { ... }   // with each one's index
 ```
 
 `bytes` values carry an explicit length and may contain NULs — safe for
@@ -31,6 +32,7 @@ push(xs, 40);                  // grow (amortized O(1))
 println(pop(xs));              // shrink from the end
 xs[0] = 5;                     // bounds-checked index assignment
 for x in xs { println(x); }    // iteration
+for i, x in xs { ... }         // with the index
 let ys = xs[0..2] + xs[1..];   // slicing + concatenation
 let grid = [[1, 2], [3, 4]];   // nested lists
 ```

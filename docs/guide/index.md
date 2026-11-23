@@ -119,7 +119,9 @@ the infinities as `null`, since JSON has neither.
 - `push(xs, v)` / `pop(xs)` — append to / remove the last element of a list
 - `has(m, k)` — does map `m` contain key `k`?
 - `del(m, k)` — remove key `k` (and its value) from map `m`
-- `to_str(x)` — convert any scalar or bytes value to `str`
+- `to_str(x)` — convert any scalar or bytes value to `str`. A `str` is
+  NUL-terminated, so a zero byte in bytes becomes U+FFFD (`EF BF BD`)
+  rather than ending the string; keep data that may hold zeros as `bytes`
 - `inspect(x)` — render any value as a `str` in JavaScript-console
   style: strings double-quoted, lists `[1, 2]`, maps and structs
   `{k: v}`, `opt` as `none` / `some(v)`, `result` as `ok(v)` / `err(e)`,
@@ -315,6 +317,20 @@ signed type, logical (zero-filling) on an unsigned one, exactly as in C.
 value being shifted, so `x << n` never silently widens a narrow `x`
 because `n` happens to be an `int`.
 
+#### str
+
+```slang
+let s = "héllo";
+println(len(s));           // 6: bytes, not characters
+for b in s { ... }         // each byte as an int, read in place (no copy)
+for i, b in s { ... }      // with its byte index
+```
+
+A `str` is immutable, NUL-terminated UTF-8. It cannot hold a zero byte:
+`to_str` of bytes writes each one as U+FFFD, so text is never cut short at
+one. Keep data that may hold zeros as `bytes`. Indexing (`s[i]`) is not
+allowed; loop over the bytes, or use `to_bytes(s)` for random access.
+
 #### bytes
 
 ```slang
@@ -326,6 +342,7 @@ let head = b[..2];         // slicing: b[a..b], b[..n], b[n..], b[..]
 let both = b"ab" + b"cd";  // concatenation
 if b == other { ... }      // content equality via ==
 for byte in b { ... }      // iterate byte values
+for i, byte in b { ... }   // with each one's index
 ```
 
 `bytes` values carry an explicit length and may contain NULs — safe for
@@ -344,6 +361,7 @@ push(xs, 40);                  // grow (amortized O(1))
 println(pop(xs));              // shrink from the end
 xs[0] = 5;                     // bounds-checked index assignment
 for x in xs { println(x); }    // iteration
+for i, x in xs { ... }         // with the index
 let ys = xs[0..2] + xs[1..];   // slicing + concatenation
 let grid = [[1, 2], [3, 4]];   // nested lists
 ```
@@ -922,7 +940,9 @@ the infinities as `null`, since JSON has neither.
 - `push(xs, v)` / `pop(xs)` — append to / remove the last element of a list
 - `has(m, k)` — does map `m` contain key `k`?
 - `del(m, k)` — remove key `k` (and its value) from map `m`
-- `to_str(x)` — convert any scalar or bytes value to `str`
+- `to_str(x)` — convert any scalar or bytes value to `str`. A `str` is
+  NUL-terminated, so a zero byte in bytes becomes U+FFFD (`EF BF BD`)
+  rather than ending the string; keep data that may hold zeros as `bytes`
 - `inspect(x)` — render any value as a `str` in JavaScript-console
   style: strings double-quoted, lists `[1, 2]`, maps and structs
   `{k: v}`, `opt` as `none` / `some(v)`, `result` as `ok(v)` / `err(e)`,
@@ -1118,6 +1138,20 @@ signed type, logical (zero-filling) on an unsigned one, exactly as in C.
 value being shifted, so `x << n` never silently widens a narrow `x`
 because `n` happens to be an `int`.
 
+#### str
+
+```slang
+let s = "héllo";
+println(len(s));           // 6: bytes, not characters
+for b in s { ... }         // each byte as an int, read in place (no copy)
+for i, b in s { ... }      // with its byte index
+```
+
+A `str` is immutable, NUL-terminated UTF-8. It cannot hold a zero byte:
+`to_str` of bytes writes each one as U+FFFD, so text is never cut short at
+one. Keep data that may hold zeros as `bytes`. Indexing (`s[i]`) is not
+allowed; loop over the bytes, or use `to_bytes(s)` for random access.
+
 #### bytes
 
 ```slang
@@ -1129,6 +1163,7 @@ let head = b[..2];         // slicing: b[a..b], b[..n], b[n..], b[..]
 let both = b"ab" + b"cd";  // concatenation
 if b == other { ... }      // content equality via ==
 for byte in b { ... }      // iterate byte values
+for i, byte in b { ... }   // with each one's index
 ```
 
 `bytes` values carry an explicit length and may contain NULs — safe for
@@ -1147,6 +1182,7 @@ push(xs, 40);                  // grow (amortized O(1))
 println(pop(xs));              // shrink from the end
 xs[0] = 5;                     // bounds-checked index assignment
 for x in xs { println(x); }    // iteration
+for i, x in xs { ... }         // with the index
 let ys = xs[0..2] + xs[1..];   // slicing + concatenation
 let grid = [[1, 2], [3, 4]];   // nested lists
 ```

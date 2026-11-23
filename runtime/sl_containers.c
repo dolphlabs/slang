@@ -752,11 +752,72 @@ static int sl_bytes_eq(sl_bytes *a, sl_bytes *b) {
     return a->len == 0 || memcmp(a->ptr, b->ptr, (size_t)a->len) == 0;
 }
 
+/* ---- bytes -> str: a str never holds a zero byte ----
+ *
+ * A str is a NUL-terminated C string, so a zero byte copied into one
+ * silently ended it there: to_str(b"admin\0.evil") compared equal to
+ * "admin", and a JSON key "id\u0000zz" filled the field "id". Wherever
+ * outside bytes become a str, each zero byte is written as U+FFFD (EF BF
+ * BD) instead -- nothing is cut short, the result differs visibly from
+ * any string without it, and no input can make the conversion fail.
+ * memchr finds no zero in the common case at about the cost of the copy
+ * itself. */
+static size_t sl_nul_fffd_len(const unsigned char *p, size_t n) {
+    size_t out = n;
+    const unsigned char *z = n ? (const unsigned char *)memchr(p, 0, n) : NULL;
+    while (z) {
+        out += 2;
+        size_t rest = n - (size_t)(z + 1 - p);
+        z = rest ? (const unsigned char *)memchr(z + 1, 0, rest) : NULL;
+    }
+    return out;
+}
+
+/* Copies n bytes to dst, each zero as EF BF BD; dst holds
+ * sl_nul_fffd_len(p, n) bytes. Returns the bytes written. */
+static size_t sl_nul_fffd_copy(unsigned char *dst, const unsigned char *p,
+                               size_t n) {
+    size_t w = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (p[i]) {
+            dst[w++] = p[i];
+        } else {
+            dst[w++] = 0xEF;
+            dst[w++] = 0xBF;
+            dst[w++] = 0xBD;
+        }
+    }
+    return w;
+}
+
+/* A new str from n outside bytes. */
+static char *sl_str_from_n(const void *src, size_t n) {
+    const unsigned char *p = (const unsigned char *)src;
+    if (!n || !memchr(p, 0, n)) {
+        char *out = (char *)sl_gc_alloc_leaf_uninit(n + 1, NULL);
+        if (n) memcpy(out, p, n);
+        out[n] = 0;
+        return out;
+    }
+    size_t m = sl_nul_fffd_len(p, n);
+    char *out = (char *)sl_gc_alloc_leaf_uninit(m + 1, NULL);
+    sl_nul_fffd_copy((unsigned char *)out, p, n);
+    out[m] = 0;
+    return out;
+}
+
+/* buf (GC, n + 1 bytes) filled by a decoder: terminated in place when it
+ * holds no zero byte, else copied with each one replaced. */
+static char *sl_str_seal(char *buf, size_t n) {
+    if (!n || !memchr(buf, 0, n)) {
+        buf[n] = 0;
+        return buf;
+    }
+    return sl_str_from_n(buf, n);
+}
+
 static char *sl_str_from_bytes(sl_bytes *b) {
-    char *p = (char *)sl_gc_alloc((size_t)b->len + 1, NULL);
-    if (b->len) memcpy(p, b->ptr, (size_t)b->len);
-    p[b->len] = 0;
-    return p;
+    return sl_str_from_n(b->ptr, (size_t)b->len);
 }
 
 /* The wire counterpart. A wire is a view into arena (non-GC) memory, so
@@ -764,10 +825,7 @@ static char *sl_str_from_bytes(sl_bytes *b) {
  * way sl_bytes has one, which is what makes to_str(w[a..b]) one
  * allocation where to_str(to_bytes(w[a..b])) was three. */
 static char *sl_str_from_wire(sl_wire w) {
-    char *p = (char *)sl_gc_alloc((size_t)w.len + 1, NULL);
-    if (w.len) memcpy(p, w.ptr, (size_t)w.len);
-    p[w.len] = 0;
-    return p;
+    return sl_str_from_n(w.ptr, (size_t)w.len);
 }
 
 /* to_str(peer): "1.2.3.4:5678", as println and inspect render a peer.
@@ -1065,14 +1123,21 @@ typedef struct {
     int gc_clean;        /* order positions; see sl_arr's gc_clean */
     unsigned char *keys; /* cap slots */
     unsigned char *vals; /* cap slots */
-    unsigned char *state;/* 1 = occupied */
-    long long *order;    /* occupied slot indices, insertion order */
+    unsigned char *state;/* 0 = empty, else a hash tag (sl_map_tag) */
+    /* Slot indices in insertion order, -1 where a key was deleted. A
+     * delete leaves a gap instead of shifting the rest down, which cost
+     * O(count) per delete (23 us on 100,000 keys); gaps are squeezed out
+     * when the array fills (sl_map_compact) and on grow. 32-bit entries,
+     * so order plus pos cost the bytes order alone used to. */
+    int *order;          /* cap entries, [0, olen) in use */
+    int *pos;            /* slot -> its index in order */
+    long long olen;      /* order entries in use, gaps included */
 } sl_map;
 
-_Static_assert(sizeof(sl_map) == 10 * sizeof(long long),
+_Static_assert(sizeof(sl_map) == 12 * sizeof(long long),
                "sl_map: gc_clean must fit in the existing padding");
 
-/* Entries at order positions [from, count), keys and values. Value-struct
+/* Entries at order positions [from, olen), keys and values. Value-struct
  * interiors (same as sl_gc_trace_arr): every word of every occupied slot
  * when the precise flag is unset. mark() validates, so non-pointer words
  * are harmless. */
@@ -1080,8 +1145,10 @@ static void sl_gc_trace_map_range(sl_map *m, long long from,
                                   void (*mark)(void *)) {
     if (m->key_is_ptr == SL_ELEM_NOPTR && m->val_is_ptr == SL_ELEM_NOPTR)
         return;
-    for (long long i = from; i < m->count; i++) {
+    for (long long i = from; i < m->olen; i++) {
         long long slot = m->order[i];
+        if (slot < 0)
+            continue;
         sl_gc_mark_slot(m->keys + (size_t)slot * m->ksz, m->ksz,
                         m->key_is_ptr, mark);
         sl_gc_mark_slot(m->vals + (size_t)slot * m->vsz, m->vsz,
@@ -1094,6 +1161,7 @@ static void sl_gc_trace_map_bufs(sl_map *m, void (*mark)(void *)) {
     if (m->vals) mark(m->vals);
     if (m->state) mark(m->state);
     if (m->order) mark(m->order);
+    if (m->pos) mark(m->pos);
 }
 
 static void sl_gc_trace_map(void *p, void (*mark)(void *)) {
@@ -1110,11 +1178,13 @@ static int sl_gc_trace_map_minor(void *p, void (*mark)(void *),
     sl_gc_trace_map_bufs(m, mark);
     long long from = m->key_is_ptr == SL_ELEM_NOPTR &&
                              m->val_is_ptr == SL_ELEM_NOPTR
-                         ? m->count
+                         ? m->olen
                          : m->gc_clean;
-    for (long long i = from; i < m->count; i++) {
+    for (long long i = from; i < m->olen; i++) {
         unsigned long long s0 = *gen0_seen;
         long long slot = m->order[i];
+        if (slot < 0)
+            continue;
         sl_gc_mark_slot(m->keys + (size_t)slot * m->ksz, m->ksz,
                         m->key_is_ptr, mark);
         sl_gc_mark_slot(m->vals + (size_t)slot * m->vsz, m->vsz,
@@ -1122,7 +1192,7 @@ static int sl_gc_trace_map_minor(void *p, void (*mark)(void *),
         if (first < 0 && *gen0_seen != s0)
             first = i;
     }
-    m->gc_clean = sl_gc_clean_at(first >= 0 ? first : m->count);
+    m->gc_clean = sl_gc_clean_at(first >= 0 ? first : m->olen);
     return first >= 0;
 }
 
@@ -1136,16 +1206,57 @@ static void sl_gc_dirty_all(void *obj) {
         ((sl_map *)obj)->gc_clean = 0;
 }
 
-static unsigned long long sl_hash_bytes(const unsigned char *p, size_t n) {
-    unsigned long long h = 1469598103934665603ULL;
-    for (size_t i = 0; i < n; i++) { h ^= p[i]; h *= 1099511628211ULL; }
+/* Map hashing, eight bytes at a time with a murmur3-style finish. The
+ * byte-at-a-time FNV-1a this replaces cost a multiply per byte, and its
+ * low bits -- the ones that pick a slot -- mixed poorly. Word reads make
+ * the result differ between little and big endian: it never leaves the
+ * process, and iteration follows insertion order, not hashes. */
+static unsigned long long sl_hash_mix(unsigned long long h) {
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdULL;
+    h ^= h >> 33;
+    h *= 0xc4ceb9fe1a85ec53ULL;
+    h ^= h >> 33;
     return h;
 }
 
+static unsigned long long sl_hash_bytes(const unsigned char *p, size_t n) {
+    unsigned long long h = 0x9E3779B97F4A7C15ULL ^ (unsigned long long)n;
+    while (n >= 8) {
+        unsigned long long w;
+        memcpy(&w, p, 8);
+        h = (h ^ w) * 0xff51afd7ed558ccdULL;
+        h ^= h >> 32;
+        p += 8;
+        n -= 8;
+    }
+    unsigned long long w = 0;
+    memcpy(&w, p, n);
+    return sl_hash_mix(h ^ w);
+}
+
 static unsigned long long sl_hash_str(const char *s) {
-    unsigned long long h = 1469598103934665603ULL;
-    for (; *s; s++) { h ^= (unsigned char)*s; h *= 1099511628211ULL; }
-    return h;
+    return sl_hash_bytes((const unsigned char *)s, strlen(s));
+}
+
+static unsigned long long sl_map_hash(const sl_map *m, const void *k) {
+    if (m->kstr)
+        return sl_hash_str(*(const char *const *)k);
+    if (m->ksz == 8) {
+        unsigned long long w;
+        memcpy(&w, k, 8);
+        return sl_hash_mix(w ^ 0x9E3779B97F4A7C15ULL);
+    }
+    return sl_hash_bytes((const unsigned char *)k, m->ksz);
+}
+
+/* A slot's state byte: 0 when empty, otherwise the top seven bits of its
+ * key's hash with the high bit set. A probe compares keys only where the
+ * tag matches, so a string key is strcmp'd against about one key in 128
+ * of those it passes instead of every one. Slots come from the hash's low
+ * bits, so the tag is independent of the slot. */
+static unsigned char sl_map_tag(unsigned long long h) {
+    return (unsigned char)(0x80 | (h >> 57));
 }
 
 static sl_map *sl_map_new(size_t ksz, size_t vsz, int kstr,
@@ -1161,7 +1272,9 @@ static sl_map *sl_map_new(size_t ksz, size_t vsz, int kstr,
     m->keys = (unsigned char *)sl_gc_alloc_owned(8 * ksz, m);
     m->vals = (unsigned char *)sl_gc_alloc_owned(8 * vsz, m);
     m->state = (unsigned char *)sl_gc_alloc_owned(8, m);
-    m->order = (long long *)sl_gc_alloc_owned(8 * sizeof(long long), m);
+    m->order = (int *)sl_gc_alloc_owned(8 * sizeof(int), m);
+    m->pos = (int *)sl_gc_alloc_owned(8 * sizeof(int), m);
+    m->olen = 0;
     return m;
 }
 
@@ -1171,15 +1284,19 @@ static long long sl_map_probe(sl_map *m, const void *k,
                               unsigned long long h) {
     long long mask = m->cap - 1;
     long long i = (long long)(h & (unsigned long long)mask);
+    unsigned char tag = sl_map_tag(h);
     for (;;) {
-        if (!m->state[i])
+        unsigned char st = m->state[i];
+        if (!st)
             return -i - 1;
-        void *kk = m->keys + (size_t)i * m->ksz;
-        int eq = m->kstr
-                    ? !strcmp(*(const char **)kk, *(const char *const *)k)
-                    : memcmp(kk, k, m->ksz) == 0;
-        if (eq)
-            return i;
+        if (st == tag) {
+            void *kk = m->keys + (size_t)i * m->ksz;
+            int eq = m->kstr
+                        ? !strcmp(*(const char **)kk, *(const char *const *)k)
+                        : memcmp(kk, k, m->ksz) == 0;
+            if (eq)
+                return i;
+        }
         i = (i + 1) & mask;
     }
 }
@@ -1211,38 +1328,73 @@ static void sl_map_grow(sl_map *m) {
      * meaning a PREVIOUSLY-inserted key had already been swept by the
      * time this grow tried to rehash it. */
     sl_rt_preempt_disable();
-    /* The order array is rebuilt in the same order, so every entry keeps
-     * its position and gc_clean still describes them. */
+    /* The order array is rebuilt in the same order. With no gaps every
+     * entry keeps its position and gc_clean still describes them;
+     * squeezing gaps out moves the entries after the first one. */
     sl_gc_remember_obj((sl_gc_obj *)m - 1);
     long long old_cap = m->cap;
+    if (old_cap * 2 > 2147483647LL)
+        sl_rt_error("map too large: slots", old_cap * 2, 2147483647LL);
     unsigned char *ok = m->keys, *ov = m->vals;
     unsigned char *ost = m->state;
-    long long ocount = m->count;
-    long long *oorder = m->order;
+    long long oolen = m->olen;
+    int *oorder = m->order;
+    if (oolen != m->count) {
+        long long first_gap = 0;
+        while (first_gap < oolen && oorder[first_gap] >= 0)
+            first_gap++;
+        if (first_gap < m->gc_clean)
+            m->gc_clean = (int)first_gap;
+    }
     m->cap = old_cap * 2;
     m->count = 0;
     /* Owned: m may already be old (see sl_gc_alloc_owned). */
     m->keys = (unsigned char *)sl_gc_alloc_owned((size_t)m->cap * m->ksz, m);
     m->vals = (unsigned char *)sl_gc_alloc_owned((size_t)m->cap * m->vsz, m);
     m->state = (unsigned char *)sl_gc_alloc_owned((size_t)m->cap, m);
-    m->order = (long long *)sl_gc_alloc_owned((size_t)m->cap * sizeof(long long), m);
+    m->order = (int *)sl_gc_alloc_owned((size_t)m->cap * sizeof(int), m);
+    m->pos = (int *)sl_gc_alloc_owned((size_t)m->cap * sizeof(int), m);
     (void)ost;
     /* reinsert in insertion order so iteration stays deterministic */
-    for (long long i = 0; i < ocount; i++) {
+    for (long long i = 0; i < oolen; i++) {
         long long slot = oorder[i];
+        if (slot < 0)
+            continue;
         void *k = ok + (size_t)slot * m->ksz;
         void *v = ov + (size_t)slot * m->vsz;
-        unsigned long long h = m->kstr
-                                  ? sl_hash_str(*(const char **)k)
-                                  : sl_hash_bytes((const unsigned char *)k,
-                                                  m->ksz);
+        unsigned long long h = sl_map_hash(m, k);
         long long s = -sl_map_probe(m, k, h) - 1;
         memcpy(m->keys + (size_t)s * m->ksz, k, m->ksz);
         memcpy(m->vals + (size_t)s * m->vsz, v, m->vsz);
-        m->state[s] = 1;
-        m->order[m->count++] = s;
+        m->state[s] = sl_map_tag(h);
+        m->pos[s] = (int)m->count;
+        m->order[m->count++] = (int)s;
     }
+    m->olen = m->count;
     sl_rt_preempt_enable();
+}
+
+/* Squeeze the gaps deletes left out of the order array, keeping order.
+ * Called when an append finds it full; the load factor keeps count under
+ * 3/4 of cap, so at least cap/4 gaps go each time and the copy is
+ * amortized O(1) per delete. Entries before the first gap stay put; the
+ * ones after it move down, so gc_clean drops to the first gap. Inside
+ * the caller's preempt bracket. */
+static void sl_map_compact(sl_map *m) {
+    long long w = 0;
+    while (w < m->olen && m->order[w] >= 0)
+        w++;
+    if (w < m->gc_clean)
+        m->gc_clean = (int)w;
+    for (long long i = w; i < m->olen; i++) {
+        int slot = m->order[i];
+        if (slot < 0)
+            continue;
+        m->order[w] = slot;
+        m->pos[slot] = (int)w;
+        w++;
+    }
+    m->olen = w;
 }
 
 static void sl_map_put(sl_map *m, const void *k, const void *v) {
@@ -1261,10 +1413,7 @@ static void sl_map_put(sl_map *m, const void *k, const void *v) {
      * is the same discipline sl_gc_alloc/sl_task_park/every other
      * fully-bracketed function in this codebase already follows. */
     sl_rt_preempt_disable();
-    unsigned long long h = m->kstr
-                              ? sl_hash_str(*(const char *const *)k)
-                              : sl_hash_bytes((const unsigned char *)k,
-                                              m->ksz);
+    unsigned long long h = sl_map_hash(m, k);
     if ((m->count + 1) * 4 >= m->cap * 3)
         sl_map_grow(m);
     long long s = sl_map_probe(m, k, h);
@@ -1281,20 +1430,21 @@ static void sl_map_put(sl_map *m, const void *k, const void *v) {
     s = -s - 1;
     memcpy(m->keys + (size_t)s * m->ksz, k, m->ksz);
     memcpy(m->vals + (size_t)s * m->vsz, v, m->vsz);
-    m->state[s] = 1;
+    m->state[s] = sl_map_tag(h);
+    if (m->olen == m->cap)
+        sl_map_compact(m);
     /* A new key lands at the end of the order array: only it is new. */
-    if (m->count < m->gc_clean)
-        m->gc_clean = (int)m->count;
-    m->order[m->count++] = s;
+    if (m->olen < m->gc_clean)
+        m->gc_clean = (int)m->olen;
+    m->pos[s] = (int)m->olen;
+    m->order[m->olen++] = (int)s;
+    m->count++;
     sl_gc_remember_obj((sl_gc_obj *)m - 1);
     sl_rt_preempt_enable();
 }
 
 static void *sl_map_get(sl_map *m, const void *k) {
-    unsigned long long h = m->kstr
-                              ? sl_hash_str(*(const char *const *)k)
-                              : sl_hash_bytes((const unsigned char *)k,
-                                              m->ksz);
+    unsigned long long h = sl_map_hash(m, k);
     long long s = sl_map_probe(m, k, h);
     if (s < 0)
         return NULL;
@@ -1307,21 +1457,15 @@ static int sl_map_has(sl_map *m, const void *k) {
 
 /* The slot a key hashes to before any probing. */
 static long long sl_map_home(sl_map *m, const void *k) {
-    unsigned long long h = m->kstr
-                              ? sl_hash_str(*(const char *const *)k)
-                              : sl_hash_bytes((const unsigned char *)k,
-                                              m->ksz);
+    unsigned long long h = sl_map_hash(m, k);
     return (long long)(h & (unsigned long long)(m->cap - 1));
 }
 
 /* The order entry naming `slot` now names `to`. */
 static void sl_map_order_move(sl_map *m, long long slot, long long to) {
-    for (long long i = 0; i < m->count; i++) {
-        if (m->order[i] == slot) {
-            m->order[i] = to;
-            return;
-        }
-    }
+    int at = m->pos[slot];
+    m->order[at] = (int)to;
+    m->pos[to] = at;
 }
 
 /* Deletion from a linear-probing table cannot just empty the slot: every
@@ -1335,32 +1479,22 @@ static void sl_map_order_move(sl_map *m, long long slot, long long to) {
  * hole and where the entry sits, so that every key stays reachable from
  * its home without tombstones. A moved entry keeps its position in the
  * order array (only the slot it names changes), so iteration order is
- * untouched. */
+ * untouched. The deleted key's own order entry becomes a gap (-1). */
 static void sl_map_del(sl_map *m, const void *k) {
     /* Tier 11 eighth slice: bracketed entry-to-every-return -- same
      * reasoning as sl_map_put's own bracket just above. */
     sl_rt_preempt_disable();
-    unsigned long long h = m->kstr
-                              ? sl_hash_str(*(const char *const *)k)
-                              : sl_hash_bytes((const unsigned char *)k,
-                                              m->ksz);
+    unsigned long long h = sl_map_hash(m, k);
     long long s = sl_map_probe(m, k, h);
     if (s < 0) {
         sl_rt_preempt_enable();
         return;
     }
-    for (long long i = 0; i < m->count; i++) {
-        if (m->order[i] == s) {
-            memmove(m->order + i, m->order + i + 1,
-                    (size_t)(m->count - i - 1) * sizeof(long long));
-            /* Every entry after i moved down one position, a dirty one
-             * possibly below gc_clean. */
-            if (i < m->gc_clean)
-                m->gc_clean = (int)i;
-            break;
-        }
-    }
+    /* Nothing moves in the order array, so gc_clean still holds. */
+    m->order[m->pos[s]] = -1;
     m->count--;
+    if (m->count == 0)
+        m->olen = 0;
     long long mask = m->cap - 1;
     long long hole = s;
     long long j = s;
@@ -1379,7 +1513,7 @@ static void sl_map_del(sl_map *m, const void *k) {
                m->keys + (size_t)j * m->ksz, m->ksz);
         memcpy(m->vals + (size_t)hole * m->vsz,
                m->vals + (size_t)j * m->vsz, m->vsz);
-        m->state[hole] = 1;
+        m->state[hole] = m->state[j];
         sl_map_order_move(m, j, hole);
         hole = j;
     }

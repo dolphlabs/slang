@@ -651,8 +651,8 @@ pub fn send_text(c: Conn, text: str, deadline: until) -> result[bool, str] {
 }
 
 // Send a text message given as bytes, checked to be UTF-8 first: for
-// text holding U+0000, which a str cannot (it ends at the first zero
-// byte), and for text already in a byte buffer.
+// text holding U+0000, which a str cannot (to_str writes it as U+FFFD),
+// and for text already in a byte buffer.
 pub fn send_text_bytes(c: Conn, data: bytes, deadline: until) -> result[bool, str] {
     if !unicode.valid_bytes(data) {
         return err("websocket: a text message must be UTF-8");
@@ -709,8 +709,8 @@ pub fn recv(c: Conn, deadline: until) -> result[opt[Message], str] {
     return r;
 }
 
-// The text of a text message. A str ends at its first zero byte, so text
-// holding U+0000 is cut there: m.data has every byte.
+// The text of a text message. A str cannot hold a zero byte, so each
+// U+0000 comes back as U+FFFD: m.data has every byte.
 pub fn text(m: Message) -> str {
     return to_str(m.data);
 }

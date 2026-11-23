@@ -1388,11 +1388,22 @@ void gen_stmt(CG *cg, Stmt *s) {
         char *iter = gen_expr(cg, s->as.for_in.iter);
         char *vname = sanitize_ident(s->as.for_in.name);
         var_scope_push(cg);
+        /* `for i, x in xs` (and over bytes or a str): the first name is
+         * the index, as for_in_types says. */
+        const char *iname = s->as.for_in.name2 && !is_map(it) ? vname : NULL;
+        if (iname)
+            vname = sanitize_ident(s->as.for_in.name2);
         if (is_arr(it)) {
             char *elem = arr_elem(it);
             const char *ec = ctype_of(cg, elem);
             var_redecl_check(cg, s->as.for_in.name, s->line);
-            var_push(cg, s->as.for_in.name, elem);
+            if (iname) {
+                var_push(cg, s->as.for_in.name, "int");
+                var_redecl_check(cg, s->as.for_in.name2, s->line);
+                var_push(cg, s->as.for_in.name2, elem);
+            } else {
+                var_push(cg, s->as.for_in.name, elem);
+            }
             emit_line(cg, "{");
             cg->indent++;
             emit_line(cg, "sl_arr *_sl_it%d = %s;", id, iter);
@@ -1422,6 +1433,8 @@ void gen_stmt(CG *cg, Stmt *s) {
                 cg->indent--;
                 emit_line(cg, "}");
             }
+            if (iname)
+                emit_line(cg, "long long %s = _sl_i%d;", iname, id);
             emit_line(cg, "%s %s = (*(%s *)(void *)sl_arr_at(_sl_it%d, "
                           "_sl_i%d, sizeof(%s)));",
                       ec, vname, ec, id, id, ec);
@@ -1447,6 +1460,10 @@ void gen_stmt(CG *cg, Stmt *s) {
         if (is_bytes(it)) {
             var_redecl_check(cg, s->as.for_in.name, s->line);
             var_push(cg, s->as.for_in.name, "int");
+            if (iname) {
+                var_redecl_check(cg, s->as.for_in.name2, s->line);
+                var_push(cg, s->as.for_in.name2, "int");
+            }
             emit_line(cg, "{");
             cg->indent++;
             emit_line(cg, "sl_bytes *_sl_bt%d = %s;", id, iter);
@@ -1476,7 +1493,71 @@ void gen_stmt(CG *cg, Stmt *s) {
                 cg->indent--;
                 emit_line(cg, "}");
             }
+            if (iname)
+                emit_line(cg, "long long %s = _sl_i%d;", iname, id);
             emit_line(cg, "long long %s = (long long)_sl_bt%d->ptr[_sl_i%d];",
+                      vname, id, id);
+            cg->loop_depth++;
+            break_push(cg, 0, NULL);
+            int saved_loop_bp = cg->cur_loop_has_bp;
+            cg->cur_loop_has_bp = 0;
+            gen_scoped_block(cg, s->as.for_in.body);
+            cg->loop_depth--;
+            break_pop(cg);
+            cg->cur_loop_has_bp = saved_loop_bp;
+            cg->indent--;
+            emit_line(cg, "}");
+            if (has_bp) {
+                cg->open_backedge_brackets--;
+                emit_line(cg, "sl_rt_safepoint_exit_s(SL_SELF());");
+            }
+            cg->indent--;
+            emit_line(cg, "}");
+            var_scope_pop(cg);
+            break;
+        }
+        /* A str's bytes, read in place: no to_bytes copy. The loop stops
+         * at the terminating zero, which a str holds nowhere else, so it
+         * never needs the length up front. */
+        if (is_str(it)) {
+            var_redecl_check(cg, s->as.for_in.name, s->line);
+            var_push(cg, s->as.for_in.name, "int");
+            if (iname) {
+                var_redecl_check(cg, s->as.for_in.name2, s->line);
+                var_push(cg, s->as.for_in.name2, "int");
+            }
+            emit_line(cg, "{");
+            cg->indent++;
+            emit_line(cg, "char *_sl_bt%d = (char *)(%s);", id, iter);
+            char *iter_root = xasprintf("_sl_bt%d", id);
+            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0, 0,
+                                            iter_root);
+            int bp_id = cg->last_backedge_id;
+            int eid = 0;
+            if (has_bp) {
+                eid = cg->tmp_id++;
+                emit_line(cg, "unsigned long _sl_ec%d = 0;", eid);
+            }
+            emit_line(cg,
+                      "for (long long _sl_i%d = 0; _sl_bt%d[_sl_i%d]; "
+                      "_sl_i%d++) {",
+                      id, id, id, id);
+            cg->indent++;
+            if (has_bp) {
+                emit_line(cg,
+                          "if (__builtin_expect((++_sl_ec%d & "
+                          "SL_PREEMPT_SAMPLE_MASK) == 0, 0)) {",
+                          eid);
+                cg->indent++;
+                emit_roots_refresh(cg, s->backedge_live_set, iter_root,
+                                   xasprintf("_sl_bp%d_roots", bp_id));
+                emit_line(cg, "sl_rt_maybe_yield();");
+                cg->indent--;
+                emit_line(cg, "}");
+            }
+            if (iname)
+                emit_line(cg, "long long %s = _sl_i%d;", iname, id);
+            emit_line(cg, "long long %s = (long long)(unsigned char)_sl_bt%d[_sl_i%d];",
                       vname, id, id);
             cg->loop_depth++;
             break_push(cg, 0, NULL);
@@ -1524,7 +1605,7 @@ void gen_stmt(CG *cg, Stmt *s) {
                 emit_line(cg, "unsigned long _sl_ec%d = 0;", eid);
             }
             emit_line(cg,
-                      "for (long long _sl_i%d = 0; _sl_i%d < _sl_m%d->count; "
+                      "for (long long _sl_i%d = 0; _sl_i%d < _sl_m%d->olen; "
                       "_sl_i%d++) {",
                       id, id, id, id);
             cg->indent++;
@@ -1540,8 +1621,10 @@ void gen_stmt(CG *cg, Stmt *s) {
                 cg->indent--;
                 emit_line(cg, "}");
             }
+            /* -1 is a deleted key's gap (sl_map's order array). */
             emit_line(cg, "long long _sl_slot%d = _sl_m%d->order[_sl_i%d];",
                       id, id, id);
+            emit_line(cg, "if (_sl_slot%d < 0) continue;", id);
             emit_line(cg,
                       "%s %s = *(%s *)(void *)(_sl_m%d->keys + _sl_slot%d * "
                       "_sl_m%d->ksz);",

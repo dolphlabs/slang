@@ -293,9 +293,7 @@ static sl_res_opt_str__str *sl_io_read_line(void) {
         }
         if (n > 0 && line[n - 1] == '\r')
             n--;
-        char *s = (char *)sl_gc_alloc(n + 1, NULL);
-        memcpy(s, line, n);
-        s[n] = '\0';
+        char *s = sl_str_from_n(line, n);
         sl_rt_preempt_disable();
         free(line);
         sl_rt_preempt_enable();

@@ -61,14 +61,19 @@ static void sl_x509_strs_push(sl_x509_strs *s, char *str) {
     s->v[s->n++] = str;
 }
 
+/* A name's bytes come from the certificate, and a zero byte in one is the
+ * classic way to make "bank.example\0.evil.example" read as the first
+ * half: each is written as U+FFFD, as to_str does (sl_str_from_n). */
 static void sl_x509_strs_pushf(sl_x509_strs *s, const char *prefix,
                                const char *body, size_t blen) {
     size_t plen = strlen(prefix);
-    char *str = (char *)malloc(plen + blen + 1);
+    const unsigned char *b = (const unsigned char *)body;
+    size_t bout = sl_nul_fffd_len(b, blen);
+    char *str = (char *)malloc(plen + bout + 1);
     if (str) {
         memcpy(str, prefix, plen);
-        memcpy(str + plen, body, blen);
-        str[plen + blen] = '\0';
+        sl_nul_fffd_copy((unsigned char *)str + plen, b, blen);
+        str[plen + bout] = '\0';
     }
     sl_x509_strs_push(s, str);
 }
@@ -163,10 +168,11 @@ static char *sl_x509_cn(const X509_NAME *n) {
     int len = ASN1_STRING_to_UTF8(&u, X509_NAME_ENTRY_get_data(X509_NAME_get_entry(n, at)));
     if (len < 0)
         return strdup("");
-    char *s = (char *)malloc((size_t)len + 1);
+    size_t out = sl_nul_fffd_len(u, (size_t)len);
+    char *s = (char *)malloc(out + 1);
     if (s) {
-        memcpy(s, u, (size_t)len);
-        s[len] = '\0';
+        sl_nul_fffd_copy((unsigned char *)s, u, (size_t)len);
+        s[out] = '\0';
     }
     OPENSSL_free(u);
     return s;
