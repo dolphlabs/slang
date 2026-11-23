@@ -1605,7 +1605,7 @@ void gen_stmt(CG *cg, Stmt *s) {
                 emit_line(cg, "unsigned long _sl_ec%d = 0;", eid);
             }
             emit_line(cg,
-                      "for (long long _sl_i%d = 0; _sl_i%d < _sl_m%d->count; "
+                      "for (long long _sl_i%d = 0; _sl_i%d < _sl_m%d->olen; "
                       "_sl_i%d++) {",
                       id, id, id, id);
             cg->indent++;
@@ -1621,8 +1621,10 @@ void gen_stmt(CG *cg, Stmt *s) {
                 cg->indent--;
                 emit_line(cg, "}");
             }
+            /* -1 is a deleted key's gap (sl_map's order array). */
             emit_line(cg, "long long _sl_slot%d = _sl_m%d->order[_sl_i%d];",
                       id, id, id);
+            emit_line(cg, "if (_sl_slot%d < 0) continue;", id);
             emit_line(cg,
                       "%s %s = *(%s *)(void *)(_sl_m%d->keys + _sl_slot%d * "
                       "_sl_m%d->ksz);",

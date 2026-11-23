@@ -2475,7 +2475,7 @@ static void *sl_gc_alloc(size_t n,
 }
 
 /* An out-of-line buffer whose CONTENTS its owner's tracer reads
- * directly: sl_map's keys/vals/state/order, sl_arr's data, sl_chan's
+ * directly: sl_map's keys/vals/state/order/pos, sl_arr's data, sl_chan's
  * ring, sl_join's value slot, sl_json_val's item/key/value arrays.
  * Every such buffer MUST come from here, never from sl_gc_alloc.
  *

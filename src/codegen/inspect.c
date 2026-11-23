@@ -233,9 +233,12 @@ static void emit_inspect_body(CG *cg, InspectInst *it) {
         emit_line(cg, "if (depth > SL_INSPECT_MAX_DEPTH) { "
                       "sl_inspect_sb_append(out, \"...\"); return; }");
         emit_line(cg, "sl_inspect_sb_append(out, \"{\");");
-        emit_line(cg, "for (long long i = 0; i < v->count; i++) {");
+        /* order[i] is -1 where a key was deleted (sl_map). */
+        emit_line(cg, "int sep = 0;");
+        emit_line(cg, "for (long long i = 0; i < v->olen; i++) {");
         cg->indent++;
-        emit_line(cg, "if (i) sl_inspect_sb_append(out, \", \");");
+        emit_line(cg, "if (v->order[i] < 0) continue;");
+        emit_line(cg, "if (sep++) sl_inspect_sb_append(out, \", \");");
         if (is_str(k)) {
             emit_line(cg, "const char *kp = *(const char **)(v->keys + "
                           "(size_t)v->order[i] * v->ksz);");
