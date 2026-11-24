@@ -601,11 +601,21 @@ static void check_stmt(CG *cg, Stmt *s) {
             is_res = 1;
         }
         if (s->as.guard_let.err_name) {
-            if (!is_res)
-                cg_error(s->line,
+            int eline = s->as.guard_let.err_line ? s->as.guard_let.err_line
+                                                 : s->line;
+            if (!is_res) {
+                if (!s->as.guard_let.err_expr)
+                    cg_error(eline,
+                             "else |%s| error binding in guard let requires a "
+                             "result[T, E] value (got %s); remove '|%s|' to "
+                             "write 'else { ... }'",
+                             s->as.guard_let.err_name, et,
+                             s->as.guard_let.err_name);
+                cg_error(eline,
                          "else let error binding requires a result value");
+            }
             var_scope_push(cg);
-            var_redecl_check(cg, s->as.guard_let.err_name, s->line);
+            var_redecl_check(cg, s->as.guard_let.err_name, eline);
             var_push(cg, s->as.guard_let.err_name, tev);
         }
         /* The else must leave the scope (check_guard_else_leaves), so
@@ -640,8 +650,16 @@ static void check_stmt(CG *cg, Stmt *s) {
             inner = tv;
             is_res = 1;
         }
-        if (s->as.if_let.err_name && !is_res)
-            cg_error(s->line, "else let error binding requires a result value");
+        int eline = s->as.if_let.err_line ? s->as.if_let.err_line : s->line;
+        if (s->as.if_let.err_name && !is_res) {
+            if (!s->as.if_let.err_expr)
+                cg_error(eline,
+                         "else |%s| error binding in if let requires a "
+                         "result[T, E] value (got %s); remove '|%s|' to "
+                         "write 'else { ... }'",
+                         s->as.if_let.err_name, et, s->as.if_let.err_name);
+            cg_error(eline, "else let error binding requires a result value");
+        }
         /* Same exclusivity as ST_IF: both branches start from the state
          * before the `if let`, and what either moved is moved after it. */
         int n = cg->vars.count;
@@ -659,7 +677,7 @@ static void check_stmt(CG *cg, Stmt *s) {
         if (s->as.if_let.else_blk) {
             var_scope_push(cg);
             if (s->as.if_let.err_name) {
-                var_redecl_check(cg, s->as.if_let.err_name, s->line);
+                var_redecl_check(cg, s->as.if_let.err_name, eline);
                 var_push(cg, s->as.if_let.err_name, tev);
             }
             check_block(cg, s->as.if_let.else_blk);

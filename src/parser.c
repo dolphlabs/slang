@@ -1116,6 +1116,58 @@ static Stmt *parse_let_stmt(Parser *p) {
     return s;
 }
 
+/* Parse an optional error binding after `else` in `guard let` or `if let`:
+ * either shorthand `|e|` (err_expr == NULL) or legacy `let e = err_of(expr)`.
+ * Returns 1 if an error binding was parsed, 0 otherwise. */
+static int parse_else_err_binding(Parser *p, const char *construct,
+                                  char **out_name, Expr **out_expr,
+                                  int *out_line) {
+    if (check(p, T_OROR))
+        parse_error(peek(p),
+                    "empty error binding '||' in %s: name the error variable "
+                    "(e.g. 'else |e| { ... }') or omit it ('else { ... }')",
+                    construct);
+    if (check(p, T_PIPEEQ))
+        parse_error(peek(p),
+                    "unexpected '|=' after 'else' in %s: write 'else |e| { ... }' "
+                    "to bind the error or 'else { ... }' without binding",
+                    construct);
+    if (match(p, T_PIPE)) {
+        if (check(p, T_PIPE))
+            parse_error(peek(p),
+                        "empty error binding '| |' in %s: name the error "
+                        "variable (e.g. 'else |e| { ... }') or omit it "
+                        "('else { ... }')",
+                        construct);
+        if (!check(p, T_IDENT))
+            parse_error(peek(p),
+                        "expected an error variable name in '%s ... else |...|', "
+                        "found %s%s; write 'else |e| { ... }'",
+                        construct, token_type_name(peek(p)->type),
+                        found_hint(p, peek(p), 1));
+        Token *ename = advance(p);
+        if (!match(p, T_PIPE))
+            parse_error(peek(p),
+                        "expected closing '|' after error variable '%s' in "
+                        "'%s ... else |%s|', found %s; write 'else |%s| { ... }'",
+                        ename->text, construct, ename->text,
+                        token_type_name(peek(p)->type), ename->text);
+        *out_name = ename->text;
+        *out_expr = NULL;
+        *out_line = ename->line;
+        return 1;
+    }
+    if (match(p, T_KW_LET)) {
+        Token *ename = expect(p, T_IDENT, "a variable name");
+        expect(p, T_ASSIGN, "'='");
+        *out_expr = parse_expression(p);
+        *out_name = ename->text;
+        *out_line = ename->line;
+        return 1;
+    }
+    return 0;
+}
+
 static Stmt *parse_if_stmt(Parser *p) {
     Token *kw = advance(p); /* 'if' */
     if (match(p, T_KW_LET)) {
@@ -1128,11 +1180,9 @@ static Stmt *parse_if_stmt(Parser *p) {
         s->as.if_let.expr = expr;
         s->as.if_let.then_blk = then_blk;
         if (match(p, T_KW_ELSE)) {
-            if (match(p, T_KW_LET)) {
-                Token *ename = expect(p, T_IDENT, "a variable name");
-                expect(p, T_ASSIGN, "'='");
-                s->as.if_let.err_expr = parse_expression(p);
-                s->as.if_let.err_name = ename->text;
+            if (parse_else_err_binding(p, "if let", &s->as.if_let.err_name,
+                                       &s->as.if_let.err_expr,
+                                       &s->as.if_let.err_line)) {
                 s->as.if_let.else_blk = parse_block(p, 0);
             } else if (check(p, T_KW_IF)) {
                 Block *else_blk = new_block();
@@ -1189,13 +1239,8 @@ static Stmt *parse_guard_stmt(Parser *p) {
         expect(p, T_KW_ELSE, "'else'");
         char *err_name = NULL;
         Expr *err_expr = NULL;
-        if (check(p, T_KW_LET)) {
-            advance(p);
-            Token *ename = expect(p, T_IDENT, "a variable name");
-            expect(p, T_ASSIGN, "'='");
-            err_expr = parse_expression(p);
-            err_name = ename->text;
-        }
+        int err_line = 0;
+        parse_else_err_binding(p, "guard let", &err_name, &err_expr, &err_line);
         Block *body = parse_block(p, 0);
 
         Stmt *s = new_stmt(ST_GUARD_LET, kw->line);
@@ -1203,6 +1248,7 @@ static Stmt *parse_guard_stmt(Parser *p) {
         s->as.guard_let.expr = expr;
         s->as.guard_let.err_name = err_name;
         s->as.guard_let.err_expr = err_expr;
+        s->as.guard_let.err_line = err_line;
         s->as.guard_let.body = body;
         return s;
     }

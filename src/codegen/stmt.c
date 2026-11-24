@@ -2458,34 +2458,43 @@ static int expr_same(Expr *a, Expr *b) {
     }
 }
 
-/* `else let e = err_of(<expr>)`, on a guard or an if let: only for a
- * result, and only err_of of the very expression being unwrapped. */
-static void check_err_binding(Expr *ee, Expr *expr, int is_res, int line,
+/* `else |e|` or legacy `else let e = err_of(<expr>)`, on a guard or an
+ * if let: only for a result; shorthand skips err_of repetition. */
+static void check_err_binding(const char *err_name, Expr *ee, Expr *expr,
+                              const char *et, int is_res, int line,
                               const char *what) {
-    if (!is_res)
-        cg_error(line, "else let error binding requires a result value");
-    if (!ee || ee->kind != EX_CALL || ee->as.call.nargs != 1 ||
+    if (!is_res) {
+        if (!ee)
+            cg_error(line,
+                     "else |%s| error binding in %s requires a result[T, E] "
+                     "value (got %s); remove '|%s|' to write 'else { ... }'",
+                     err_name, what, et, err_name);
+        cg_error(line,
+                 "else let error binding requires a result value (got %s)",
+                 et);
+    }
+    if (!ee)
+        return;
+    if (ee->kind != EX_CALL || ee->as.call.nargs != 1 ||
         !ee->as.call.name || strcmp(ee->as.call.name, "err_of"))
         cg_error(line, "else let binding must be err_of(<same expression>)");
     if (!expr_same(ee->as.call.args[0], expr))
         cg_error(line, "err_of argument must match the %s expression", what);
 }
 
-static void gen_guard_else_body(CG *cg, Stmt *s, int gid, const char *acc,
-                                int is_res) {
+static void gen_guard_else_body(CG *cg, Stmt *s, int gid, const char *acc) {
+    int from = cg->vars.count;
     if (s->as.guard_let.err_name) {
-        check_err_binding(s->as.guard_let.err_expr, s->as.guard_let.expr,
-                          is_res, s->line, "guard");
+        int eline = s->as.guard_let.err_line ? s->as.guard_let.err_line : s->line;
         char *tv, *tev;
         result_te(infer_type(cg, s->as.guard_let.expr), &tv, &tev);
         const char *ec = ctype_of(cg, tev);
-        var_redecl_check(cg, s->as.guard_let.err_name, s->line);
+        var_redecl_check(cg, s->as.guard_let.err_name, eline);
         var_push(cg, s->as.guard_let.err_name, tev);
         emit_drop_flag(cg, s->as.guard_let.err_name);
         emit_line(cg, "%s %s = _sl_g%d%se;", ec,
                   sanitize_ident(s->as.guard_let.err_name), gid, acc);
     }
-    int from = cg->vars.count;
     gen_stmts(cg, s->as.guard_let.body->stmts, s->as.guard_let.body->count);
     emit_scope_drops(cg, from);
 }
@@ -2509,9 +2518,10 @@ static void gen_if_let(CG *cg, Stmt *s) {
         cg_error(s->line, "if let requires an opt or result value (got %s)",
                  et);
     }
+    int eline = s->as.if_let.err_line ? s->as.if_let.err_line : s->line;
     if (s->as.if_let.err_name)
-        check_err_binding(s->as.if_let.err_expr, s->as.if_let.expr, is_res,
-                          s->line, "if let");
+        check_err_binding(s->as.if_let.err_name, s->as.if_let.err_expr,
+                          s->as.if_let.expr, et, is_res, eline, "if let");
     int id = cg->tmp_id++;
     char *e = gen_expr(cg, s->as.if_let.expr);
     const char *acc = type_is_gc_ptr(cg, et) ? "->" : ".";
@@ -2535,14 +2545,14 @@ static void gen_if_let(CG *cg, Stmt *s) {
         emit_line(cg, "} else {");
         cg->indent++;
         var_scope_push(cg);
+        int efrom = cg->vars.count;
         if (s->as.if_let.err_name) {
-            var_redecl_check(cg, s->as.if_let.err_name, s->line);
+            var_redecl_check(cg, s->as.if_let.err_name, eline);
             var_push(cg, s->as.if_let.err_name, tev);
             emit_drop_flag(cg, s->as.if_let.err_name);
             emit_line(cg, "%s %s = _sl_g%d%se;", ctype_of(cg, tev),
                       sanitize_ident(s->as.if_let.err_name), id, acc);
         }
-        int efrom = cg->vars.count;
         gen_stmts(cg, s->as.if_let.else_blk->stmts,
                   s->as.if_let.else_blk->count);
         emit_scope_drops(cg, efrom);
@@ -2606,6 +2616,13 @@ void gen_stmts(CG *cg, Stmt **stmts, int count) {
                      "guard let requires an opt or result value (got %s)",
                      et);
         }
+        if (s->as.guard_let.err_name) {
+            int eline = s->as.guard_let.err_line ? s->as.guard_let.err_line
+                                                 : s->line;
+            check_err_binding(s->as.guard_let.err_name, s->as.guard_let.err_expr,
+                              s->as.guard_let.expr, et, is_res, eline,
+                              "guard let");
+        }
         check_guard_else_leaves(cg, s->as.guard_let.body, s->line);
         int id = cg->tmp_id++;
         char *e = gen_expr(cg, s->as.guard_let.expr);
@@ -2618,7 +2635,7 @@ void gen_stmts(CG *cg, Stmt **stmts, int count) {
         emit_line(cg, "if (!(_sl_g%d%s%s)) {", id, acc, is_res ? "ok" : "has");
         cg->indent++;
         var_scope_push(cg);
-        gen_guard_else_body(cg, s, id, acc, is_res);
+        gen_guard_else_body(cg, s, id, acc);
         var_scope_pop(cg);
         cg->indent--;
         emit_line(cg, "}");

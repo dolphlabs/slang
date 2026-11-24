@@ -505,8 +505,11 @@ static void lower_stmt(Lower *L, Stmt *s) {
            argument) happened to work, which is why this survived. */
         if (s->as.guard_let.err_name && is_result(et)) {
             char *gtv, *gtev;
+            int eline = s->as.guard_let.err_line ? s->as.guard_let.err_line
+                                                 : s->line;
             result_te(et, &gtv, &gtev);
-            var_redecl_check(L->cg, s->as.guard_let.err_name, s->line);
+            add_local(L, s->as.guard_let.err_name, gtev);
+            var_redecl_check(L->cg, s->as.guard_let.err_name, eline);
             var_push(L->cg, s->as.guard_let.err_name, gtev);
         }
         lower_block(L, s->as.guard_let.body);
@@ -553,7 +556,10 @@ static void lower_stmt(Lower *L, Stmt *s) {
         if (s->as.if_let.else_blk) {
             var_scope_push(L->cg);
             if (s->as.if_let.err_name && tev) {
-                var_redecl_check(L->cg, s->as.if_let.err_name, s->line);
+                int eline = s->as.if_let.err_line ? s->as.if_let.err_line
+                                                  : s->line;
+                add_local(L, s->as.if_let.err_name, tev);
+                var_redecl_check(L->cg, s->as.if_let.err_name, eline);
                 var_push(L->cg, s->as.if_let.err_name, tev);
             }
             lower_block(L, s->as.if_let.else_blk);

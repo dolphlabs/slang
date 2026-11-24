@@ -1328,7 +1328,7 @@ def home_body():
     <h3>Errors you cannot quietly drop</h3>
     <p><code>opt[T]</code> for absent data, <code>result[T, E]</code> for
       bad data, <code>fault</code> for a bad world. <code>guard let x = r
-      else let e = err_of(r)</code> binds the error so it can be logged
+      else |e|</code> binds the error so it can be logged
       rather than thrown away.</p>
   </article>
   <article>

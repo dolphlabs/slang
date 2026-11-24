@@ -1,0 +1,6 @@
+sum=42
+after1=a:not a base-10 integer
+after2=b:not a base-10 integer
+legacy_ok=15
+else_if_ok
+gc=500,504500
