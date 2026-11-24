@@ -246,6 +246,15 @@ fn fib(n: int) -> int {
     if n < 2 { return n; }
     return fib(n - 1) + fib(n - 2);
 }
+
+// function-scoped defer: runs a call or method call LIFO on every return
+// or fallthrough (arguments are evaluated eagerly; no blocks/closures,
+// and not inside loops or at top level)
+fn with_cleanup(tag: str) -> int {
+    defer println("cleanup:" + tag);
+    if tag == "skip" { return 0; }
+    return 1;
+}
 ```
 
 ### Built-ins
@@ -2637,20 +2646,20 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
     alternative is corruption in whatever the lock was protecting,
     discovered much later and somewhere else.
 
-  There is no scope guard (no `defer`, no closures), so an early
-  `return` between lock and unlock leaks the lock. Keep the critical
-  section small enough to see both ends of it at once:
+  Use `defer mutex_unlock(st.lock);` inside a function so every
+  exit path — including early returns — releases the lock in LIFO
+  order after evaluating the return expression:
 
   ```slang
   gc struct State { tasks: [Task], next_id: int, lock: mutex }
 
   fn create(st: State, title: str) -> Task {
       mutex_lock(st.lock);
+      defer mutex_unlock(st.lock);
       let t = Task { id: st.next_id, title: title, done: false };
       st.next_id = st.next_id + 1;
       push(st.tasks, t);
-      mutex_unlock(st.lock);
-      return t;                 // unlock BEFORE the return, every path
+      return t;                 // t is evaluated, then mutex_unlock runs
   }
   ```
 
@@ -8767,10 +8776,12 @@ slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://
   channel's recv arm is ready forever (see Concurrency above), and
   there is no nil channel to switch it off with; for a deadline, feed
   a channel from a spawned timer task.
-- `mutex` has no scope guard: without closures or `defer`, an early
-  `return` between `mutex_lock` and `mutex_unlock` leaks the lock.
-  Mutexes are also not recursive (locking one twice from the same
-  task is a checked error, not a hang).
+- `defer` is function-scoped and call-only (`defer close(fd);` or
+  `defer conn.close();`): there are no `defer { ... }` blocks or
+  closures, no `defer` at top level or inside loops (extract a helper
+  function), and deferred calls cannot borrow inner-block locals.
+  Mutexes are not recursive (locking one twice from the same task is
+  a checked error, not a hang).
 - TLS: no session resumption tuning. Handshake and send/recv park;
   `getaddrinfo` in `tls_dial` parks the task while a dedicated
   thread resolves. mTLS (`tls_ctx_require_client` /

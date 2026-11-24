@@ -189,6 +189,15 @@ p.count += <span class="n">1</span>;
 <span class="k">fn</span> <span class="f">fib</span>(n: <span class="t">int</span>) -&gt; <span class="t">int</span> {
     <span class="k">if</span> n &lt; <span class="n">2</span> { <span class="k">return</span> n; }
     <span class="k">return</span> <span class="f">fib</span>(n - <span class="n">1</span>) + <span class="f">fib</span>(n - <span class="n">2</span>);
+}
+
+<span class="c">// function-scoped defer: runs a call or method call LIFO on every return</span>
+<span class="c">// or fallthrough (arguments are evaluated eagerly; no blocks/closures,</span>
+<span class="c">// and not inside loops or at top level)</span>
+<span class="k">fn</span> <span class="f">with_cleanup</span>(tag: <span class="t">str</span>) -&gt; <span class="t">int</span> {
+    defer <span class="b">println</span>(<span class="s">&quot;cleanup:&quot;</span> + tag);
+    <span class="k">if</span> tag == <span class="s">&quot;skip&quot;</span> { <span class="k">return</span> <span class="n">0</span>; }
+    <span class="k">return</span> <span class="n">1</span>;
 }</code></pre></div>
 <h3 id="built-ins">Built-ins<a class="anchor" href="#built-ins" aria-label="Link to this section">#</a></h3>
 <ul><li><code>print(expr)</code> — print a value without a newline</li><li><code>println(expr)</code> — print a value followed by a newline</li></ul>
