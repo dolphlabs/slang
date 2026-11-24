@@ -110,8 +110,9 @@ try { var t = localStorage.getItem("slang-theme");
 <span class="c">// block. The else branch must leave the scope -- return, break,</span>
 <span class="c">// continue, exit(..), panic(..), or a call to a function that never</span>
 <span class="c">// returns -- since the bound name has no value to fall back to; the</span>
-<span class="c">// compiler rejects one that can fall through. `else let e = err_of(r)`</span>
-<span class="c">// binds the error value for `result[T, E]` so failures stay visible.</span>
+<span class="c">// compiler rejects one that can fall through. `else |e|` binds the</span>
+<span class="c">// error value for `result[T, E]` so failures stay visible (the older</span>
+<span class="c">// `else let e = err_of(r)` form is still accepted for compatibility).</span>
 <span class="k">fn</span> <span class="f">safe_div</span>(n: <span class="t">int</span>) -&gt; <span class="t">int</span> {
     <span class="k">guard</span> <span class="k">let</span> v = <span class="f">div10</span>(n) <span class="k">else</span> {
         <span class="k">return</span> -<span class="n">1</span>;
@@ -121,7 +122,7 @@ try { var t = localStorage.getItem("slang-theme");
 
 <span class="k">fn</span> <span class="f">load_config</span>(path: <span class="t">str</span>) -&gt; <span class="t">str</span> {
     <span class="k">let</span> r: <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>] = <span class="f">read_file</span>(path);
-    <span class="k">guard</span> <span class="k">let</span> body = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) {
+    <span class="k">guard</span> <span class="k">let</span> body = r <span class="k">else</span> |e| {
         log.<span class="f">warn</span>(<span class="s">&quot;config load failed: &quot;</span> + e);
         <span class="k">return</span> <span class="s">&quot;&quot;</span>;
     }
@@ -138,7 +139,7 @@ try { var t = localStorage.getItem("slang-theme");
 <span class="k">let</span> pr = <span class="f">parse_small</span>(<span class="s">&quot;big&quot;</span>);
 <span class="k">if</span> <span class="k">let</span> n = pr {
     <span class="b">println</span>(n);
-} <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(pr) {
+} <span class="k">else</span> |e| {
     <span class="b">println</span>(<span class="s">&quot;rejected: &quot;</span> + e);         <span class="c">// rejected: value too large</span>
 }
 
@@ -165,7 +166,7 @@ try { var t = localStorage.getItem("slang-theme");
 <p>Panics (out-of-bounds index, division by zero, <code>err_of</code> on ok, missing map key) carry <code>pkg.func:line</code>: <code>list index out of bounds at main.foo:12</code>. A panicking <code>spawn</code>ed task reports through stderr and its <code>join_wait</code> surfaces the same string as <code>err</code>, so failures stay visible across task boundaries. A crash below the language (a segfault or bus error in C interop, or a task overflowing its stack) prints one line, <code>slang: fatal SIGSEGV at address 0x..., pc 0x... (image+0x...)</code>, naming a stack overflow when that is what it was, and the process then dies of the same signal: the exit status and any core dump are unchanged. The image offset, printed when the fault is in the program&#x27;s own code, names the function after the fact: <code>addr2line -fe prog 0x...</code> on Linux, <code>atos -o prog -l 0x100000000 &lt;0x100000000 + offset&gt;</code> on macOS.</p>
 <p><code>opt[T]</code> and <code>result[T, E]</code> are monomorphized per distinct type argument (one C struct per instantiation actually used). Constructing <code>none</code>/<code>err(...)</code> without enough context to infer the missing type parameter is a compile error.</p>
 <h2 id="error-model-opt-vs-result-vs-fault">Error model: <code>opt</code> vs <code>result</code> vs <code>fault</code></h2>
-<ul><li><code>opt[T]</code> — the value may legitimately be absent (<code>none</code>). Lookup misses, optional config, end of a drained channel. Absence is not failure; <code>??</code> supplies the default.</li><li><code>result[T, E]</code> — the operation can fail with a <em>descriptive</em> error (<code>err(e)</code>). Parsing, validation, anything where the caller needs to know <em>why</em>. <code>E</code> is usually <code>str</code>; <code>guard let x = r else let e = err_of(r)</code> keeps the reason visible.</li><li><code>fault</code> — the operation hit the <em>environment</em>: timeout, reset, closed connection, refused dial, IO error. A closed 5-kind enum (<code>fault_timeout</code> / <code>fault_reset</code> / <code>fault_closed</code> / <code>fault_io</code> / <code>fault_refused</code>), comparable with <code>==</code> and convertible with <code>to_str</code> / <code>+</code>. Use it when the failure is about the world, not the data.</li></ul>
+<ul><li><code>opt[T]</code> — the value may legitimately be absent (<code>none</code>). Lookup misses, optional config, end of a drained channel. Absence is not failure; <code>??</code> supplies the default.</li><li><code>result[T, E]</code> — the operation can fail with a <em>descriptive</em> error (<code>err(e)</code>). Parsing, validation, anything where the caller needs to know <em>why</em>. <code>E</code> is usually <code>str</code>; <code>guard let x = r else |e|</code> (or <code>else let e = err_of(r)</code>) keeps the reason visible.</li><li><code>fault</code> — the operation hit the <em>environment</em>: timeout, reset, closed connection, refused dial, IO error. A closed 5-kind enum (<code>fault_timeout</code> / <code>fault_reset</code> / <code>fault_closed</code> / <code>fault_io</code> / <code>fault_refused</code>), comparable with <code>==</code> and convertible with <code>to_str</code> / <code>+</code>. Use it when the failure is about the world, not the data.</li></ul>
 <p>Rule of thumb: absent data is <code>opt</code>, bad data is <code>result[_, str]</code>, bad world is <code>result[_, fault]</code>. Never collapse a descriptive <code>str</code> error into a bare <code>fault_io()</code> at a boundary — that is where debuggability goes to die (see <code>http.read</code> below).</p>
 <nav class="pager" aria-label="Previous and next"><a class="prev" href="../guide/data"><span class="dir">Previous</span><span class="name">Data types</span></a><a class="next" href="../guide/functions"><span class="dir">Next</span><span class="name">Functions</span></a></nav>
     </article>

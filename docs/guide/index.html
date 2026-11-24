@@ -206,7 +206,7 @@ p.count += <span class="n">1</span>;
 <h4 id="parsing-numbers-from-text">Parsing numbers from text<a class="anchor" href="#parsing-numbers-from-text" aria-label="Link to this section">#</a></h4>
 <p><code>to_int(s)</code> and <code>to_float(s)</code> are the inverse of <code>to_str</code>, and they are <strong>fallible</strong>, because parsing is:</p>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> r = <span class="f">to_int</span>(proc.<span class="f">getenv</span>(<span class="s">&quot;PORT&quot;</span>) ?? <span class="s">&quot;8080&quot;</span>);
-<span class="k">guard</span> <span class="k">let</span> port = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) {
+<span class="k">guard</span> <span class="k">let</span> port = r <span class="k">else</span> |e| {
     log.<span class="f">error</span>(<span class="s">&quot;PORT is not a number: &quot;</span> + e);
     <span class="b">exit</span>(<span class="n">2</span>);
 }</code></pre></div>
@@ -441,7 +441,7 @@ enum PgType {
 
 <span class="c">// fallible, like to_int(s): a result, not a silent wrap</span>
 <span class="k">let</span> r: <span class="t">result</span>[Status, <span class="t">str</span>] = Status.<span class="f">from_int</span>(<span class="n">2</span>);
-<span class="k">guard</span> <span class="k">let</span> s2 = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) {
+<span class="k">guard</span> <span class="k">let</span> s2 = r <span class="k">else</span> |e| {
     log.<span class="f">error</span>(<span class="s">&quot;bad status: &quot;</span> + e);      <span class="c">// &quot;2 is not a valid Status&quot; (approx)</span>
     <span class="k">return</span>;
 }
@@ -481,8 +481,9 @@ counts[Status.Paid] = <span class="n">3</span>;</code></pre></div>
 <span class="c">// block. The else branch must leave the scope -- return, break,</span>
 <span class="c">// continue, exit(..), panic(..), or a call to a function that never</span>
 <span class="c">// returns -- since the bound name has no value to fall back to; the</span>
-<span class="c">// compiler rejects one that can fall through. `else let e = err_of(r)`</span>
-<span class="c">// binds the error value for `result[T, E]` so failures stay visible.</span>
+<span class="c">// compiler rejects one that can fall through. `else |e|` binds the</span>
+<span class="c">// error value for `result[T, E]` so failures stay visible (the older</span>
+<span class="c">// `else let e = err_of(r)` form is still accepted for compatibility).</span>
 <span class="k">fn</span> <span class="f">safe_div</span>(n: <span class="t">int</span>) -&gt; <span class="t">int</span> {
     <span class="k">guard</span> <span class="k">let</span> v = <span class="f">div10</span>(n) <span class="k">else</span> {
         <span class="k">return</span> -<span class="n">1</span>;
@@ -492,7 +493,7 @@ counts[Status.Paid] = <span class="n">3</span>;</code></pre></div>
 
 <span class="k">fn</span> <span class="f">load_config</span>(path: <span class="t">str</span>) -&gt; <span class="t">str</span> {
     <span class="k">let</span> r: <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>] = <span class="f">read_file</span>(path);
-    <span class="k">guard</span> <span class="k">let</span> body = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) {
+    <span class="k">guard</span> <span class="k">let</span> body = r <span class="k">else</span> |e| {
         log.<span class="f">warn</span>(<span class="s">&quot;config load failed: &quot;</span> + e);
         <span class="k">return</span> <span class="s">&quot;&quot;</span>;
     }
@@ -509,7 +510,7 @@ counts[Status.Paid] = <span class="n">3</span>;</code></pre></div>
 <span class="k">let</span> pr = <span class="f">parse_small</span>(<span class="s">&quot;big&quot;</span>);
 <span class="k">if</span> <span class="k">let</span> n = pr {
     <span class="b">println</span>(n);
-} <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(pr) {
+} <span class="k">else</span> |e| {
     <span class="b">println</span>(<span class="s">&quot;rejected: &quot;</span> + e);         <span class="c">// rejected: value too large</span>
 }
 
@@ -536,7 +537,7 @@ counts[Status.Paid] = <span class="n">3</span>;</code></pre></div>
 <p>Panics (out-of-bounds index, division by zero, <code>err_of</code> on ok, missing map key) carry <code>pkg.func:line</code>: <code>list index out of bounds at main.foo:12</code>. A panicking <code>spawn</code>ed task reports through stderr and its <code>join_wait</code> surfaces the same string as <code>err</code>, so failures stay visible across task boundaries. A crash below the language (a segfault or bus error in C interop, or a task overflowing its stack) prints one line, <code>slang: fatal SIGSEGV at address 0x..., pc 0x... (image+0x...)</code>, naming a stack overflow when that is what it was, and the process then dies of the same signal: the exit status and any core dump are unchanged. The image offset, printed when the fault is in the program&#x27;s own code, names the function after the fact: <code>addr2line -fe prog 0x...</code> on Linux, <code>atos -o prog -l 0x100000000 &lt;0x100000000 + offset&gt;</code> on macOS.</p>
 <p><code>opt[T]</code> and <code>result[T, E]</code> are monomorphized per distinct type argument (one C struct per instantiation actually used). Constructing <code>none</code>/<code>err(...)</code> without enough context to infer the missing type parameter is a compile error.</p>
 <h4 id="error-model-opt-vs-result-vs-fault">Error model: <code>opt</code> vs <code>result</code> vs <code>fault</code><a class="anchor" href="#error-model-opt-vs-result-vs-fault" aria-label="Link to this section">#</a></h4>
-<ul><li><code>opt[T]</code> — the value may legitimately be absent (<code>none</code>). Lookup misses, optional config, end of a drained channel. Absence is not failure; <code>??</code> supplies the default.</li><li><code>result[T, E]</code> — the operation can fail with a <em>descriptive</em> error (<code>err(e)</code>). Parsing, validation, anything where the caller needs to know <em>why</em>. <code>E</code> is usually <code>str</code>; <code>guard let x = r else let e = err_of(r)</code> keeps the reason visible.</li><li><code>fault</code> — the operation hit the <em>environment</em>: timeout, reset, closed connection, refused dial, IO error. A closed 5-kind enum (<code>fault_timeout</code> / <code>fault_reset</code> / <code>fault_closed</code> / <code>fault_io</code> / <code>fault_refused</code>), comparable with <code>==</code> and convertible with <code>to_str</code> / <code>+</code>. Use it when the failure is about the world, not the data.</li></ul>
+<ul><li><code>opt[T]</code> — the value may legitimately be absent (<code>none</code>). Lookup misses, optional config, end of a drained channel. Absence is not failure; <code>??</code> supplies the default.</li><li><code>result[T, E]</code> — the operation can fail with a <em>descriptive</em> error (<code>err(e)</code>). Parsing, validation, anything where the caller needs to know <em>why</em>. <code>E</code> is usually <code>str</code>; <code>guard let x = r else |e|</code> (or <code>else let e = err_of(r)</code>) keeps the reason visible.</li><li><code>fault</code> — the operation hit the <em>environment</em>: timeout, reset, closed connection, refused dial, IO error. A closed 5-kind enum (<code>fault_timeout</code> / <code>fault_reset</code> / <code>fault_closed</code> / <code>fault_io</code> / <code>fault_refused</code>), comparable with <code>==</code> and convertible with <code>to_str</code> / <code>+</code>. Use it when the failure is about the world, not the data.</li></ul>
 <p>Rule of thumb: absent data is <code>opt</code>, bad data is <code>result[_, str]</code>, bad world is <code>result[_, fault]</code>. Never collapse a descriptive <code>str</code> error into a bare <code>fault_io()</code> at a boundary — that is where debuggability goes to die (see <code>http.read</code> below).</p>
 <h3 id="function-values">Function values<a class="anchor" href="#function-values" aria-label="Link to this section">#</a></h3>
 <p>A <code>fn</code> type holds a function. <code>fn(A, B) -&gt; R</code> for one that returns a value, <code>fn(A)</code> for one that returns nothing:</p>
@@ -584,7 +585,7 @@ counts[Status.Paid] = <span class="n">3</span>;</code></pre></div>
 <h3 id="parsing-numbers-from-text-2">Parsing numbers from text<a class="anchor" href="#parsing-numbers-from-text-2" aria-label="Link to this section">#</a></h3>
 <p><code>to_int(s)</code> and <code>to_float(s)</code> are the inverse of <code>to_str</code>, and they are <strong>fallible</strong>, because parsing is:</p>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> r = <span class="f">to_int</span>(proc.<span class="f">getenv</span>(<span class="s">&quot;PORT&quot;</span>) ?? <span class="s">&quot;8080&quot;</span>);
-<span class="k">guard</span> <span class="k">let</span> port = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) {
+<span class="k">guard</span> <span class="k">let</span> port = r <span class="k">else</span> |e| {
     log.<span class="f">error</span>(<span class="s">&quot;PORT is not a number: &quot;</span> + e);
     <span class="b">exit</span>(<span class="n">2</span>);
 }</code></pre></div>
@@ -819,7 +820,7 @@ enum PgType {
 
 <span class="c">// fallible, like to_int(s): a result, not a silent wrap</span>
 <span class="k">let</span> r: <span class="t">result</span>[Status, <span class="t">str</span>] = Status.<span class="f">from_int</span>(<span class="n">2</span>);
-<span class="k">guard</span> <span class="k">let</span> s2 = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) {
+<span class="k">guard</span> <span class="k">let</span> s2 = r <span class="k">else</span> |e| {
     log.<span class="f">error</span>(<span class="s">&quot;bad status: &quot;</span> + e);      <span class="c">// &quot;2 is not a valid Status&quot; (approx)</span>
     <span class="k">return</span>;
 }
@@ -859,8 +860,9 @@ counts[Status.Paid] = <span class="n">3</span>;</code></pre></div>
 <span class="c">// block. The else branch must leave the scope -- return, break,</span>
 <span class="c">// continue, exit(..), panic(..), or a call to a function that never</span>
 <span class="c">// returns -- since the bound name has no value to fall back to; the</span>
-<span class="c">// compiler rejects one that can fall through. `else let e = err_of(r)`</span>
-<span class="c">// binds the error value for `result[T, E]` so failures stay visible.</span>
+<span class="c">// compiler rejects one that can fall through. `else |e|` binds the</span>
+<span class="c">// error value for `result[T, E]` so failures stay visible (the older</span>
+<span class="c">// `else let e = err_of(r)` form is still accepted for compatibility).</span>
 <span class="k">fn</span> <span class="f">safe_div</span>(n: <span class="t">int</span>) -&gt; <span class="t">int</span> {
     <span class="k">guard</span> <span class="k">let</span> v = <span class="f">div10</span>(n) <span class="k">else</span> {
         <span class="k">return</span> -<span class="n">1</span>;
@@ -870,7 +872,7 @@ counts[Status.Paid] = <span class="n">3</span>;</code></pre></div>
 
 <span class="k">fn</span> <span class="f">load_config</span>(path: <span class="t">str</span>) -&gt; <span class="t">str</span> {
     <span class="k">let</span> r: <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>] = <span class="f">read_file</span>(path);
-    <span class="k">guard</span> <span class="k">let</span> body = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) {
+    <span class="k">guard</span> <span class="k">let</span> body = r <span class="k">else</span> |e| {
         log.<span class="f">warn</span>(<span class="s">&quot;config load failed: &quot;</span> + e);
         <span class="k">return</span> <span class="s">&quot;&quot;</span>;
     }
@@ -887,7 +889,7 @@ counts[Status.Paid] = <span class="n">3</span>;</code></pre></div>
 <span class="k">let</span> pr = <span class="f">parse_small</span>(<span class="s">&quot;big&quot;</span>);
 <span class="k">if</span> <span class="k">let</span> n = pr {
     <span class="b">println</span>(n);
-} <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(pr) {
+} <span class="k">else</span> |e| {
     <span class="b">println</span>(<span class="s">&quot;rejected: &quot;</span> + e);         <span class="c">// rejected: value too large</span>
 }
 
@@ -914,7 +916,7 @@ counts[Status.Paid] = <span class="n">3</span>;</code></pre></div>
 <p>Panics (out-of-bounds index, division by zero, <code>err_of</code> on ok, missing map key) carry <code>pkg.func:line</code>: <code>list index out of bounds at main.foo:12</code>. A panicking <code>spawn</code>ed task reports through stderr and its <code>join_wait</code> surfaces the same string as <code>err</code>, so failures stay visible across task boundaries. A crash below the language (a segfault or bus error in C interop, or a task overflowing its stack) prints one line, <code>slang: fatal SIGSEGV at address 0x..., pc 0x... (image+0x...)</code>, naming a stack overflow when that is what it was, and the process then dies of the same signal: the exit status and any core dump are unchanged. The image offset, printed when the fault is in the program&#x27;s own code, names the function after the fact: <code>addr2line -fe prog 0x...</code> on Linux, <code>atos -o prog -l 0x100000000 &lt;0x100000000 + offset&gt;</code> on macOS.</p>
 <p><code>opt[T]</code> and <code>result[T, E]</code> are monomorphized per distinct type argument (one C struct per instantiation actually used). Constructing <code>none</code>/<code>err(...)</code> without enough context to infer the missing type parameter is a compile error.</p>
 <h3 id="error-model-opt-vs-result-vs-fault-2">Error model: <code>opt</code> vs <code>result</code> vs <code>fault</code><a class="anchor" href="#error-model-opt-vs-result-vs-fault-2" aria-label="Link to this section">#</a></h3>
-<ul><li><code>opt[T]</code> — the value may legitimately be absent (<code>none</code>). Lookup misses, optional config, end of a drained channel. Absence is not failure; <code>??</code> supplies the default.</li><li><code>result[T, E]</code> — the operation can fail with a <em>descriptive</em> error (<code>err(e)</code>). Parsing, validation, anything where the caller needs to know <em>why</em>. <code>E</code> is usually <code>str</code>; <code>guard let x = r else let e = err_of(r)</code> keeps the reason visible.</li><li><code>fault</code> — the operation hit the <em>environment</em>: timeout, reset, closed connection, refused dial, IO error. A closed 5-kind enum (<code>fault_timeout</code> / <code>fault_reset</code> / <code>fault_closed</code> / <code>fault_io</code> / <code>fault_refused</code>), comparable with <code>==</code> and convertible with <code>to_str</code> / <code>+</code>. Use it when the failure is about the world, not the data.</li></ul>
+<ul><li><code>opt[T]</code> — the value may legitimately be absent (<code>none</code>). Lookup misses, optional config, end of a drained channel. Absence is not failure; <code>??</code> supplies the default.</li><li><code>result[T, E]</code> — the operation can fail with a <em>descriptive</em> error (<code>err(e)</code>). Parsing, validation, anything where the caller needs to know <em>why</em>. <code>E</code> is usually <code>str</code>; <code>guard let x = r else |e|</code> (or <code>else let e = err_of(r)</code>) keeps the reason visible.</li><li><code>fault</code> — the operation hit the <em>environment</em>: timeout, reset, closed connection, refused dial, IO error. A closed 5-kind enum (<code>fault_timeout</code> / <code>fault_reset</code> / <code>fault_closed</code> / <code>fault_io</code> / <code>fault_refused</code>), comparable with <code>==</code> and convertible with <code>to_str</code> / <code>+</code>. Use it when the failure is about the world, not the data.</li></ul>
 <p>Rule of thumb: absent data is <code>opt</code>, bad data is <code>result[_, str]</code>, bad world is <code>result[_, fault]</code>. Never collapse a descriptive <code>str</code> error into a bare <code>fault_io()</code> at a boundary — that is where debuggability goes to die (see <code>http.read</code> below).</p>
 <h2 id="numeric-conversion-rules">Numeric conversion rules</h2>
 <ul><li><strong>Implicit widening</strong> within the integer family: a narrower int may be used wherever a strictly wider one is expected (<code>i32</code> -&gt; <code>i64</code>, <code>u32</code> -&gt; <code>u64</code>, and unsigned into a wider <em>signed</em> type). Widening toward floats is also implicit (<code>i32</code> -&gt; <code>float</code>, <code>f32</code> -&gt; <code>float</code>).</li><li><strong>Narrowing and sign changes require an explicit cast</strong> with <code>as</code>: <code>x as i8</code>, <code>n as u32</code>, <code>3.9 as i32</code>. Integer literals that fit the target width may initialize/pass without a cast.</li><li><strong>Wrap on cast/overflow</strong>: casts and arithmetic wrap two&#x27;s-complement style. <code>(0 as u8) - (1 as u8)</code> is <code>255</code>; <code>300 as i8</code> is <code>44</code>; a signed type&#x27;s minimum divided by <code>-1</code> is the minimum again, remainder <code>0</code>. Float -&gt; int casts truncate toward zero.</li><li>Mixed-width arithmetic promotes to the wider operand; same-width signed/unsigned mixes resolve to the unsigned type (C semantics).</li></ul>

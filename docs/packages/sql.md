@@ -8,8 +8,8 @@ handles, exactly like `net.tls_*`; free them with `sql.close` /
 `sql.finalize`. **Every fallible call returns `result[_, str]` whose
 error is SQLite's own message** — `no such table: users`, `near
 "SELCT": syntax error`, `UNIQUE constraint failed: users.id` — so a
-bad query stays as visible as a bad socket read (`guard let … else
-let e = err_of(r)`), never a silent `null`. The column getters are
+bad query stays as visible as a bad socket read (`guard let …
+else |e|`), never a silent `null`. The column getters are
 infallible (SQLite coerces types; an out-of-range index is a
 programming error, returning `0` / `""`), so they return bare values.
 
