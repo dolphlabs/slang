@@ -861,6 +861,7 @@ static Type *parse_type_atom(Parser *p) {
         advance(p);
         expect(p, T_LBRACKET, "'[' after 'map'");
         Type *k = parse_type(p);
+        match(p, T_COMMA);
         expect(p, T_RBRACKET, "']' between key and value types");
         Type *v = parse_type(p);
         Type *t = ty_new(TY_MAP);
@@ -872,6 +873,7 @@ static Type *parse_type_atom(Parser *p) {
         advance(p);
         expect(p, T_LBRACKET, "'[' after 'opt'");
         Type *inner = parse_type(p);
+        match(p, T_COMMA);
         expect(p, T_RBRACKET, "']' to close opt type");
         return ty_wrap(TY_OPT, inner);
     }
@@ -879,6 +881,7 @@ static Type *parse_type_atom(Parser *p) {
         advance(p);
         expect(p, T_LBRACKET, "'[' after 'chan'");
         Type *inner = parse_type(p);
+        match(p, T_COMMA);
         expect(p, T_RBRACKET, "']' to close chan type");
         return ty_wrap(TY_CHAN, inner);
     }
@@ -886,6 +889,7 @@ static Type *parse_type_atom(Parser *p) {
         advance(p);
         expect(p, T_LBRACKET, "'[' after 'join'");
         Type *inner = parse_type(p);
+        match(p, T_COMMA);
         expect(p, T_RBRACKET, "']' to close join type");
         return ty_wrap(TY_JOIN, inner);
     }
@@ -963,6 +967,7 @@ static Type *parse_type_atom(Parser *p) {
             advance(p);
             expect(p, T_LBRACKET, "'[' after 'ptr'");
             Type *inner = parse_type(p);
+            match(p, T_COMMA);
             expect(p, T_RBRACKET, "']' to close ptr type");
             return ty_wrap(TY_PTR, inner);
         }
@@ -984,6 +989,7 @@ static Type *parse_type_atom(Parser *p) {
     case T_LBRACKET: {
         advance(p);
         Type *inner = parse_type(p);
+        match(p, T_COMMA);
         expect(p, T_RBRACKET, "']' to close array type");
         return ty_wrap(TY_ARRAY, inner);
     }

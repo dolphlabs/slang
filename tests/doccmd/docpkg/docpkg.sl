@@ -36,3 +36,15 @@ pub fn join_args(
 ) -> str {
     return a + b;
 }
+
+
+// Struct with a multi-line fn field.
+pub struct CallbackBox {
+    id: int,
+    cb: fn(
+        int,
+    ) -> str,
+}
+
+// Constant with a fn type trailing comma.
+pub let DEFAULT_FN: fn(int,) -> int = plain;

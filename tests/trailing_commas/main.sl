@@ -247,3 +247,77 @@ println(label);
 
 // 11. String interpolation with trailing comma expressions
 println("interp=${add(3, 4,)}:${[10, 20,][1]}");
+
+
+// 12. Bracketed built-in type constructors with trailing commas (single, multi-line, nested, canonical)
+fn work_join(n: int,) -> int {
+    return n + 1;
+}
+
+let opt_tc: opt[int,] = some(123,);
+let opt_ml: opt[
+    int,
+] = opt_tc;
+let opt_nested: opt[opt[int,],] = some(opt_ml,);
+let opt_eq: opt[int] = opt_ml;
+if let v = opt_eq {
+    println(v);
+}
+if let inner_opt = opt_nested {
+    if let v = inner_opt {
+        println(v);
+    }
+}
+
+let ch_tc: chan[int,] = make_chan(1,);
+let ch_ml: chan[
+    int,
+] = ch_tc;
+let ch_eq: chan[int] = ch_ml;
+chan_send(ch_eq, 55,);
+if let cv = chan_recv(ch_tc,) {
+    println(cv);
+}
+
+let j_tc: join[int,] = spawn work_join(40,);
+guard let jv = join_wait(j_tc,) else {
+    exit(1);
+}
+println(jv);
+let j_ml: join[
+    int,
+] = spawn work_join(41,);
+let j_eq: join[int] = j_ml;
+guard let jv2 = join_wait(j_eq,) else {
+    exit(1);
+}
+println(jv2);
+
+let p_val = 77;
+let p_tc: ptr[int,] = &mut p_val;
+let p_ml: ptr[
+    int,
+] = p_tc;
+let p_eq: ptr[int] = p_ml;
+unsafe {
+    *p_eq = 88;
+    println(*p_tc);
+}
+
+let arr_tc: [int,] = [10, 20,];
+let arr_ml: [
+    int,
+] = arr_tc;
+let arr_eq: [int] = arr_ml;
+let arr_nested: [[int,],] = [arr_eq,];
+println(arr_nested[0][1]);
+
+let map_tc: map[str,]int = {"k": 99,};
+let map_ml: map[
+    str,
+]int = map_tc;
+let map_eq: map[str]int = map_ml;
+let map_nested: map[str,]opt[int,] = {"m": some(map_eq["k"],),};
+if let mv = map_nested["m"] {
+    println(mv);
+}

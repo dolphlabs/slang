@@ -347,7 +347,7 @@ static void scan_source_package(const char *dir, DocList *out) {
                 if (!it.name)
                     continue;
                 it.kind = "let";
-                it.sig = squeeze(r);
+                it.sig = strip_trailing_commas(squeeze(r), 0);
             } else {
                 continue;
             }
@@ -451,7 +451,7 @@ static char *one_line(const char *block) {
     }
     char *r = b.data ? b.data : xstrdup("");
     /* trailing commas before closing delimiters read as noise */
-    return strip_trailing_commas(r, 0);
+    return strip_trailing_commas(r, 1);
 }
 
 static void print_doc_lines(const char *doc, const char *indent) {

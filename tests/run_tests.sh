@@ -719,6 +719,11 @@ out=$(cd tests/doccmd && "$OLDPWD/slangc" doc docpkg.Req.header 2>&1)
 out=$(cd tests/doccmd && "$OLDPWD/slangc" doc docpkg.join_args 2>&1)
 [ "$out" = "$(printf '%s\n' '// Joins two arguments.' 'fn join_args(a: str, b: str) -> str')" ] ||
     dc_fail "multi-line trailing comma signature: $out"
+out=$(cd tests/doccmd && "$OLDPWD/slangc" doc docpkg 2>&1)
+printf '%s\n' "$out" | grep -qx 'struct CallbackBox { id: int, cb: fn(int) -> str }' ||
+    dc_fail "struct one_line multi-line fn field: $out"
+printf '%s\n' "$out" | grep -qx 'let DEFAULT_FN: fn(int) -> int = plain;' ||
+    dc_fail "pub let trailing comma: $out"
 (cd tests/doccmd && "$OLDPWD/slangc" doc docpkg nothing_mentions_this >/dev/null 2>&1) &&
     dc_fail "search with no match must exit nonzero"
 out=$(./slangc doc builder.Str 2>&1)
