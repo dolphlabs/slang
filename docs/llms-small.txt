@@ -63,7 +63,8 @@ println(label);
 ```
 
 Semicolons end statements. No `var`, `const`, `null` or `nil`. Fixed-width
-ints: `i8..i64`, `u8..u64`; `f32`. Casts go through `as`.
+ints: `i8..i64`, `u8..u64`; `f32`. Casts go through `as`. Trailing commas are
+allowed in literals, calls, parameters, type/lifetime lists, and `case` labels.
 
 ## Lists, maps, bytes
 
@@ -119,7 +120,11 @@ fn first[T](xs: [T]) -> T { return xs[0]; }   // T is inferred at the call
 
 let p = Point { x: 1, y: 2 };            // every field, exactly once
 println(p.sum());
-let a = Account { id: 1, owner: "ada", tags: [] };
+let a = Account {
+    id: 1,
+    owner: "ada",
+    tags: ["admin",],
+};
 let alias = a;
 alias.owner = "grace";                   // a.owner is now "grace" too
 println(a.owner);
