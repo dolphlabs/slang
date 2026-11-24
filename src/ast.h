@@ -230,7 +230,7 @@ typedef enum {
     ST_BREAK,
     ST_CONTINUE,
     ST_EXPR,
-    ST_GUARD_LET, /* guard let x = opt_expr else { ... } */
+    ST_GUARD_LET, /* guard let x = opt_expr else [|e|] { ... } */
     ST_SPAWN,  /* spawn f(args...) -- submit an sl_task to the M:N pool */
     ST_STRUCT, /* struct Name { field: T, ... } (top level only) */
     ST_ENUM,   /* enum Name { Variant [= N], ... } (top level only) */
@@ -238,7 +238,7 @@ typedef enum {
     ST_UNSAFE, /* unsafe { ... } */
     ST_SELECT,  /* select { case ... { } ... default { } } */
     ST_SWITCH,  /* switch scrut { case v, ... { } ... default { } } */
-    ST_IF_LET   /* if let x = opt_or_result { } [else [let e = err_of(..)] { }] */
+    ST_IF_LET   /* if let x = opt_or_result { } [else [|e| | let e = err_of(..)] { }] */
 } StmtKind;
 
 typedef struct Stmt Stmt;
@@ -291,22 +291,24 @@ struct Stmt {
         struct {
             char *name;  /* variable to bind the unwrapped value to */
             Expr *expr;  /* expression of type opt[T] or result[T, E] */
-            char *err_name; /* optional: else let name = err_of(expr) */
+            char *err_name; /* optional: else |e| or legacy else let name = err_of(expr) */
             Expr *err_expr;
+            int err_line;
             Block *body; /* else block: must exit (return/break/...) */
         } guard_let;
         struct { Expr *call; } spawn; /* EX_CALL to a plain/extern fn */
         struct { Block *body; } unsafe_blk;
-        /* `if let name = expr { then } else let err_name = err_expr { else }`:
-           name is bound in then_blk only, err_name (result only) in
-           else_blk only. else_blk may be NULL; unlike a guard's, it may
-           fall through. */
+        /* `if let name = expr { then } else |err_name| { else }` (or legacy
+           `else let err_name = err_expr`): name is bound in then_blk only,
+           err_name (result only) in else_blk only. else_blk may be NULL;
+           unlike a guard's, it may fall through. */
         struct {
             char *name;
             Expr *expr;
             Block *then_blk;
             char *err_name;
             Expr *err_expr;
+            int err_line;
             Block *else_blk;
         } if_let;
         struct {

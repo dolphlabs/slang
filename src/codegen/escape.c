@@ -423,9 +423,11 @@ static void walk_stmt(CG *cg, Esc *esc, Stmt *s) {
             inner = tv;
         }
         if (s->as.guard_let.err_name && tev) {
+            int eline = s->as.guard_let.err_line ? s->as.guard_let.err_line
+                                                 : s->line;
             var_scope_push(cg);
             esc_push(esc, s->as.guard_let.err_name, NULL);
-            var_redecl_check(cg, s->as.guard_let.err_name, s->line);
+            var_redecl_check(cg, s->as.guard_let.err_name, eline);
             var_push(cg, s->as.guard_let.err_name, tev);
         }
         walk_block(cg, esc, s->as.guard_let.body);
@@ -466,8 +468,10 @@ static void walk_stmt(CG *cg, Esc *esc, Stmt *s) {
         if (s->as.if_let.else_blk) {
             var_scope_push(cg);
             if (s->as.if_let.err_name && tev) {
+                int eline = s->as.if_let.err_line ? s->as.if_let.err_line
+                                                  : s->line;
                 esc_push(esc, s->as.if_let.err_name, NULL);
-                var_redecl_check(cg, s->as.if_let.err_name, s->line);
+                var_redecl_check(cg, s->as.if_let.err_name, eline);
                 var_push(cg, s->as.if_let.err_name, tev);
             }
             walk_block(cg, esc, s->as.if_let.else_blk);

@@ -1,0 +1,8 @@
+30
+first(bad int: not a base-10 integer)
+second(non-positive)
+10
+shadow:oops
+single_eval=2
+5
+399600

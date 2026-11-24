@@ -152,8 +152,7 @@ fn find(ids: [int], want: int) -> opt[int] {
 }
 
 fn parse_port(s: str) -> result[int, str] {
-    let r = to_int(s);
-    guard let port = r else let e = err_of(r) {
+    guard let port = to_int(s) else |e| {
         return err("PORT: " + e);
     }
     if port < 1 || port > 65535 {
@@ -172,7 +171,7 @@ println(port);
 let bad = parse_port("x");
 if let p = bad {                         // if let: handle both, carry on
     println(p);
-} else let e = err_of(bad) {
+} else |e| {
     println(e);                          // PORT: not a base-10 integer
 }
 ```
@@ -260,7 +259,7 @@ let u = User { name: "ada", age: 36, email: none };
 let text = json.encode(u);
 println(text);
 let r: result[User, str] = json.decode("{\"name\":\"bo\",\"age\":7}");
-guard let back = r else let e = err_of(r) {
+guard let back = r else |e| {
     println("decode: " + e);         // errors name the field
     exit(1);
 }
@@ -392,7 +391,7 @@ with standard PHC strings; its native crypto calls require OpenSSL 3.2+.
 import "timez";
 
 let r = timez.utc(2026, 10, 13, 9, 30, 15, 0);    // result[Time, str]; err names the bad field
-guard let t = r else let e = err_of(r) { println(e); exit(1); }
+guard let t = r else |e| { println(e); exit(1); }
 println(t.rfc3339());                              // 2026-10-13T09:30:15Z
 println(t.http_date());                            // Tue, 13 Oct 2026 09:30:15 GMT
 println(t.date().add_months(4).iso());             // 2027-02-13 (end-of-month clamps)

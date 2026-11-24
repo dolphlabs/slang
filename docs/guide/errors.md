@@ -19,8 +19,9 @@ fn parse_small(s: str) -> result[i32, str] {
 // block. The else branch must leave the scope -- return, break,
 // continue, exit(..), panic(..), or a call to a function that never
 // returns -- since the bound name has no value to fall back to; the
-// compiler rejects one that can fall through. `else let e = err_of(r)`
-// binds the error value for `result[T, E]` so failures stay visible.
+// compiler rejects one that can fall through. `else |e|` binds the
+// error value for `result[T, E]` so failures stay visible (the older
+// `else let e = err_of(r)` form is still accepted for compatibility).
 fn safe_div(n: int) -> int {
     guard let v = div10(n) else {
         return -1;
@@ -30,7 +31,7 @@ fn safe_div(n: int) -> int {
 
 fn load_config(path: str) -> str {
     let r: result[str, str] = read_file(path);
-    guard let body = r else let e = err_of(r) {
+    guard let body = r else |e| {
         log.warn("config load failed: " + e);
         return "";
     }
@@ -47,7 +48,7 @@ if let v = div10(40) {
 let pr = parse_small("big");
 if let n = pr {
     println(n);
-} else let e = err_of(pr) {
+} else |e| {
     println("rejected: " + e);         // rejected: value too large
 }
 
@@ -104,8 +105,8 @@ parameter is a compile error.
   failure; `??` supplies the default.
 - `result[T, E]` — the operation can fail with a *descriptive* error
   (`err(e)`). Parsing, validation, anything where the caller needs to
-  know *why*. `E` is usually `str`; `guard let x = r else let e =
-  err_of(r)` keeps the reason visible.
+  know *why*. `E` is usually `str`; `guard let x = r else |e|`
+  (or `else let e = err_of(r)`) keeps the reason visible.
 - `fault` — the operation hit the *environment*: timeout, reset,
   closed connection, refused dial, IO error. A closed 5-kind enum
   (`fault_timeout` / `fault_reset` / `fault_closed` / `fault_io` /
