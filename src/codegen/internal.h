@@ -409,9 +409,10 @@ typedef struct {
     int is_print;       /* 1 = print, 2 = println */
     int is_method_expr; /* 1 = EX_METHOD, 0 = EX_CALL */
     int has_cal;        /* EX_CALL with callee expr / fn field / fn var */
-    int has_recv;       /* EX_METHOD or dotted method/arena/link/trip */
-    int recv_by_addr;   /* 1 for arena/link value receiver captured via &x */
-    int is_send_static; /* 1 for link.send_static(bytes_lit, until) */
+    int has_recv;        /* EX_METHOD or dotted method/arena/link/trip */
+    int recv_by_addr;    /* 1 for value/arena/link receiver captured via &x */
+    int recv_drop_after; /* 1 for rvalue receiver needing drop after call */
+    int is_send_static;  /* 1 for link.send_static(bytes_lit, until) */
     char *callee_name;
     char *method_name;
     const char *cal_ty;
@@ -990,6 +991,8 @@ void defer_register_fn_slots(CG *cg, DeferInfo *d);
 void defer_emit_fn_decls_at(CG *cg, size_t decl_at);
 void defer_collect_fn_defers(CG *cg, Block *b);
 void emit_defers_exit(CG *cg, const char *ret_ty, const char *ret_expr);
+void defer_add_borrow_var(CG *cg, DeferInfo *d, const char *rname, int line);
+int expr_lvalue_for_borrow(Expr *e);
 int block_leaves_scope(CG *cg, Block *b);
 int call_never_returns(CG *cg, Expr *e);
 void compute_noreturn(CG *cg, Package *pkgs, int npkgs);

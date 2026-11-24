@@ -90,6 +90,27 @@ static void defer_record_borrow(CG *cg, DeferInfo *d, const char *rname,
     d->nborrows++;
 }
 
+void defer_add_borrow_var(CG *cg, DeferInfo *d, const char *rname, int line) {
+    defer_record_borrow(cg, d, rname, line);
+}
+
+int expr_lvalue_for_borrow(Expr *e) {
+    while (e) {
+        if (e->kind == EX_IDENT)
+            return 1;
+        if (e->kind == EX_FIELD) {
+            e = e->as.field.base;
+            continue;
+        }
+        if (e->kind == EX_UNARY && !strcmp(e->as.unary.op, "*")) {
+            e = e->as.unary.operand;
+            continue;
+        }
+        return 0;
+    }
+    return 0;
+}
+
 static void defer_check_operand_borrow(CG *cg, DeferInfo *d, Expr *op,
                                        int line) {
     if (!op)
@@ -118,13 +139,52 @@ DeferInfo *defer_build_info(CG *cg, Stmt *s, int id) {
     if (call->kind == EX_METHOD) {
         d->is_method_expr = 1;
         d->has_recv = 1;
-        d->recv_ty = infer_type(cg, call->as.method.recv);
+        const char *raw_recv_t = infer_type(cg, call->as.method.recv);
         d->method_name = xstrdup(call->as.method.name);
         StructDef *sd = NULL;
         int fld = -1;
-        FuncSig *sig = method_target(cg, d->recv_ty, d->method_name,
+        FuncSig *sig = method_target(cg, raw_recv_t, d->method_name,
                                      call->line, &sd, &fld);
         int argi = fld >= 0 ? 0 : 1;
+        if (fld >= 0) {
+            d->recv_ty = raw_recv_t;
+        } else {
+            const char *self_t = sig->param_slang[0];
+            char *si = NULL, *ri = NULL;
+            TypeWrap sw = type_wrap(self_t, &si);
+            TypeWrap rw = type_wrap(raw_recv_t, &ri);
+            if (sw == TW_REF || sw == TW_REFMUT) {
+                if (rw == TW_REF && sw == TW_REFMUT)
+                    cg_error(call->line,
+                             "cannot call '&mut %s' method '%s' on a shared "
+                             "reference of type %s",
+                             si, d->method_name, raw_recv_t);
+                if (expr_lvalue_for_borrow(call->as.method.recv)) {
+                    d->recv_ty = self_t;
+                    if (rw == TW_NONE) {
+                        d->recv_by_addr = 1;
+                        defer_record_borrow(
+                            cg, d, defer_root_ident(cg, call->as.method.recv),
+                            s->line);
+                    } else if (rw == TW_OWN || rw == TW_GC) {
+                        defer_record_borrow(
+                            cg, d, defer_root_ident(cg, call->as.method.recv),
+                            s->line);
+                    }
+                } else {
+                    d->recv_ty = raw_recv_t;
+                    if (type_needs_drop(cg, raw_recv_t))
+                        d->recv_drop_after = 1;
+                }
+            } else if (sw == TW_NONE && rw == TW_OWN &&
+                       type_is_copy(cg, self_t)) {
+                d->recv_ty = self_t;
+            } else {
+                d->recv_ty = raw_recv_t;
+            }
+            free(si);
+            free(ri);
+        }
         d->nargs = call->as.method.nargs;
         if (d->nargs > 0) {
             d->arg_tys = (const char **)xmalloc((size_t)d->nargs *
@@ -272,9 +332,33 @@ DeferInfo *defer_build_info(CG *cg, Stmt *s, int id) {
                 } else {
                     FuncSig *sig = method_find(cg, sd, right, call->line);
                     d->has_recv = 1;
-                    d->recv_ty = recv_t;
                     d->callee_name = xstrdup(left);
                     d->method_name = xstrdup(right);
+                    const char *self_t = sig->param_slang[0];
+                    char *si = NULL, *ri = NULL;
+                    TypeWrap sw = type_wrap(self_t, &si);
+                    TypeWrap rw = type_wrap(recv_t, &ri);
+                    if (sw == TW_REF || sw == TW_REFMUT) {
+                        if (rw == TW_REF && sw == TW_REFMUT)
+                            cg_error(call->line,
+                                     "cannot call '&mut %s' method '%s' on a "
+                                     "shared reference of type %s",
+                                     si, right, recv_t);
+                        d->recv_ty = self_t;
+                        if (rw == TW_NONE) {
+                            d->recv_by_addr = 1;
+                            defer_record_borrow(cg, d, left, s->line);
+                        } else if (rw == TW_OWN || rw == TW_GC) {
+                            defer_record_borrow(cg, d, left, s->line);
+                        }
+                    } else if (sw == TW_NONE && rw == TW_OWN &&
+                               type_is_copy(cg, self_t)) {
+                        d->recv_ty = self_t;
+                    } else {
+                        d->recv_ty = recv_t;
+                    }
+                    free(si);
+                    free(ri);
                     for (int i = 0; i < d->nargs; i++) {
                         d->arg_tys[i] = sig->param_slang[1 + i];
                         defer_check_operand_borrow(
@@ -489,12 +573,40 @@ void push_defer_gc_roots(CG *cg, DeferInfo *d) {
         if (!bv)
             continue;
         char *cn = sanitize_ident(d->borrow_vars[i]);
-        if (bv->drop && type_wrap(d->borrow_tys[i], NULL) == TW_OWN) {
+        char *bw_inner = NULL;
+        if (bv->drop && type_wrap(d->borrow_tys[i], &bw_inner) == TW_OWN) {
             char *g = xasprintf("%s && _sl_d_%s", act, cn);
             ambient_push_guarded_value_roots(cg, g, cn, d->borrow_tys[i]);
+        } else if (bv->stack) {
+            char *iw = NULL;
+            TypeWrap w = type_wrap(bv->slang, &iw);
+            const char *boxed = NULL;
+            if (w == TW_GC)
+                boxed = type_has_gc_roots(cg, iw) ? iw : NULL;
+            else if (w == TW_NONE && struct_type_is_gc(cg, bv->slang))
+                boxed = bv->slang;
+            if (boxed) {
+                StructDef *sd = struct_find_canon(cg, boxed);
+                if (sd && sd->is_gc) {
+                    for (int j = 0; j < sd->nfields; j++) {
+                        if (!type_has_gc_roots(cg, sd->ftypes[j]))
+                            continue;
+                        ambient_push_guarded_value_roots(
+                            cg, act,
+                            xasprintf("(*%s).%s", cn,
+                                      sanitize_ident(sd->fields[j])),
+                            sd->ftypes[j]);
+                    }
+                } else {
+                    ambient_push_guarded_value_roots(
+                        cg, act, xasprintf("(*%s)", cn), boxed);
+                }
+            }
+            free(iw);
         } else {
             ambient_push_guarded_value_roots(cg, act, cn, d->borrow_tys[i]);
         }
+        free(bw_inner);
     }
 }
 
@@ -617,6 +729,8 @@ void emit_defers_exit(CG *cg, const char *ret_ty, const char *ret_expr) {
         emit_line(cg, "if (_sl_def_act_%d) {", d->id);
         cg->indent++;
         defer_emit_call(cg, d);
+        if (d->recv_drop_after)
+            emit_drop_ty(cg, xasprintf("_sl_def_%d_r", d->id), d->recv_ty, 0);
         emit_line(cg, "_sl_def_act_%d = 0;", d->id);
         cg->indent--;
         emit_line(cg, "}");
@@ -2745,11 +2859,30 @@ void gen_stmt(CG *cg, Stmt *s) {
         if (d->has_recv) {
             char *r_c = NULL;
             if (d->is_method_expr) {
-                r_c = gen_expr(cg, call->as.method.recv);
+                const char *raw_rt = infer_type(cg, call->as.method.recv);
+                if (d->recv_by_addr) {
+                    char *ri = NULL;
+                    TypeWrap rw = type_wrap(d->recv_ty, &ri);
+                    free(ri);
+                    Expr un;
+                    memset(&un, 0, sizeof(un));
+                    un.kind = EX_UNARY;
+                    un.line = s->line;
+                    un.as.unary.op =
+                        (rw == TW_REFMUT) ? (char *)"&mut" : (char *)"&";
+                    un.as.unary.operand = call->as.method.recv;
+                    r_c = gen_expr(cg, &un);
+                } else {
+                    r_c = maybe_cast(cg, d->recv_ty, raw_rt,
+                                     gen_expr(cg, call->as.method.recv));
+                }
             } else {
+                const char *raw_rt = infer_ident_name(cg, d->callee_name, s->line);
                 r_c = gen_ident_name(cg, d->callee_name, s->line);
                 if (d->recv_by_addr)
                     r_c = xasprintf("(&(%s))", r_c);
+                else
+                    r_c = maybe_cast(cg, d->recv_ty, raw_rt, r_c);
             }
             char *rn = xasprintf("_sl_def_%d_r", d->id);
             emit_line(cg, "%s = %s;", rn, r_c);

@@ -1372,7 +1372,24 @@ have_sig:;
 
     int argi = 0;
     if (selfexpr) {
-        selfexpr = maybe_cast(cg, sig->param_slang[0], recv_t, selfexpr);
+        char *si = NULL, *ri = NULL;
+        TypeWrap sw = type_wrap(sig->param_slang[0], &si);
+        TypeWrap rw = type_wrap(recv_t, &ri);
+        if (sw == TW_REF || sw == TW_REFMUT) {
+            if (rw == TW_REF && sw == TW_REFMUT)
+                cg_error(e->line,
+                         "cannot call '&mut %s' method '%s' on a shared "
+                         "reference of type %s",
+                         si, sig->name, recv_t);
+            if (rw == TW_NONE)
+                selfexpr = xasprintf("(&(%s))", selfexpr);
+            else
+                selfexpr = maybe_cast(cg, sig->param_slang[0], recv_t, selfexpr);
+        } else {
+            selfexpr = maybe_cast(cg, sig->param_slang[0], recv_t, selfexpr);
+        }
+        free(si);
+        free(ri);
         argi = 1;
     }
     /* Explicit arguments would otherwise be embedded directly as
@@ -1493,11 +1510,29 @@ char *gen_method(CG *cg, Expr *e) {
                               gen_expr(cg, recv), recv, &prelude);
     char *selfexpr = NULL;
     char *callee = NULL;
-    if (fld >= 0)
+    if (fld >= 0) {
         callee = xasprintf("((%s)%s%s)", rtmp, struct_access(cg, recv_t),
                            sanitize_ident(name));
-    else
-        selfexpr = maybe_cast(cg, sig->param_slang[0], recv_t, rtmp);
+    } else {
+        char *si = NULL, *ri = NULL;
+        TypeWrap sw = type_wrap(sig->param_slang[0], &si);
+        TypeWrap rw = type_wrap(recv_t, &ri);
+        if (sw == TW_REF || sw == TW_REFMUT) {
+            if (rw == TW_REF && sw == TW_REFMUT)
+                cg_error(e->line,
+                         "cannot call '&mut %s' method '%s' on a shared "
+                         "reference of type %s",
+                         si, name, recv_t);
+            if (rw == TW_NONE)
+                selfexpr = xasprintf("(&(%s))", rtmp);
+            else
+                selfexpr = maybe_cast(cg, sig->param_slang[0], recv_t, rtmp);
+        } else {
+            selfexpr = maybe_cast(cg, sig->param_slang[0], recv_t, rtmp);
+        }
+        free(si);
+        free(ri);
+    }
 
     char **names =
         (char **)xmalloc(sizeof(char *) * (size_t)(nargs > 0 ? nargs : 1));

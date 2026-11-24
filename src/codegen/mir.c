@@ -4,12 +4,6 @@
 #include <string.h>
 
 typedef struct {
-    int cont;
-    int brk;
-    int is_loop; /* 1 = loop (break+continue target), 0 = switch (break only) */
-} LoopFrame;
-
-typedef struct {
     DeferInfo *info;
     int id;
     int line;
@@ -18,6 +12,14 @@ typedef struct {
     char **args;
     int nargs;
 } MirDefer;
+
+typedef struct {
+    int cont;
+    int brk;
+    int is_loop; /* 1 = loop (break+continue target), 0 = switch (break only) */
+    MirDefer *break_defers;
+    int nbreak_defers;
+} LoopFrame;
 
 typedef struct {
     CG *cg;
@@ -198,6 +200,7 @@ static void push_loop(Lower *L, int cont, int brk) {
         L->loops = (LoopFrame *)xrealloc(L->loops,
                                          (size_t)L->loopcap * sizeof(LoopFrame));
     }
+    memset(&L->loops[L->nloops], 0, sizeof(LoopFrame));
     L->loops[L->nloops].cont = cont;
     L->loops[L->nloops].brk = brk;
     L->loops[L->nloops].is_loop = 1;
@@ -212,6 +215,7 @@ static void push_switch(Lower *L, int join) {
         L->loops = (LoopFrame *)xrealloc(L->loops,
                                          (size_t)L->loopcap * sizeof(LoopFrame));
     }
+    memset(&L->loops[L->nloops], 0, sizeof(LoopFrame));
     L->loops[L->nloops].cont = -1;
     L->loops[L->nloops].brk = join;
     L->loops[L->nloops].is_loop = 0;
@@ -333,6 +337,39 @@ static int reaches_join(Lower *L, int join) {
     return t->kind == MT_GOTO && t->target == join;
 }
 
+static void kept_push_defer_unique(MirDefer **kept, int *nkept, MirDefer md) {
+    for (int i = 0; i < *nkept; i++) {
+        if ((*kept)[i].id == md.id)
+            return;
+    }
+    *kept = (MirDefer *)xrealloc(*kept, (size_t)(*nkept + 1) * sizeof(MirDefer));
+    (*kept)[(*nkept)++] = md;
+}
+
+static void mir_collect_branch_defers(Lower *L, int join, int base_n,
+                                      MirDefer **kept, int *nkept) {
+    if (reaches_join(L, join)) {
+        for (int k = base_n; k < L->ndefers; k++)
+            kept_push_defer_unique(kept, nkept, L->defers[k]);
+        return;
+    }
+    if (sealed(L)) {
+        MirTerm *t = &L->fn->blocks[L->cur].term;
+        if (t->kind == MT_GOTO) {
+            for (int li = L->nloops - 1; li >= 0; li--) {
+                if (!L->loops[li].is_loop && L->loops[li].brk == t->target) {
+                    LoopFrame *sw = &L->loops[li];
+                    for (int k = base_n; k < L->ndefers; k++)
+                        kept_push_defer_unique(&sw->break_defers,
+                                               &sw->nbreak_defers,
+                                               L->defers[k]);
+                    break;
+                }
+            }
+        }
+    }
+}
+
 static void emit_defers_exit_mir(Lower *L, int line) {
     for (int k = L->ndefers - 1; k >= 0; k--) {
         MirDefer *md = &L->defers[k];
@@ -434,12 +471,7 @@ static void lower_stmt(Lower *L, Stmt *s) {
         lower_block(L, s->as.if_stmt.then_blk);
         L->block_depth--;
         var_scope_pop(L->cg);
-        if (reaches_join(L, join)) {
-            for (int k = base_n; k < L->ndefers; k++) {
-                kept = (MirDefer *)xrealloc(kept, (size_t)(nkept + 1) * sizeof(MirDefer));
-                kept[nkept++] = L->defers[k];
-            }
-        }
+        mir_collect_branch_defers(L, join, base_n, &kept, &nkept);
         emit_goto(L, join, s->line);
         L->ndefers = base_n;
         L->cur = else_bb;
@@ -450,12 +482,7 @@ static void lower_stmt(Lower *L, Stmt *s) {
             L->block_depth--;
             var_scope_pop(L->cg);
         }
-        if (reaches_join(L, join)) {
-            for (int k = base_n; k < L->ndefers; k++) {
-                kept = (MirDefer *)xrealloc(kept, (size_t)(nkept + 1) * sizeof(MirDefer));
-                kept[nkept++] = L->defers[k];
-            }
-        }
+        mir_collect_branch_defers(L, join, base_n, &kept, &nkept);
         emit_goto(L, join, s->line);
         L->ndefers = base_n;
         for (int k = 0; k < nkept; k++)
@@ -703,12 +730,7 @@ static void lower_stmt(Lower *L, Stmt *s) {
         lower_block(L, s->as.if_let.then_blk);
         L->block_depth--;
         var_scope_pop(L->cg);
-        if (reaches_join(L, join)) {
-            for (int k = base_n; k < L->ndefers; k++) {
-                kept = (MirDefer *)xrealloc(kept, (size_t)(nkept + 1) * sizeof(MirDefer));
-                kept[nkept++] = L->defers[k];
-            }
-        }
+        mir_collect_branch_defers(L, join, base_n, &kept, &nkept);
         emit_goto(L, join, s->line);
         L->ndefers = base_n;
         L->cur = else_bb;
@@ -726,12 +748,7 @@ static void lower_stmt(Lower *L, Stmt *s) {
             L->block_depth--;
             var_scope_pop(L->cg);
         }
-        if (reaches_join(L, join)) {
-            for (int k = base_n; k < L->ndefers; k++) {
-                kept = (MirDefer *)xrealloc(kept, (size_t)(nkept + 1) * sizeof(MirDefer));
-                kept[nkept++] = L->defers[k];
-            }
-        }
+        mir_collect_branch_defers(L, join, base_n, &kept, &nkept);
         emit_goto(L, join, s->line);
         L->ndefers = base_n;
         for (int k = 0; k < nkept; k++)
@@ -780,16 +797,75 @@ static void lower_stmt(Lower *L, Stmt *s) {
         if (d->has_recv) {
             md.recv = xasprintf("_def_%d_r", mid);
             mir_add_defer_slot(L, md.recv, d->recv_ty);
+            char *ri = NULL;
+            TypeWrap rw = type_wrap(d->recv_ty, &ri);
+            int recv_is_ref = (rw == TW_REF || rw == TW_REFMUT);
+            int recv_is_mut = (rw == TW_REFMUT);
+            free(ri);
             if (d->is_method_expr) {
-                emit_assign(L, pl_local(md.recv),
-                            lower_rvalue(L, call->as.method.recv), s->line);
+                if (recv_is_ref && expr_lvalue_for_borrow(call->as.method.recv)) {
+                    MirPlace *rp = as_place(L->cg, call->as.method.recv);
+                    if (rp) {
+                        const char *base_ty = infer_type(L->cg, call->as.method.recv);
+                        char *bi = NULL;
+                        TypeWrap bw = type_wrap(base_ty, &bi);
+                        free(bi);
+                        if (bw == TW_REF || bw == TW_REFMUT)
+                            emit_assign(L, pl_local(md.recv),
+                                        rv_use(rp, s->line), s->line);
+                        else
+                            emit_assign(L, pl_local(md.recv),
+                                        rv_ref(rp, recv_is_mut, s->line),
+                                        s->line);
+                    } else {
+                        emit_assign(L, pl_local(md.recv),
+                                    lower_rvalue(L, call->as.method.recv),
+                                    s->line);
+                    }
+                } else {
+                    emit_assign(L, pl_local(md.recv),
+                                lower_rvalue(L, call->as.method.recv), s->line);
+                }
             } else if (d->recv_by_addr) {
+                const char *base_ty =
+                    infer_ident_name(L->cg, d->callee_name, s->line);
+                int mut = (type_is_arena(base_ty) || type_is_link(base_ty))
+                              ? 0
+                              : recv_is_mut;
                 emit_assign(L, pl_local(md.recv),
-                            rv_ref(pl_local(d->callee_name), 0, s->line),
+                            rv_ref(pl_local(d->callee_name), mut, s->line),
                             s->line);
+            } else if (recv_is_ref) {
+                const char *base_ty =
+                    infer_ident_name(L->cg, d->callee_name, s->line);
+                char *bi = NULL;
+                TypeWrap bw = type_wrap(base_ty, &bi);
+                free(bi);
+                if (bw == TW_REF || bw == TW_REFMUT)
+                    emit_assign(L, pl_local(md.recv),
+                                rv_use(pl_local(d->callee_name), s->line),
+                                s->line);
+                else
+                    emit_assign(L, pl_local(md.recv),
+                                rv_ref(pl_local(d->callee_name), recv_is_mut,
+                                       s->line),
+                                s->line);
             } else {
-                emit_assign(L, pl_local(md.recv),
-                            rv_use(pl_local(d->callee_name), s->line), s->line);
+                const char *base_ty =
+                    infer_ident_name(L->cg, d->callee_name, s->line);
+                char *bi = NULL;
+                TypeWrap bw = type_wrap(base_ty, &bi);
+                free(bi);
+                if (bw == TW_OWN && rw == TW_NONE) {
+                    emit_assign(L, pl_local(md.recv),
+                                rv_use(pl_deref(pl_local(d->callee_name)),
+                                       s->line),
+                                s->line);
+                } else {
+                    emit_assign(L, pl_local(md.recv),
+                                rv_use(pl_local(d->callee_name), s->line),
+                                s->line);
+                }
             }
         }
         if (d->nargs > 0) {
@@ -852,12 +928,7 @@ static void lower_stmt(Lower *L, Stmt *s) {
             lower_block(L, sc->body);
             L->block_depth--;
             var_scope_pop(L->cg);
-            if (reaches_join(L, join)) {
-                for (int k = base_n; k < L->ndefers; k++) {
-                    kept = (MirDefer *)xrealloc(kept, (size_t)(nkept + 1) * sizeof(MirDefer));
-                    kept[nkept++] = L->defers[k];
-                }
-            }
+            mir_collect_branch_defers(L, join, base_n, &kept, &nkept);
             emit_goto(L, join, sc->line);
         }
         if (s->as.select_stmt.def) {
@@ -869,12 +940,7 @@ static void lower_stmt(Lower *L, Stmt *s) {
             lower_block(L, s->as.select_stmt.def);
             L->block_depth--;
             var_scope_pop(L->cg);
-            if (reaches_join(L, join)) {
-                for (int k = base_n; k < L->ndefers; k++) {
-                    kept = (MirDefer *)xrealloc(kept, (size_t)(nkept + 1) * sizeof(MirDefer));
-                    kept[nkept++] = L->defers[k];
-                }
-            }
+            mir_collect_branch_defers(L, join, base_n, &kept, &nkept);
             emit_goto(L, join, s->line);
         }
         L->ndefers = base_n;
@@ -916,13 +982,14 @@ static void lower_stmt(Lower *L, Stmt *s) {
             lower_block(L, s->as.switch_stmt.cases[i].body);
             L->block_depth--;
             var_scope_pop(L->cg);
-            pop_loop(L);
-            if (reaches_join(L, join)) {
-                for (int k = base_n; k < L->ndefers; k++) {
-                    kept = (MirDefer *)xrealloc(kept, (size_t)(nkept + 1) * sizeof(MirDefer));
-                    kept[nkept++] = L->defers[k];
-                }
+            {
+                LoopFrame *sw = &L->loops[L->nloops - 1];
+                for (int k = 0; k < sw->nbreak_defers; k++)
+                    kept_push_defer_unique(&kept, &nkept, sw->break_defers[k]);
+                free(sw->break_defers);
             }
+            pop_loop(L);
+            mir_collect_branch_defers(L, join, base_n, &kept, &nkept);
             emit_goto(L, join, s->line);
         }
         if (s->as.switch_stmt.def) {
@@ -936,13 +1003,14 @@ static void lower_stmt(Lower *L, Stmt *s) {
             lower_block(L, s->as.switch_stmt.def);
             L->block_depth--;
             var_scope_pop(L->cg);
-            pop_loop(L);
-            if (reaches_join(L, join)) {
-                for (int k = base_n; k < L->ndefers; k++) {
-                    kept = (MirDefer *)xrealloc(kept, (size_t)(nkept + 1) * sizeof(MirDefer));
-                    kept[nkept++] = L->defers[k];
-                }
+            {
+                LoopFrame *sw = &L->loops[L->nloops - 1];
+                for (int k = 0; k < sw->nbreak_defers; k++)
+                    kept_push_defer_unique(&kept, &nkept, sw->break_defers[k]);
+                free(sw->break_defers);
             }
+            pop_loop(L);
+            mir_collect_branch_defers(L, join, base_n, &kept, &nkept);
             emit_goto(L, join, s->line);
         } else {
             emit_goto(L, join, s->line);

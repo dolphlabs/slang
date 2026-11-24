@@ -1,0 +1,9 @@
+own=68
+condF=124755
+condT=124755
+deepF=124750
+deepT=124750
+derived=ok
+condMoveF=44903
+condMoveT=44850
+verified=ok

@@ -77,8 +77,12 @@ static int method_value_self(CG *cg, Expr *call, const char *name) {
     if (!sig || sig->nparams < 1)
         return 0;
     const char *self_t = sig->param_slang[0];
-    char *inner;
-    if (type_wrap(self_t, &inner) != TW_NONE)
+    char *inner = NULL;
+    TypeWrap sw = type_wrap(self_t, &inner);
+    free(inner);
+    if (sw == TW_REF || sw == TW_REFMUT)
+        return 1;
+    if (sw != TW_NONE)
         return 0;
     if (struct_type_is_gc(cg, self_t))
         return 0;
@@ -86,11 +90,8 @@ static int method_value_self(CG *cg, Expr *call, const char *name) {
 }
 
 /* The receiver of an EX_METHOD, the way method_value_self answers it for
- * a bare `p.m()`: is `self` a plain, Copy value struct (read in place, so
- * the receiver is not consumed)? Anything else -- a reference, an `own`,
- * a gc struct -- takes `p.m()` down the consuming path, which for a
- * receiver that is itself Copy (a gc struct, an ordinary value struct
- * without `own` fields) does nothing. */
+ * a bare `p.m()`: is `self` a plain, Copy value struct or borrowed
+ * reference (read in place, so the receiver is not consumed)? */
 static int recv_value_self(CG *cg, Expr *call) {
     const char *recv_t = infer_type(cg, call->as.method.recv);
     if (type_is_arena(recv_t) || type_is_link(recv_t) || type_is_trip(recv_t))
@@ -102,8 +103,12 @@ static int recv_value_self(CG *cg, Expr *call) {
     if (!sig || sig->nparams < 1)
         return 0; /* a fn-typed field: the value is called, not consumed */
     const char *self_t = sig->param_slang[0];
-    char *inner;
-    if (type_wrap(self_t, &inner) != TW_NONE)
+    char *inner = NULL;
+    TypeWrap sw = type_wrap(self_t, &inner);
+    free(inner);
+    if (sw == TW_REF || sw == TW_REFMUT)
+        return 1;
+    if (sw != TW_NONE)
         return 0;
     if (struct_type_is_gc(cg, self_t))
         return 0;
