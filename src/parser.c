@@ -11,6 +11,7 @@ typedef struct {
     int pos;
     int count;
     int fn_body; /* inside a function body: trailing expr = implicit return */
+    int in_function; /* inside any block of a fn/method body */
     int in_unsafe;
     /* A statement that must be emitted immediately BEFORE the one
      * parse_statement is about to return. Used by compound assignment to
@@ -1283,6 +1284,35 @@ static Stmt *parse_spawn_stmt(Parser *p) {
     return s;
 }
 
+/* defer f(args...) ; / defer recv.m(args...) ; -- function-scoped cleanup.
+ * Closures and blocks are deliberately unsupported; extract a helper fn. */
+static Stmt *parse_defer_stmt(Parser *p) {
+    Token *kw = advance(p); /* 'defer' */
+    if (!p->in_function)
+        parse_error(kw, "'defer' is only allowed inside a function body; "
+                        "move it into a 'fn'");
+    if (check(p, T_LBRACE))
+        parse_error(peek(p),
+                    "'defer { ... }' blocks are not supported (slang has no "
+                    "closures); extract a helper function and write "
+                    "'defer cleanup();'");
+    if (check(p, T_KW_FN))
+        parse_error(peek(p),
+                    "'defer fn(...) { ... }' closures are not supported in "
+                    "slang; extract a named function and write "
+                    "'defer cleanup();'");
+    Expr *call = parse_expression(p);
+    if (call->kind != EX_CALL && call->kind != EX_METHOD)
+        parse_error(kw,
+                    "'defer' requires a function or method call, e.g. "
+                    "'defer close(fd);' or 'defer conn.close();'");
+    expect(p, T_SEMI, "';'");
+
+    Stmt *s = new_stmt(ST_DEFER, kw->line);
+    s->as.defer_stmt.call = call;
+    return s;
+}
+
 /* select {
  *     case let v = chan_recv(ch) { ... }
  *     case chan_send(ch, v)      { ... }
@@ -1907,6 +1937,8 @@ static Stmt *parse_statement(Parser *p) {
         return parse_guard_stmt(p);
     case T_KW_SPAWN:
         return parse_spawn_stmt(p);
+    case T_KW_DEFER:
+        return parse_defer_stmt(p);
     case T_KW_RETURN:
         return parse_return_stmt(p);
     case T_KW_BREAK:
@@ -2107,7 +2139,10 @@ static FuncDecl *parse_fn_decl(Parser *p, int is_extern) {
         f->is_extern = 1;
         expect(p, T_SEMI, "';'");
     } else {
+        int saved_in_fn = p->in_function;
+        p->in_function = 1;
         f->body = parse_block(p, 1);
+        p->in_function = saved_in_fn;
     }
     f->toks = (struct Token *)p->toks;
     f->ntoks = p->count;

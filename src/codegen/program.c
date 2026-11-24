@@ -1485,9 +1485,13 @@ void gen_function(CG *cg, Package *p, FuncDecl *f) {
     emit_line(cg, "    sl_task *_sl_self = NULL; (void)_sl_self;");
     for (int j = 0; j < f->nparams; j++)
         emit_drop_flag(cg, f->params[j]);
+    cg->fn_ndefers = 0;
+    cg->in_defer_cleanup = 0;
+    defer_collect_fn_defers(cg, f->body);
     size_t body_at = cg->out->len;
-    gen_block(cg, f->body);
+    gen_fn_body(cg, f->body);
     emit_scope_drops(cg, 0);
+    defer_emit_fn_decls_at(cg, body_at);
     /* A collection point in a leaf body runs while every caller's live
      * values sit unrooted: heap corruption far from here. Fail the
      * compile instead, whichever emitter put it there. */
@@ -1519,6 +1523,8 @@ void gen_function(CG *cg, Package *p, FuncDecl *f) {
     cg->in_leaf_fn = 0;
     cg->cur_ret = NULL;
     cg->cur_func = NULL;
+    cg->fn_ndefers = 0;
+    cg->in_defer_cleanup = 0;
 }
 
 /* Generate the complete translation unit into cg->out. */
@@ -1536,6 +1542,9 @@ static void cg_reset_after_error(CG *cg, int indent) {
     cg->switch_depth = 0;
     cg->cur_break_live_set = NULL;
     cg->cur_continue_live_set = NULL;
+    cg->fn_ndefers = 0;
+    cg->in_defer_cleanup = 0;
+    cg->ambient_count = 0;
     var_scope_reset(cg);
 }
 

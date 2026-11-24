@@ -778,6 +778,174 @@ static LiveSet *live_expr(CG *cg, Expr *e, LiveSet *live_out) {
 /* ------------------------------------------------------------------ */
 
 static LiveSet *live_stmts(CG *cg, Stmt **stmts, int count, LiveSet *live_out);
+static LiveSet *live_stmts_impl(CG *cg, Stmt **stmts, int count, LiveSet *live_out, int is_fn_epilogue);
+
+static LiveSet *live_exit_set(CG *cg) {
+    LiveSet *r = cg->exit_live_set ? ls_clone((LiveSet *)cg->exit_live_set)
+                                   : ls_new();
+    for (int k = 0; k < cg->fn_ndefers; k++) {
+        DeferInfo *d = cg->fn_defers[k];
+        for (int j = 0; j < d->nborrows; j++) {
+            LiveVar *bv = resolve_local_use(cg, d->borrow_vars[j]);
+            if (bv)
+                ls_add_named(r, bv);
+        }
+    }
+    return r;
+}
+
+static void live_scan_block(CG *cg, Block *b, int in_loop, int *defer_id);
+
+static void live_scan_stmt(CG *cg, Stmt *s, int in_loop, int *defer_id) {
+    if (!s)
+        return;
+    switch (s->kind) {
+    case ST_LET: {
+        const char *t = let_decl_type(cg, s);
+        declare_var(cg, s->as.let.name, t);
+        return;
+    }
+    case ST_IF:
+        var_scope_push(cg);
+        live_scan_block(cg, s->as.if_stmt.then_blk, in_loop, defer_id);
+        var_scope_pop(cg);
+        if (s->as.if_stmt.else_blk) {
+            var_scope_push(cg);
+            live_scan_block(cg, s->as.if_stmt.else_blk, in_loop, defer_id);
+            var_scope_pop(cg);
+        }
+        return;
+    case ST_WHILE:
+        var_scope_push(cg);
+        live_scan_block(cg, s->as.while_stmt.body, in_loop + 1, defer_id);
+        var_scope_pop(cg);
+        return;
+    case ST_FOR:
+        var_scope_push(cg);
+        declare_var(cg, s->as.for_stmt.name, "int");
+        live_scan_block(cg, s->as.for_stmt.body, in_loop + 1, defer_id);
+        var_scope_pop(cg);
+        return;
+    case ST_FOR_IN: {
+        const char *it = infer_type(cg, s->as.for_in.iter);
+        const char *t1, *t2;
+        var_scope_push(cg);
+        if (for_in_types(it, s->as.for_in.name2 != NULL, &t1, &t2)) {
+            declare_var(cg, s->as.for_in.name, t1);
+            if (t2)
+                declare_var(cg, s->as.for_in.name2, t2);
+        }
+        live_scan_block(cg, s->as.for_in.body, in_loop + 1, defer_id);
+        var_scope_pop(cg);
+        return;
+    }
+    case ST_GUARD_LET: {
+        const char *et = infer_type(cg, s->as.guard_let.expr);
+        const char *inner = guard_let_inner_type(cg, s);
+        var_scope_push(cg);
+        if (s->as.guard_let.err_name && is_result(et)) {
+            char *tv, *tev;
+            result_te(et, &tv, &tev);
+            declare_var(cg, s->as.guard_let.err_name, tev);
+        }
+        live_scan_block(cg, s->as.guard_let.body, in_loop, defer_id);
+        var_scope_pop(cg);
+        declare_var(cg, s->as.guard_let.name, inner);
+        return;
+    }
+    case ST_IF_LET: {
+        const char *et = infer_type(cg, s->as.if_let.expr);
+        char *inner = NULL, *tev = NULL;
+        if (is_opt(et))
+            inner = opt_inner(et);
+        else if (is_result(et)) {
+            char *tv;
+            result_te(et, &tv, &tev);
+            inner = tv;
+        }
+        var_scope_push(cg);
+        if (inner)
+            declare_var(cg, s->as.if_let.name, inner);
+        live_scan_block(cg, s->as.if_let.then_blk, in_loop, defer_id);
+        var_scope_pop(cg);
+        if (s->as.if_let.else_blk) {
+            var_scope_push(cg);
+            if (s->as.if_let.err_name && tev)
+                declare_var(cg, s->as.if_let.err_name, tev);
+            live_scan_block(cg, s->as.if_let.else_blk, in_loop, defer_id);
+            var_scope_pop(cg);
+        }
+        return;
+    }
+    case ST_SELECT:
+        for (int i = 0; i < s->as.select_stmt.ncases; i++) {
+            SelectCase *sc = &s->as.select_stmt.cases[i];
+            var_scope_push(cg);
+            if (sc->bind) {
+                const char *ct = infer_type(cg, sc->ch);
+                declare_var(cg, sc->bind, xasprintf("opt[%s]", chan_elem(ct)));
+            }
+            live_scan_block(cg, sc->body, in_loop, defer_id);
+            var_scope_pop(cg);
+        }
+        if (s->as.select_stmt.def) {
+            var_scope_push(cg);
+            live_scan_block(cg, s->as.select_stmt.def, in_loop, defer_id);
+            var_scope_pop(cg);
+        }
+        return;
+    case ST_SWITCH:
+        for (int i = 0; i < s->as.switch_stmt.ncases; i++) {
+            var_scope_push(cg);
+            live_scan_block(cg, s->as.switch_stmt.cases[i].body, in_loop,
+                            defer_id);
+            var_scope_pop(cg);
+        }
+        if (s->as.switch_stmt.def) {
+            var_scope_push(cg);
+            live_scan_block(cg, s->as.switch_stmt.def, in_loop, defer_id);
+            var_scope_pop(cg);
+        }
+        return;
+    case ST_UNSAFE:
+        var_scope_push(cg);
+        live_scan_block(cg, s->as.unsafe_blk.body, in_loop, defer_id);
+        var_scope_pop(cg);
+        return;
+    case ST_DEFER: {
+        if (!cg->in_function)
+            cg_error(s->line,
+                     "'defer' is only allowed inside a function body; "
+                     "move it into a 'fn'");
+        if (in_loop > 0)
+            cg_error(s->line,
+                     "cannot use 'defer' inside a loop: 'defer' is "
+                     "function-scoped and runs only when the enclosing "
+                     "function returns; move the loop body into a helper "
+                     "function");
+        DeferInfo *d = (DeferInfo *)s->as.defer_stmt.defer_info;
+        if (!d) {
+            d = defer_build_info(cg, s, (*defer_id)++);
+            s->as.defer_stmt.defer_info = d;
+        } else {
+            if (d->id >= *defer_id)
+                *defer_id = d->id + 1;
+        }
+        defer_push_fn(cg, d);
+        return;
+    }
+    default:
+        return;
+    }
+}
+
+static void live_scan_block(CG *cg, Block *b, int in_loop, int *defer_id) {
+    if (!b)
+        return;
+    for (int i = 0; i < b->count; i++)
+        live_scan_stmt(cg, b->stmts[i], in_loop, defer_id);
+}
+
 
 static LiveSet *live_block(CG *cg, Block *b, LiveSet *live_out) {
     var_scope_push(cg);
@@ -942,6 +1110,7 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
             var_scope_pop(cg);
             ls_union_named_into(joined, arm);
         }
+        s->backedge_live_set = ls_clone(live_out);
         for (i = 0; i < s->as.select_stmt.ncases; i++) {
             SelectCase *sc = &s->as.select_stmt.cases[i];
             if (sc->val)
@@ -1077,11 +1246,11 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
 
     case ST_RETURN:
         /* kills everything after it in the same block: an
-         * unconditional exit's own live_in is exactly uses(value) */
-        if (!s->as.ret.value) return ls_new();
+         * unconditional exit's own live_in is uses(value) + exit defers */
+        if (!s->as.ret.value) return live_exit_set(cg);
         {
             const char *saved = expect_push(cg, cg->cur_ret);
-            LiveSet *r = live_expr(cg, s->as.ret.value, ls_new());
+            LiveSet *r = live_expr(cg, s->as.ret.value, live_exit_set(cg));
             cg->expect = saved;
             return r;
         }
@@ -1175,6 +1344,27 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
         return cur;
     }
 
+    case ST_DEFER: {
+        DeferInfo *d = (DeferInfo *)s->as.defer_stmt.defer_info;
+        LiveSet *out2 = ls_clone(live_out);
+        if (d) {
+            if (d->has_recv) {
+                LiveVar *rv = resolve_local_use(cg, xasprintf("_sl_def_%d_r", d->id));
+                ls_remove_named(out2, rv);
+            }
+            for (int i = 0; i < d->nargs; i++) {
+                if (i == 0 && d->is_send_static)
+                    continue;
+                LiveVar *av = resolve_local_use(cg, xasprintf("_sl_def_%d_a%d", d->id, i));
+                ls_remove_named(out2, av);
+            }
+        }
+        const char *saved = cg->expect;
+        cg->expect = NULL;
+        LiveSet *r = live_expr(cg, s->as.defer_stmt.call, out2);
+        cg->expect = saved;
+        return r;
+    }
     case ST_UNSAFE:
         return live_block(cg, s->as.unsafe_blk.body, live_out);
     case ST_STRUCT:
@@ -1195,16 +1385,18 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
  * (the initializer/guard expression/else block), matching
  * gen_stmt/gen_stmts's own var_push placement exactly (stmt.c:100,
  * 575). */
-static LiveSet *live_stmts(CG *cg, Stmt **stmts, int count, LiveSet *live_out) {
+static LiveSet *live_stmts_impl(CG *cg, Stmt **stmts, int count,
+                                LiveSet *live_out, int is_fn_epilogue) {
     if (count > 0 && stmts[0]->file)
         diag_file = stmts[0]->file;
-    if (count == 0) return live_out;
+    if (count == 0) return is_fn_epilogue ? live_exit_set(cg) : live_out;
     Stmt *s = stmts[0];
 
     if (s->kind == ST_GUARD_LET) {
         const char *inner = guard_let_inner_type(cg, s);
         LiveVar *gv = declare_var(cg, s->as.guard_let.name, inner);
-        LiveSet *live_in_tail = live_stmts(cg, stmts + 1, count - 1, live_out);
+        LiveSet *live_in_tail = live_stmts_impl(cg, stmts + 1, count - 1,
+                                                live_out, is_fn_epilogue);
         LiveSet *tail_without_gv = ls_clone(live_in_tail);
         ls_remove_named(tail_without_gv, gv); /* doesn't exist before this stmt */
         cg->vars.count--; /* the else block and expr resolve against
@@ -1238,7 +1430,8 @@ static LiveSet *live_stmts(CG *cg, Stmt **stmts, int count, LiveSet *live_out) {
     if (s->kind == ST_LET) {
         const char *t = let_decl_type(cg, s);
         LiveVar *lv = declare_var(cg, s->as.let.name, t);
-        LiveSet *live_out_of_s = live_stmts(cg, stmts + 1, count - 1, live_out);
+        LiveSet *live_out_of_s = live_stmts_impl(cg, stmts + 1, count - 1,
+                                                 live_out, is_fn_epilogue);
         LiveSet *out2 = ls_clone(live_out_of_s);
         ls_remove_named(out2, lv); /* dead before this point regardless */
         cg->vars.count--; /* the initializer resolves against the
@@ -1256,8 +1449,13 @@ static LiveSet *live_stmts(CG *cg, Stmt **stmts, int count, LiveSet *live_out) {
         return r;
     }
 
-    LiveSet *live_out_of_s = live_stmts(cg, stmts + 1, count - 1, live_out);
+    LiveSet *live_out_of_s = live_stmts_impl(cg, stmts + 1, count - 1,
+                                             live_out, is_fn_epilogue);
     return live_stmt(cg, s, live_out_of_s);
+}
+
+static LiveSet *live_stmts(CG *cg, Stmt **stmts, int count, LiveSet *live_out) {
+    return live_stmts_impl(cg, stmts, count, live_out, 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1270,7 +1468,38 @@ static void live_function_body(CG *cg, Block *body, char **params,
     var_scope_push(cg);
     for (int i = 0; i < nparams; i++)
         declare_var(cg, params[i], param_types[i]);
-    live_stmts(cg, body->stmts, body->count, ls_new());
+    cg->fn_ndefers = 0;
+    int did = 0;
+    int saved_sp = cg->var_scope_sp;
+    int saved_vc = cg->vars.count;
+    live_scan_block(cg, body, 0, &did);
+    cg->var_scope_sp = saved_sp;
+    cg->vars.count = saved_vc;
+
+    LiveSet *exit_ls = ls_new();
+    for (int k = 0; k < cg->fn_ndefers; k++) {
+        DeferInfo *d = cg->fn_defers[k];
+        if (d->has_recv && type_has_gc_roots(cg, d->recv_ty)) {
+            char *rn = xasprintf("_sl_def_%d_r", d->id);
+            LiveVar *lv = declare_var(cg, rn, d->recv_ty);
+            cg->vars.items[cg->vars.count - 1].defer_id = d->id;
+            ls_add_named(exit_ls, lv);
+        }
+        for (int i = 0; i < d->nargs; i++) {
+            if (i == 0 && d->is_send_static)
+                continue;
+            if (type_has_gc_roots(cg, d->arg_tys[i])) {
+                char *an = xasprintf("_sl_def_%d_a%d", d->id, i);
+                LiveVar *lv = declare_var(cg, an, d->arg_tys[i]);
+                cg->vars.items[cg->vars.count - 1].defer_id = d->id;
+                ls_add_named(exit_ls, lv);
+            }
+        }
+    }
+    cg->exit_live_set = exit_ls;
+    live_stmts_impl(cg, body->stmts, body->count, ls_clone(exit_ls), 1);
+    cg->exit_live_set = NULL;
+    cg->fn_ndefers = 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1511,6 +1740,10 @@ static void print_stmts(FILE *out, Stmt **stmts, int count) {
                 print_live_set(out, (LiveSet *)s->as.spawn.call->live_set);
                 fputc('\n', out);
             }
+            break;
+        case ST_DEFER:
+            fprintf(out, "L%d: DEFER\n", s->line);
+            print_expr(out, s->as.defer_stmt.call);
             break;
         case ST_UNSAFE:
             print_block(out, s->as.unsafe_blk.body);

@@ -42,6 +42,7 @@ typedef enum {
     T_KW_SWITCH,
     T_KW_CASE,
     T_KW_DEFAULT,
+    T_KW_DEFER,
 
     /* type names */
     T_TY_INT,

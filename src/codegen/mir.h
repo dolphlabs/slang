@@ -95,6 +95,7 @@ struct MirBlock {
 typedef struct {
     char *name;
     const char *ty;
+    int inner_scope;
 } MirLocal;
 
 struct MirFn {

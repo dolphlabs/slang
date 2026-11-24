@@ -2346,10 +2346,8 @@ char *gen_expr(CG *cg, Expr *e) {
 /* Statement code generation                                           */
 /* ------------------------------------------------------------------ */
 
-void gen_print(CG *cg, Expr *call, int newline) {
-    Expr *arg = call->as.call.args[0];
-    const char *t = infer_type(cg, arg);
-    char *v = gen_expr(cg, arg);
+void gen_print_val(CG *cg, const char *t, const char *v, int newline,
+                   int line) {
     if (is_int(t) && is_signed_int(t)) {
         emit_line(cg, "printf(\"%%lld%s\", (long long)(%s));",
                   newline ? "\\n" : "", v);
@@ -2400,7 +2398,7 @@ void gen_print(CG *cg, Expr *call, int newline) {
                           "%s_values, %d), stdout);",
                       v, m, m, ed->nvariants);
     } else if (!is_str(t)) {
-        cg_error(call->line,
+        cg_error(line,
                  "cannot print a value of type %s directly", t);
     } else { /* str */
         if (newline)
@@ -2408,5 +2406,12 @@ void gen_print(CG *cg, Expr *call, int newline) {
         else
             emit_line(cg, "fputs(%s, stdout);", v);
     }
+}
+
+void gen_print(CG *cg, Expr *call, int newline) {
+    Expr *arg = call->as.call.args[0];
+    const char *t = infer_type(cg, arg);
+    char *v = gen_expr(cg, arg);
+    gen_print_val(cg, t, v, newline, call->line);
 }
 

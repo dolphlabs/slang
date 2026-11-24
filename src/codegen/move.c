@@ -584,6 +584,9 @@ static void check_stmt(CG *cg, Stmt *s) {
     case ST_SPAWN:
         check_rvalue(cg, s->as.spawn.call);
         return;
+    case ST_DEFER:
+        check_rvalue(cg, s->as.defer_stmt.call);
+        return;
     case ST_GUARD_LET: {
         check_rvalue(cg, s->as.guard_let.expr);
         if (s->as.guard_let.err_expr)
@@ -749,9 +752,7 @@ void compute_moves(CG *cg, Package *pkgs, int npkgs, int main_index) {
     cg->in_function = 0;
 }
 
-static void emit_drop_ty(CG *cg, const char *cexpr, const char *ty, int stack);
-
-static void emit_drop_ty(CG *cg, const char *cexpr, const char *ty, int stack) {
+void emit_drop_ty(CG *cg, const char *cexpr, const char *ty, int stack) {
     char *inner;
     TypeWrap w = type_wrap(ty, &inner);
     if (w == TW_OWN) {

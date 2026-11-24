@@ -1,0 +1,6 @@
+q=100
+val_n=25
+own_n=24
+guard_err=skip
+before_own_drop
+drop_owned_res=33

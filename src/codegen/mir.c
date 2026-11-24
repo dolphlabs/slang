@@ -10,6 +10,16 @@ typedef struct {
 } LoopFrame;
 
 typedef struct {
+    DeferInfo *info;
+    int id;
+    int line;
+    char *cal;
+    char *recv;
+    char **args;
+    int nargs;
+} MirDefer;
+
+typedef struct {
     CG *cg;
     MirFn *fn;
     int cur;
@@ -17,6 +27,12 @@ typedef struct {
     LoopFrame *loops;
     int nloops;
     int loopcap;
+    int loop_depth;
+    int block_depth;
+    int next_defer_id;
+    MirDefer *defers;
+    int ndefers;
+    int defer_cap;
 } Lower;
 
 static MirPlace *pl_local(const char *name) {
@@ -166,6 +182,7 @@ static void add_local(Lower *L, const char *name, const char *ty) {
     }
     fn->locals[fn->nlocals].name = xstrdup(name);
     fn->locals[fn->nlocals].ty = ty;
+    fn->locals[fn->nlocals].inner_scope = (L->block_depth > 0);
     fn->nlocals++;
 }
 
@@ -293,6 +310,80 @@ static const char *let_ty(Lower *L, Stmt *s) {
     return ann ? ann : it;
 }
 
+
+static void mir_push_defer(Lower *L, MirDefer md) {
+    if (L->ndefers == L->defer_cap) {
+        L->defer_cap = L->defer_cap ? L->defer_cap * 2 : 8;
+        L->defers = (MirDefer *)xrealloc(L->defers,
+                                         (size_t)L->defer_cap * sizeof(MirDefer));
+    }
+    L->defers[L->ndefers++] = md;
+}
+
+static void mir_add_defer_slot(Lower *L, const char *name, const char *ty) {
+    add_local(L, name, ty);
+    L->fn->locals[L->fn->nlocals - 1].inner_scope = 0;
+    var_push(L->cg, name, ty);
+}
+
+static int reaches_join(Lower *L, int join) {
+    if (!sealed(L))
+        return 1;
+    MirTerm *t = &L->fn->blocks[L->cur].term;
+    return t->kind == MT_GOTO && t->target == join;
+}
+
+static void emit_defers_exit_mir(Lower *L, int line) {
+    for (int k = L->ndefers - 1; k >= 0; k--) {
+        MirDefer *md = &L->defers[k];
+        DeferInfo *d = md->info;
+        int eline = line ? line : md->line;
+        if (d->is_print) {
+            if (md->nargs > 0)
+                emit_eval(L, rv_use(pl_local(md->args[0]), eline), eline);
+            continue;
+        }
+        Expr *syn = ex_new(d->is_method_expr ? EX_METHOD : EX_CALL, eline);
+        Expr *orig = d->stmt->as.defer_stmt.call;
+        if (d->is_method_expr) {
+            syn->as.method.recv = ex_ident(md->recv, eline);
+            syn->as.method.name = xstrdup(d->method_name);
+            syn->as.method.nargs = md->nargs;
+            if (md->nargs > 0) {
+                syn->as.method.args =
+                    (Expr **)xmalloc((size_t)md->nargs * sizeof(Expr *));
+                for (int i = 0; i < md->nargs; i++)
+                    syn->as.method.args[i] = ex_ident(md->args[i], eline);
+            }
+        } else {
+            if (md->cal) {
+                syn->as.call.name = xstrdup("<function value>");
+                syn->as.call.callee = ex_ident(md->cal, eline);
+            } else if (md->recv) {
+                syn->as.call.name = xasprintf("%s.%s", md->recv, d->method_name);
+            } else {
+                syn->as.call.name = xstrdup(d->callee_name);
+                syn->as.call.enum_ty = orig->as.call.enum_ty
+                                           ? xstrdup(orig->as.call.enum_ty)
+                                           : NULL;
+                syn->as.call.gsig = orig->as.call.gsig;
+            }
+            syn->as.call.nargs = md->nargs;
+            if (md->nargs > 0) {
+                syn->as.call.args =
+                    (Expr **)xmalloc((size_t)md->nargs * sizeof(Expr *));
+                for (int i = 0; i < md->nargs; i++) {
+                    if (i == 0 && d->is_send_static)
+                        syn->as.call.args[i] = orig->as.call.args[0];
+                    else
+                        syn->as.call.args[i] = ex_ident(md->args[i], eline);
+                }
+            }
+        }
+        emit_eval(L, rv_expr(syn), eline);
+    }
+}
+
 static void lower_stmts(Lower *L, Stmt **stmts, int count);
 static void lower_block(Lower *L, Block *b);
 
@@ -333,19 +424,42 @@ static void lower_stmt(Lower *L, Stmt *s) {
         int then_bb = new_bb(L);
         int else_bb = new_bb(L);
         int join = new_bb(L);
+        int base_n = L->ndefers;
+        MirDefer *kept = NULL;
+        int nkept = 0;
         emit_if(L, cond, then_bb, else_bb, s->line);
         L->cur = then_bb;
         var_scope_push(L->cg);
+        L->block_depth++;
         lower_block(L, s->as.if_stmt.then_blk);
+        L->block_depth--;
         var_scope_pop(L->cg);
+        if (reaches_join(L, join)) {
+            for (int k = base_n; k < L->ndefers; k++) {
+                kept = (MirDefer *)xrealloc(kept, (size_t)(nkept + 1) * sizeof(MirDefer));
+                kept[nkept++] = L->defers[k];
+            }
+        }
         emit_goto(L, join, s->line);
+        L->ndefers = base_n;
         L->cur = else_bb;
         if (s->as.if_stmt.else_blk) {
             var_scope_push(L->cg);
+            L->block_depth++;
             lower_block(L, s->as.if_stmt.else_blk);
+            L->block_depth--;
             var_scope_pop(L->cg);
         }
+        if (reaches_join(L, join)) {
+            for (int k = base_n; k < L->ndefers; k++) {
+                kept = (MirDefer *)xrealloc(kept, (size_t)(nkept + 1) * sizeof(MirDefer));
+                kept[nkept++] = L->defers[k];
+            }
+        }
         emit_goto(L, join, s->line);
+        L->ndefers = base_n;
+        for (int k = 0; k < nkept; k++)
+            mir_push_defer(L, kept[k]);
         L->cur = join;
         return;
     }
@@ -360,8 +474,12 @@ static void lower_stmt(Lower *L, Stmt *s) {
         L->cur = body;
         push_loop(L, hdr, exit);
         var_scope_push(L->cg);
+        L->loop_depth++;
+        L->block_depth++;
         lower_stmts(L, s->as.while_stmt.body->stmts,
                     s->as.while_stmt.body->count);
+        L->block_depth--;
+        L->loop_depth--;
         var_scope_pop(L->cg);
         pop_loop(L);
         emit_goto(L, hdr, s->line);
@@ -391,8 +509,12 @@ static void lower_stmt(Lower *L, Stmt *s) {
         L->cur = body;
         push_loop(L, inc, exit);
         var_scope_push(L->cg);
+        L->loop_depth++;
+        L->block_depth++;
         lower_stmts(L, s->as.for_stmt.body->stmts,
                     s->as.for_stmt.body->count);
+        L->block_depth--;
+        L->loop_depth--;
         var_scope_pop(L->cg);
         pop_loop(L);
         emit_goto(L, inc, s->line);
@@ -440,7 +562,11 @@ static void lower_stmt(Lower *L, Stmt *s) {
         L->cur = body;
         push_loop(L, hdr, exit);
         var_scope_push(L->cg);
+        L->loop_depth++;
+        L->block_depth++;
         lower_block(L, s->as.for_in.body);
+        L->block_depth--;
+        L->loop_depth--;
         var_scope_pop(L->cg);
         pop_loop(L);
         emit_goto(L, hdr, s->line);
@@ -453,8 +579,25 @@ static void lower_stmt(Lower *L, Stmt *s) {
         memset(&t, 0, sizeof(t));
         t.kind = MT_RETURN;
         t.line = s->line;
-        if (s->as.ret.value)
-            t.ret = lower_rvalue(L, s->as.ret.value);
+        if (L->ndefers > 0) {
+            if (s->as.ret.value) {
+                const char *se = expect_push(L->cg, L->cg->cur_ret);
+                const char *rt = L->cg->cur_ret
+                                     ? L->cg->cur_ret
+                                     : infer_type(L->cg, s->as.ret.value);
+                MirRvalue *rv = lower_rvalue(L, s->as.ret.value);
+                L->cg->expect = se;
+                char *rv_tmp = fresh(L, rt);
+                emit_assign(L, pl_local(rv_tmp), rv, s->line);
+                emit_defers_exit_mir(L, s->line);
+                t.ret = rv_use(pl_local(rv_tmp), s->line);
+            } else {
+                emit_defers_exit_mir(L, s->line);
+            }
+        } else {
+            if (s->as.ret.value)
+                t.ret = lower_rvalue(L, s->as.ret.value);
+        }
         set_term(L, t);
         return;
     }
@@ -493,8 +636,10 @@ static void lower_stmt(Lower *L, Stmt *s) {
         int ok_bb = new_bb(L);
         int else_bb = new_bb(L);
         emit_if(L, cond, ok_bb, else_bb, s->line);
+        int base_n = L->ndefers;
         L->cur = else_bb;
         var_scope_push(L->cg);
+        L->block_depth++;
         /* `else let e = err_of(r)` binds e for the whole else block, so
            this pass has to know about it too -- liveness, escape and
            move all declare it before walking the body, and MIR was the
@@ -513,7 +658,9 @@ static void lower_stmt(Lower *L, Stmt *s) {
             var_push(L->cg, s->as.guard_let.err_name, gtev);
         }
         lower_block(L, s->as.guard_let.body);
+        L->block_depth--;
         var_scope_pop(L->cg);
+        L->ndefers = base_n;
         L->cur = ok_bb;
         if (inner) {
             add_local(L, s->as.guard_let.name, inner);
@@ -539,9 +686,13 @@ static void lower_stmt(Lower *L, Stmt *s) {
         int then_bb = new_bb(L);
         int else_bb = new_bb(L);
         int join = new_bb(L);
+        int base_n = L->ndefers;
+        MirDefer *kept = NULL;
+        int nkept = 0;
         emit_if(L, cond, then_bb, else_bb, s->line);
         L->cur = then_bb;
         var_scope_push(L->cg);
+        L->block_depth++;
         if (inner) {
             add_local(L, s->as.if_let.name, inner);
             var_redecl_check(L->cg, s->as.if_let.name, s->line);
@@ -550,11 +701,20 @@ static void lower_stmt(Lower *L, Stmt *s) {
                         lower_rvalue(L, s->as.if_let.expr), s->line);
         }
         lower_block(L, s->as.if_let.then_blk);
+        L->block_depth--;
         var_scope_pop(L->cg);
+        if (reaches_join(L, join)) {
+            for (int k = base_n; k < L->ndefers; k++) {
+                kept = (MirDefer *)xrealloc(kept, (size_t)(nkept + 1) * sizeof(MirDefer));
+                kept[nkept++] = L->defers[k];
+            }
+        }
         emit_goto(L, join, s->line);
+        L->ndefers = base_n;
         L->cur = else_bb;
         if (s->as.if_let.else_blk) {
             var_scope_push(L->cg);
+            L->block_depth++;
             if (s->as.if_let.err_name && tev) {
                 int eline = s->as.if_let.err_line ? s->as.if_let.err_line
                                                   : s->line;
@@ -563,14 +723,99 @@ static void lower_stmt(Lower *L, Stmt *s) {
                 var_push(L->cg, s->as.if_let.err_name, tev);
             }
             lower_block(L, s->as.if_let.else_blk);
+            L->block_depth--;
             var_scope_pop(L->cg);
         }
+        if (reaches_join(L, join)) {
+            for (int k = base_n; k < L->ndefers; k++) {
+                kept = (MirDefer *)xrealloc(kept, (size_t)(nkept + 1) * sizeof(MirDefer));
+                kept[nkept++] = L->defers[k];
+            }
+        }
         emit_goto(L, join, s->line);
+        L->ndefers = base_n;
+        for (int k = 0; k < nkept; k++)
+            mir_push_defer(L, kept[k]);
         L->cur = join;
         return;
     }
+    case ST_DEFER: {
+        if (L->loop_depth > 0)
+            cg_error(s->line,
+                     "cannot use 'defer' inside a loop: 'defer' is "
+                     "function-scoped and runs only when the enclosing "
+                     "function returns; move the loop body into a helper "
+                     "function");
+        DeferInfo *d = (DeferInfo *)s->as.defer_stmt.defer_info;
+        if (!d) {
+            d = defer_build_info(L->cg, s, L->next_defer_id);
+            s->as.defer_stmt.defer_info = d;
+        }
+        int mid = L->next_defer_id++;
+        MirDefer md;
+        memset(&md, 0, sizeof(md));
+        md.info = d;
+        md.id = mid;
+        md.line = s->line;
+        md.nargs = d->nargs;
+
+        Expr *call = s->as.defer_stmt.call;
+        if (d->has_cal) {
+            md.cal = xasprintf("_def_%d_cal", mid);
+            mir_add_defer_slot(L, md.cal, d->cal_ty);
+            if (call->as.call.callee) {
+                emit_assign(L, pl_local(md.cal),
+                            lower_rvalue(L, call->as.call.callee), s->line);
+            } else if (d->method_name) {
+                emit_assign(L, pl_local(md.cal),
+                            rv_use(pl_field(pl_local(d->callee_name),
+                                            d->method_name),
+                                   s->line),
+                            s->line);
+            } else {
+                emit_assign(L, pl_local(md.cal),
+                            rv_use(pl_local(d->callee_name), s->line), s->line);
+            }
+        }
+        if (d->has_recv) {
+            md.recv = xasprintf("_def_%d_r", mid);
+            mir_add_defer_slot(L, md.recv, d->recv_ty);
+            if (d->is_method_expr) {
+                emit_assign(L, pl_local(md.recv),
+                            lower_rvalue(L, call->as.method.recv), s->line);
+            } else if (d->recv_by_addr) {
+                emit_assign(L, pl_local(md.recv),
+                            rv_ref(pl_local(d->callee_name), 0, s->line),
+                            s->line);
+            } else {
+                emit_assign(L, pl_local(md.recv),
+                            rv_use(pl_local(d->callee_name), s->line), s->line);
+            }
+        }
+        if (d->nargs > 0) {
+            Expr **args = d->is_method_expr ? call->as.method.args
+                                            : call->as.call.args;
+            md.args = (char **)xmalloc((size_t)d->nargs * sizeof(char *));
+            for (int i = 0; i < d->nargs; i++) {
+                if (i == 0 && d->is_send_static) {
+                    md.args[i] = NULL;
+                    continue;
+                }
+                md.args[i] = xasprintf("_def_%d_a%d", mid, i);
+                mir_add_defer_slot(L, md.args[i], d->arg_tys[i]);
+                const char *se = expect_push(L->cg, d->arg_tys[i]);
+                MirRvalue *av = lower_rvalue(L, args[i]);
+                L->cg->expect = se;
+                emit_assign(L, pl_local(md.args[i]), av, s->line);
+            }
+        }
+        mir_push_defer(L, md);
+        return;
+    }
     case ST_UNSAFE:
+        L->block_depth++;
         lower_block(L, s->as.unsafe_blk.body);
+        L->block_depth--;
         return;
     case ST_SELECT: {
         /* Every arm's channel (and a send arm's value) is evaluated
@@ -586,11 +831,16 @@ static void lower_stmt(Lower *L, Stmt *s) {
             if (sc->val)
                 lower_rvalue(L, sc->val);
         }
+        int base_n = L->ndefers;
+        MirDefer *kept = NULL;
+        int nkept = 0;
         for (i = 0; i < s->as.select_stmt.ncases; i++) {
             SelectCase *sc = &s->as.select_stmt.cases[i];
             int arm = new_bb(L);
             L->cur = arm;
+            L->ndefers = base_n;
             var_scope_push(L->cg);
+            L->block_depth++;
             if (sc->bind) {
                 const char *ct = infer_type(L->cg, sc->ch);
                 char *elem = chan_elem(ct);
@@ -600,17 +850,36 @@ static void lower_stmt(Lower *L, Stmt *s) {
                 var_push(L->cg, sc->bind, ot);
             }
             lower_block(L, sc->body);
+            L->block_depth--;
             var_scope_pop(L->cg);
+            if (reaches_join(L, join)) {
+                for (int k = base_n; k < L->ndefers; k++) {
+                    kept = (MirDefer *)xrealloc(kept, (size_t)(nkept + 1) * sizeof(MirDefer));
+                    kept[nkept++] = L->defers[k];
+                }
+            }
             emit_goto(L, join, sc->line);
         }
         if (s->as.select_stmt.def) {
             int d = new_bb(L);
             L->cur = d;
+            L->ndefers = base_n;
             var_scope_push(L->cg);
+            L->block_depth++;
             lower_block(L, s->as.select_stmt.def);
+            L->block_depth--;
             var_scope_pop(L->cg);
+            if (reaches_join(L, join)) {
+                for (int k = base_n; k < L->ndefers; k++) {
+                    kept = (MirDefer *)xrealloc(kept, (size_t)(nkept + 1) * sizeof(MirDefer));
+                    kept[nkept++] = L->defers[k];
+                }
+            }
             emit_goto(L, join, s->line);
         }
+        L->ndefers = base_n;
+        for (int k = 0; k < nkept; k++)
+            mir_push_defer(L, kept[k]);
         L->cur = join;
         return;
     }
@@ -625,6 +894,9 @@ static void lower_stmt(Lower *L, Stmt *s) {
         emit_assign(L, pl_local(sv),
                     lower_rvalue(L, s->as.switch_stmt.scrut), s->line);
         int join = new_bb(L);
+        int base_n = L->ndefers;
+        MirDefer *kept = NULL;
+        int nkept = 0;
         for (int i = 0; i < s->as.switch_stmt.ncases; i++) {
             int body = new_bb(L);
             for (int j = 0; j < s->as.switch_stmt.cases[i].nvals; j++) {
@@ -637,26 +909,47 @@ static void lower_stmt(Lower *L, Stmt *s) {
                 L->cur = next;
             }
             L->cur = body;
+            L->ndefers = base_n;
             push_switch(L, join);
             var_scope_push(L->cg);
+            L->block_depth++;
             lower_block(L, s->as.switch_stmt.cases[i].body);
+            L->block_depth--;
             var_scope_pop(L->cg);
             pop_loop(L);
+            if (reaches_join(L, join)) {
+                for (int k = base_n; k < L->ndefers; k++) {
+                    kept = (MirDefer *)xrealloc(kept, (size_t)(nkept + 1) * sizeof(MirDefer));
+                    kept[nkept++] = L->defers[k];
+                }
+            }
             emit_goto(L, join, s->line);
         }
         if (s->as.switch_stmt.def) {
             int d = new_bb(L);
             emit_goto(L, d, s->line);
             L->cur = d;
+            L->ndefers = base_n;
             push_switch(L, join);
             var_scope_push(L->cg);
+            L->block_depth++;
             lower_block(L, s->as.switch_stmt.def);
+            L->block_depth--;
             var_scope_pop(L->cg);
             pop_loop(L);
+            if (reaches_join(L, join)) {
+                for (int k = base_n; k < L->ndefers; k++) {
+                    kept = (MirDefer *)xrealloc(kept, (size_t)(nkept + 1) * sizeof(MirDefer));
+                    kept[nkept++] = L->defers[k];
+                }
+            }
             emit_goto(L, join, s->line);
         } else {
             emit_goto(L, join, s->line);
         }
+        L->ndefers = base_n;
+        for (int k = 0; k < nkept; k++)
+            mir_push_defer(L, kept[k]);
         L->cur = join;
         return;
     }
@@ -739,6 +1032,8 @@ static MirFn *lower_fn(CG *cg, const char *pkg, const char *name, Block *body,
     }
     lower_stmts(&L, body->stmts, body->count);
     if (!sealed(&L)) {
+        if (L.ndefers > 0)
+            emit_defers_exit_mir(&L, 0);
         MirTerm t;
         memset(&t, 0, sizeof(t));
         t.kind = MT_RETURN;

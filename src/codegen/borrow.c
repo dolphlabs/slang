@@ -1108,6 +1108,20 @@ static void walk_stmt(BK *bk, MirStmt *s) {
             access_place(bk, s->dest, 1, 0, s->line);
     }
     walk_rvalue(bk, s->src, dest);
+    if (dest && !strncmp(dest, "_def_", 5)) {
+        int i;
+        for (i = 0; i < bk->cur.n; i++) {
+            Loan *l = &bk->cur.items[i];
+            if (!l->borrower || strcmp(l->borrower, dest))
+                continue;
+            int ri = loc_idx(bk->fn, l->root);
+            if (ri >= 0 && bk->fn->locals[ri].inner_scope && !bk->is_param[ri])
+                cg_error(s->line,
+                         "deferred call cannot borrow inner-scope variable '%s': "
+                         "declare '%s' at function scope or pass it by value",
+                         l->root, l->root);
+        }
+    }
 }
 
 static void walk_term(BK *bk, MirTerm *t) {
