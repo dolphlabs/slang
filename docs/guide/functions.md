@@ -29,7 +29,7 @@ gc struct Route {
 
 let routes: [Route] = [
     Route { method: "GET",  path: "/api/tasks", handler: list_tasks },
-    Route { method: "POST", path: "/api/tasks", handler: create_task }
+    Route { method: "POST", path: "/api/tasks", handler: create_task },
 ];
 
 for i in 0..len(routes) {

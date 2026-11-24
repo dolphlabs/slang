@@ -459,7 +459,9 @@ push(pts, r.tl);
 ```
 
 Struct literals must supply every field exactly once, with types
-checked. A struct may be declared after one that holds it by value. Methods live in top-level `impl Name { ... }` blocks; mark a
+checked. Trailing commas are allowed in struct, list, and map literals, calls,
+function parameters, type and lifetime parameter/argument lists, `result[T, E,]`,
+declarations, and `switch` `case` value lists. A struct may be declared after one that holds it by value. Methods live in top-level `impl Name { ... }` blocks; mark a
 method `pub fn` to export it to importing packages. A method's name
 belongs to its struct: it may match a package-level function or another
 struct's method (`impl Client { fn get }` beside `fn get`), and a bare
@@ -891,7 +893,7 @@ gc struct Route {
 
 let routes: [Route] = [
     Route { method: "GET",  path: "/api/tasks", handler: list_tasks },
-    Route { method: "POST", path: "/api/tasks", handler: create_task }
+    Route { method: "POST", path: "/api/tasks", handler: create_task },
 ];
 
 for i in 0..len(routes) {
@@ -1280,7 +1282,9 @@ push(pts, r.tl);
 ```
 
 Struct literals must supply every field exactly once, with types
-checked. A struct may be declared after one that holds it by value. Methods live in top-level `impl Name { ... }` blocks; mark a
+checked. Trailing commas are allowed in struct, list, and map literals, calls,
+function parameters, type and lifetime parameter/argument lists, `result[T, E,]`,
+declarations, and `switch` `case` value lists. A struct may be declared after one that holds it by value. Methods live in top-level `impl Name { ... }` blocks; mark a
 method `pub fn` to export it to importing packages. A method's name
 belongs to its struct: it may match a package-level function or another
 struct's method (`impl Client { fn get }` beside `fn get`), and a bare

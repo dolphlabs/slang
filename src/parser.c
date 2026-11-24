@@ -53,18 +53,24 @@ static int match(Parser *p, TokenType t) {
     return 0;
 }
 
-/* What to add to "expected X but found Y" for the two mistakes that cost
- * benchmark agents the most compile rounds (bench/agent): a trailing comma
- * (four struct literals, three rounds in one run) and a reserved word
- * used as a name (`result` as a field). */
+/* What to add to "expected X but found Y" for common mistakes:
+ * duplicate commas (,,), unexpected leading commas (, x), and a reserved
+ * word used as a name (`result` as a field). */
 static const char *found_hint(Parser *p, Token *tk, int want_name) {
     long idx = tk - p->toks;
     TokenType t = tk->type;
-    if (idx > 0 && p->toks[idx - 1].type == T_COMMA &&
-        (t == T_RBRACE || t == T_RBRACKET || t == T_RPAREN))
-        return xasprintf(" (slang has no trailing commas: remove the ',' "
-                         "before %s on line %d)",
-                         token_type_name(t), p->toks[idx - 1].line);
+    if (idx > 0 && p->toks[idx - 1].type == T_COMMA && t == T_COMMA)
+        return xasprintf(" (duplicate ',' after ',' on line %d: remove the "
+                         "extra ',')",
+                         p->toks[idx - 1].line);
+    if (t == T_COMMA && idx > 0) {
+        TokenType prev = p->toks[idx - 1].type;
+        if (prev == T_LPAREN || prev == T_LBRACKET || prev == T_LBRACE ||
+            prev == T_LT || prev == T_KW_CASE)
+            return xasprintf(" (unexpected leading ',' after %s: remove the "
+                             "',' or supply an element before it)",
+                             token_type_name(prev));
+    }
     if (want_name) {
         const char *n = token_type_name(t);
         if (n[0] == '\'' && isalpha((unsigned char)n[1]))
@@ -340,12 +346,10 @@ static Expr *parse_primary(Parser *p) {
     case T_LBRACKET: {
         advance(p);
         Expr *e = new_expr(p, EX_LIST, tk->line);
-        if (!check(p, T_RBRACKET)) {
-            for (;;) {
-                list_push_elem(e, parse_expression(p));
-                if (!match(p, T_COMMA))
-                    break;
-            }
+        while (!check(p, T_RBRACKET)) {
+            list_push_elem(e, parse_expression(p));
+            if (!match(p, T_COMMA))
+                break;
         }
         expect(p, T_RBRACKET, "']' to close list literal");
         return e;
@@ -354,16 +358,14 @@ static Expr *parse_primary(Parser *p) {
         /* map literal: {key: value, ...} */
         advance(p);
         Expr *e = new_expr(p, EX_MAPLIT, tk->line);
-        if (!check(p, T_RBRACE)) {
-            for (;;) {
-                Expr *k = parse_expression(p);
-                expect(p, T_COLON, "':' between key and value in map "
-                                   "literal");
-                Expr *v = parse_expression(p);
-                maplit_push_pair(e, k, v);
-                if (!match(p, T_COMMA))
-                    break;
-            }
+        while (!check(p, T_RBRACE)) {
+            Expr *k = parse_expression(p);
+            expect(p, T_COLON, "':' between key and value in map "
+                               "literal");
+            Expr *v = parse_expression(p);
+            maplit_push_pair(e, k, v);
+            if (!match(p, T_COMMA))
+                break;
         }
         expect(p, T_RBRACE, "'}' to close map literal");
         return e;
@@ -428,6 +430,8 @@ static Expr *parse_primary(Parser *p) {
                 nf++;
                 if (!match(p, T_COMMA))
                     break;
+                if (check(p, T_RBRACE))
+                    break;
             }
             sl->as.structlit.nfields = nf;
             expect(p, T_RBRACE, "'}' to close struct literal");
@@ -437,12 +441,10 @@ static Expr *parse_primary(Parser *p) {
             advance(p); /* '(' */
             Expr *call = new_expr(p, EX_CALL, tk->line);
             call->as.call.name = name;
-            if (!check(p, T_RPAREN)) {
-                for (;;) {
-                    call_push_arg(call, parse_expression(p));
-                    if (!match(p, T_COMMA))
-                        break;
-                }
+            while (!check(p, T_RPAREN)) {
+                call_push_arg(call, parse_expression(p));
+                if (!match(p, T_COMMA))
+                    break;
             }
             expect(p, T_RPAREN, "')' to close argument list");
             return call;
@@ -454,6 +456,11 @@ static Expr *parse_primary(Parser *p) {
     case T_LPAREN: {
         advance(p);
         Expr *e = parse_expression(p);
+        if (check(p, T_COMMA))
+            parse_error(peek(p),
+                        "expected ')' but found ',' (parentheses are only for "
+                        "grouping, not tuples; remove the ',' or use a struct "
+                        "or list)");
         expect(p, T_RPAREN, "')'");
         return e;
     }
@@ -486,12 +493,10 @@ static Expr *parse_postfix(Parser *p) {
                 Expr *m = new_expr(p, EX_METHOD, mt->line);
                 m->as.method.recv = e;
                 m->as.method.name = mt->text;
-                if (!check(p, T_RPAREN)) {
-                    for (;;) {
-                        method_push_arg(m, parse_expression(p));
-                        if (!match(p, T_COMMA))
-                            break;
-                    }
+                while (!check(p, T_RPAREN)) {
+                    method_push_arg(m, parse_expression(p));
+                    if (!match(p, T_COMMA))
+                        break;
                 }
                 expect(p, T_RPAREN, "')' to close argument list");
                 e = m;
@@ -520,12 +525,10 @@ static Expr *parse_postfix(Parser *p) {
              * the right answer for a call that has no name. */
             call->as.call.name = xstrdup("<function value>");
             call->as.call.callee = e;
-            if (!check(p, T_RPAREN)) {
-                for (;;) {
-                    call_push_arg(call, parse_expression(p));
-                    if (!match(p, T_COMMA))
-                        break;
-                }
+            while (!check(p, T_RPAREN)) {
+                call_push_arg(call, parse_expression(p));
+                if (!match(p, T_COMMA))
+                    break;
             }
             expect(p, T_RPAREN, "')' to close argument list");
             e = call;
@@ -858,6 +861,7 @@ static Type *parse_type_atom(Parser *p) {
         advance(p);
         expect(p, T_LBRACKET, "'[' after 'map'");
         Type *k = parse_type(p);
+        match(p, T_COMMA);
         expect(p, T_RBRACKET, "']' between key and value types");
         Type *v = parse_type(p);
         Type *t = ty_new(TY_MAP);
@@ -869,6 +873,7 @@ static Type *parse_type_atom(Parser *p) {
         advance(p);
         expect(p, T_LBRACKET, "'[' after 'opt'");
         Type *inner = parse_type(p);
+        match(p, T_COMMA);
         expect(p, T_RBRACKET, "']' to close opt type");
         return ty_wrap(TY_OPT, inner);
     }
@@ -876,6 +881,7 @@ static Type *parse_type_atom(Parser *p) {
         advance(p);
         expect(p, T_LBRACKET, "'[' after 'chan'");
         Type *inner = parse_type(p);
+        match(p, T_COMMA);
         expect(p, T_RBRACKET, "']' to close chan type");
         return ty_wrap(TY_CHAN, inner);
     }
@@ -883,6 +889,7 @@ static Type *parse_type_atom(Parser *p) {
         advance(p);
         expect(p, T_LBRACKET, "'[' after 'join'");
         Type *inner = parse_type(p);
+        match(p, T_COMMA);
         expect(p, T_RBRACKET, "']' to close join type");
         return ty_wrap(TY_JOIN, inner);
     }
@@ -892,6 +899,7 @@ static Type *parse_type_atom(Parser *p) {
         Type *ok = parse_type(p);
         expect(p, T_COMMA, "',' between value and error types");
         Type *err = parse_type(p);
+        match(p, T_COMMA);
         expect(p, T_RBRACKET, "']' to close result type");
         Type *t = ty_new(TY_RESULT);
         t->as.result.ok = ok;
@@ -935,15 +943,15 @@ static Type *parse_type_atom(Parser *p) {
         expect(p, T_LPAREN, "'(' after 'fn' in a type");
         sb_init(&b);
         sb_append(&b, "fn(");
-        if (!check(p, T_RPAREN)) {
-            int first = 1;
-            do {
-                Type *pt = parse_type(p);
-                if (!first)
-                    sb_append(&b, ",");
-                sb_append(&b, type_string(pt));
-                first = 0;
-            } while (match(p, T_COMMA));
+        int first = 1;
+        while (!check(p, T_RPAREN)) {
+            Type *pt = parse_type(p);
+            if (!first)
+                sb_append(&b, ",");
+            sb_append(&b, type_string(pt));
+            first = 0;
+            if (!match(p, T_COMMA))
+                break;
         }
         expect(p, T_RPAREN, "')' to close the parameter list");
         sb_append(&b, ")");
@@ -959,6 +967,7 @@ static Type *parse_type_atom(Parser *p) {
             advance(p);
             expect(p, T_LBRACKET, "'[' after 'ptr'");
             Type *inner = parse_type(p);
+            match(p, T_COMMA);
             expect(p, T_RBRACKET, "']' to close ptr type");
             return ty_wrap(TY_PTR, inner);
         }
@@ -980,6 +989,7 @@ static Type *parse_type_atom(Parser *p) {
     case T_LBRACKET: {
         advance(p);
         Type *inner = parse_type(p);
+        match(p, T_COMMA);
         expect(p, T_RBRACKET, "']' to close array type");
         return ty_wrap(TY_ARRAY, inner);
     }
@@ -989,7 +999,8 @@ static Type *parse_type_atom(Parser *p) {
                     "i8..u64, f32, [T], map[K]V, opt[T], result[T,E], "
                     "chan[T], join[T], duration, rawptr, arena, wire, until, fault, "
                     "peer, trip, link, ptr[T], own T, gc T, "
-                    "&T, &'a T, &mut T, *T, *mut T, or a struct name)");
+                    "&T, &'a T, &mut T, *T, *mut T, or a struct name), but found %s%s",
+                    token_type_name(tk->type), found_hint(p, tk, 0));
     }
     return NULL;
 }
@@ -1036,6 +1047,8 @@ static char *parse_type_args(Parser *p) {
         sb_append(&sb, type_string(parse_type(p)));
         n++;
         if (!match(p, T_COMMA))
+            break;
+        if (check(p, T_RBRACKET))
             break;
     }
     expect(p, T_RBRACKET, "']' to close the type arguments");
@@ -1348,6 +1361,8 @@ static Stmt *parse_switch_stmt(Parser *p) {
             sc.vals[sc.nvals++] = label;
             if (!match(p, T_COMMA))
                 break;
+            if (check(p, T_LBRACE))
+                break;
         }
         if (sc.nvals == 0)
             parse_error(ck, "'case' needs at least one value");
@@ -1406,6 +1421,8 @@ static Expr *parse_switch_expr(Parser *p) {
                                        (size_t)(sc.nvals + 1) * sizeof(Expr *));
             sc.vals[sc.nvals++] = label;
             if (!match(p, T_COMMA))
+                break;
+            if (check(p, T_LBRACE))
                 break;
         }
         if (sc.nvals == 0)
@@ -1960,6 +1977,8 @@ static int parse_type_params(Parser *p, char ***out) {
         names[n++] = t->text;
         if (!match(p, T_COMMA))
             break;
+        if (check(p, T_RBRACKET))
+            break;
     }
     expect(p, T_RBRACKET, "']' to close the type parameters");
     *out = names;
@@ -1981,6 +2000,8 @@ static int parse_lt_params(Parser *p, char ***out) {
         lts = (char **)xrealloc(lts, (size_t)(n + 1) * sizeof(char *));
         lts[n++] = t->text;
         if (!match(p, T_COMMA))
+            break;
+        if (check(p, T_GT))
             break;
     }
     expect(p, T_GT, "'>'");
@@ -2014,24 +2035,22 @@ static FuncDecl *parse_fn_decl(Parser *p, int is_extern) {
     f->ntparams = ntparams;
 
     int pcap = 0;
-    if (!check(p, T_RPAREN)) {
-        for (;;) {
-            Token *pname = expect(p, T_IDENT, "a parameter name");
-            expect(p, T_COLON, "':' followed by a type");
-            const char *pty = parse_type_name(p);
-            if (f->nparams == pcap) {
-                pcap = pcap ? pcap * 2 : 4;
-                f->params =
-                    (char **)xrealloc(f->params, pcap * sizeof(char *));
-                f->param_types =
-                    (char **)xrealloc(f->param_types, pcap * sizeof(char *));
-            }
-            f->params[f->nparams] = pname->text;
-            f->param_types[f->nparams] = xstrdup(pty);
-            f->nparams++;
-            if (!match(p, T_COMMA))
-                break;
+    while (!check(p, T_RPAREN)) {
+        Token *pname = expect(p, T_IDENT, "a parameter name");
+        expect(p, T_COLON, "':' followed by a type");
+        const char *pty = parse_type_name(p);
+        if (f->nparams == pcap) {
+            pcap = pcap ? pcap * 2 : 4;
+            f->params =
+                (char **)xrealloc(f->params, pcap * sizeof(char *));
+            f->param_types =
+                (char **)xrealloc(f->param_types, pcap * sizeof(char *));
         }
+        f->params[f->nparams] = pname->text;
+        f->param_types[f->nparams] = xstrdup(pty);
+        f->nparams++;
+        if (!match(p, T_COMMA))
+            break;
     }
     expect(p, T_RPAREN, "')'");
 
