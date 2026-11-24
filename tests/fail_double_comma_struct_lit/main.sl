@@ -1,0 +1,6 @@
+struct Point {
+    x: int,
+    y: int,
+}
+let p = Point { x: 1,, y: 2 };
+println(to_str(p.x));

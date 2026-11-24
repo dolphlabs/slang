@@ -395,6 +395,9 @@ def extract_source_packages():
                 sig = sig.split("{", 1)[0]
             sig = re.sub(r"\s+", " ", sig.rstrip().rstrip("{").strip())
             sig = re.sub(r"^pub\s+", "", sig)
+            if kind == "fn":
+                sig = re.sub(r",\s*([)\]>])", r"\1", sig)
+                sig = re.sub(r"([(\[<])\s+", r"\1", sig)
             pkgs.setdefault(pkg, {"name": pkg, "kind": "source",
                                   "items": []})
             pkgs[pkg]["items"].append({

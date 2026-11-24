@@ -28,3 +28,11 @@ impl Req {
         return self.path + name;
     }
 }
+
+// Joins two arguments.
+pub fn join_args(
+    a: str,
+    b: str,
+) -> str {
+    return a + b;
+}

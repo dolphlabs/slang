@@ -157,6 +157,59 @@ static char *doc_above(char **lines, int i) {
     return b.data ? b.data : xstrdup("");
 }
 
+/* Drop trailing commas before closing delimiters (`)`, `]`, `>`, `}`),
+ * leaving characters inside double-quoted strings untouched. When
+ * `trim_open_ws` is set, also trim spaces after `(`, `[`, `<` left by
+ * joining multi-line signatures. */
+static char *strip_trailing_commas(const char *s, int trim_open_ws) {
+    StrBuf b;
+    sb_init(&b);
+    int in_str = 0;
+    size_t i = 0;
+    while (s[i]) {
+        if (in_str) {
+            sb_putc(&b, s[i]);
+            if (s[i] == '\\' && s[i + 1]) {
+                sb_putc(&b, s[i + 1]);
+                i += 2;
+                continue;
+            }
+            if (s[i] == '"')
+                in_str = 0;
+            i++;
+            continue;
+        }
+        if (s[i] == '"') {
+            in_str = 1;
+            sb_putc(&b, s[i++]);
+            continue;
+        }
+        if (s[i] == ',') {
+            size_t j = i + 1;
+            while (s[j] == ' ')
+                j++;
+            if (s[j] == ')' || s[j] == ']' || s[j] == '>') {
+                i = j;
+                continue;
+            }
+            if (s[j] == '}') {
+                if (j > i + 1)
+                    sb_putc(&b, ' ');
+                i = j;
+                continue;
+            }
+        }
+        if (trim_open_ws && (s[i] == '(' || s[i] == '[' || s[i] == '<')) {
+            sb_putc(&b, s[i++]);
+            while (s[i] == ' ')
+                i++;
+            continue;
+        }
+        sb_putc(&b, s[i++]);
+    }
+    return b.data ? b.data : xstrdup("");
+}
+
 /* A fn signature may span lines: everything from the declaration up to the
  * `{` that opens its body, on one line. */
 static char *fn_signature(char **lines, int n, int i) {
@@ -172,9 +225,8 @@ static char *fn_signature(char **lines, int n, int i) {
         sb_putc(&b, ' ');
     }
     char *s = squeeze(b.data ? b.data : "");
-    if (!strncmp(s, "pub ", 4))
-        return xstrdup(s + 4);
-    return s;
+    const char *raw = !strncmp(s, "pub ", 4) ? s + 4 : s;
+    return strip_trailing_commas(raw, 1);
 }
 
 /* A struct or enum: its declaration through the `}` that closes it. */
@@ -398,14 +450,8 @@ static char *one_line(const char *block) {
         sb_append(&b, s);
     }
     char *r = b.data ? b.data : xstrdup("");
-    /* a trailing comma before the closing brace reads as noise */
-    size_t len = strlen(r);
-    if (len >= 3 && !strcmp(r + len - 3, ", }")) {
-        r[len - 3] = ' ';
-        r[len - 2] = '}';
-        r[len - 1] = '\0';
-    }
-    return r;
+    /* trailing commas before closing delimiters read as noise */
+    return strip_trailing_commas(r, 0);
 }
 
 static void print_doc_lines(const char *doc, const char *indent) {
