@@ -928,7 +928,7 @@ done
 # and task/channel/network tests. The count must be zero.
 echo "--- minor collections verified (SLANG_GC_VERIFY_MINOR, 16KB nursery) ---"
 vm_bad=0
-for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc_map_put encoding_f64 crypto if_let \
+for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc_map_put map_value_field_store encoding_f64 crypto if_let \
             literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions leaf_functions_wide leaf_fn_native_args net_udp loop_leaf_plus safepoint_task_once \
             gc_nested_literal gc_nursery_barrier gc_nursery_promotion net_dns_records \
             spawn_isolation select maps pg_rows_as json json_parity json_utf8 unicode json_decimal crypto_more nats_reconnect json_decode_budget \

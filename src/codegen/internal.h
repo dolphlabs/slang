@@ -941,6 +941,8 @@ char *gen_maplit(CG *cg, Expr *e, const char *expect_k,
                         const char *expect_v);
 char *gen_structlit(CG *cg, Expr *e);
 char *gen_index(CG *cg, Expr *e);
+char *map_miss_call(CG *cg, const char *k, const char *kname,
+                    const char *at);
 void index_borrow_refused(CG *cg, Expr *e, int mut, int line);
 char *gen_slice(CG *cg, Expr *e);
 char *gen_list(CG *cg, Expr *e, const char *expect_elem);

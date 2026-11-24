@@ -1690,6 +1690,19 @@ char *gen_structlit(CG *cg, Expr *e) {
     return sb.data;
 }
 
+/* The failure for a missing map key, which names the key when it is
+ * text or an integer. */
+char *map_miss_call(CG *cg, const char *k, const char *kname,
+                    const char *at) {
+    (void)cg;
+    if (!strcmp(k, "str"))
+        return xasprintf("sl_rt_map_miss_str(%s, %s)", kname, at);
+    if (is_int(k))
+        return xasprintf("sl_rt_map_miss_int((long long)%s, %d, %s)", kname,
+                         !is_signed_int(k), at);
+    return xasprintf("sl_rt_map_miss(%s)", at);
+}
+
 char *gen_index(CG *cg, Expr *e) {
     const char *bt = infer_type(cg, e->as.index.base);
     /* base and index would otherwise be embedded directly as sibling
@@ -1726,15 +1739,7 @@ char *gen_index(CG *cg, Expr *e) {
         cg->ambient_count = ambient_mark;
         int id = cg->tmp_id++;
         char *at = panic_at(cg, e->line);
-        /* the miss names the key when it is text or an integer */
-        char *miss;
-        if (!strcmp(k, "str"))
-            miss = xasprintf("sl_rt_map_miss_str(_sl_k%d, %s)", id, at);
-        else if (is_int(k))
-            miss = xasprintf("sl_rt_map_miss_int((long long)_sl_k%d, %d, %s)",
-                             id, !is_signed_int(k), at);
-        else
-            miss = xasprintf("sl_rt_map_miss(%s)", at);
+        char *miss = map_miss_call(cg, k, xasprintf("_sl_k%d", id), at);
         return xasprintf(
             "({ %s%s _sl_k%d = %s; void *_sl_p%d = sl_map_get(%s, "
             "&_sl_k%d); if (!_sl_p%d) %s; *(%s *)(void *)_sl_p%d; })",
