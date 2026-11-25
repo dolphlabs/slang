@@ -1,3 +1,158 @@
+
+import "strings";
+
+struct TagCounter {
+    s: str,
+    n: int,
+}
+
+impl TagCounter {
+    fn inc_tag(self: &mut TagCounter, tag: str) {
+        self.n += 1;
+        self.s = self.s + tag;
+    }
+}
+
+gc struct GcCounterHolder {
+    c: TagCounter,
+}
+
+fn make_tag() -> str {
+    return "-" + strings.repeat("t", 20);
+}
+
+fn test_ex_method_lvalue_and_gc() {
+    let h = Holder { c: Counter { n: 0 } };
+    h.c.inc();
+    println("after_direct_inc=" + to_str(h.c.n));
+
+    let p = &mut h;
+    (*p).c.inc();
+    println("after_ptr_inc=" + to_str(h.c.n));
+
+    let c = Counter { n: 5 };
+    (c).inc();
+    println("after_paren_inc=" + to_str(c.n));
+
+    let rh = &h;
+    defer rh.c.show();
+
+    let g = GcCounterHolder {
+        c: TagCounter { s: "base-" + strings.repeat("b", 20), n: 0 },
+    };
+    g.c.inc_tag(make_tag());
+    defer g.c.inc_tag(make_tag());
+    for i in 0..300 {
+        let _ = GcCounterHolder { c: TagCounter { s: strings.repeat("x", 16), n: i } };
+    }
+    println("gc_holder=" + to_str(g.c.n) + ":" + to_str(len(g.c.s)));
+}
+
+gc struct MutOut {
+    v: int,
+}
+
+fn mark_mut(s: &mut int, out: MutOut) {
+    *s += 10;
+    out.v = *s;
+}
+
+fn test_switch_outer_defer_break_return(x: int, do_break: bool, out: MutOut) -> int {
+    let s = 1;
+    let res = 0;
+    switch x {
+        case 1 {
+            defer mark_mut(&mut s, out);
+            if do_break {
+                break;
+            }
+            res = 100;
+            return res;
+        }
+        default {
+            res = 2;
+        }
+    }
+    res = 50;
+    return res;
+}
+
+fn take_own_box_m(b: own Box) -> int {
+    return b.n;
+}
+
+fn test_switch_break_no_false_positive(x: int, do_break: bool) -> int {
+    let b: own Box = Box { n: 55 };
+    switch x {
+        case 1 {
+            if do_break {
+                break;
+            }
+            return take_own_box_m(b) + 10;
+        }
+        default {
+            return 20;
+        }
+    }
+    return take_own_box_m(b) + 30;
+}
+
+fn test_nested_switch_defer_lifo(a: int, b: int, brk1: bool, brk2: bool) -> int {
+    let res = 0;
+    switch a {
+        case 1 {
+            defer println("outer_d1");
+            switch b {
+                case 2 {
+                    defer println("inner_d2");
+                    if brk2 {
+                        break;
+                    }
+                    return 77;
+                }
+                default {
+                    res = 5;
+                }
+            }
+            if brk1 {
+                res = 11;
+                break;
+            }
+            return 88;
+        }
+        default {
+            res = 99;
+        }
+    }
+    return res;
+}
+
+fn opt_num(ok_flag: bool) -> opt[int] {
+    if ok_flag {
+        return some(3);
+    }
+    return none;
+}
+
+fn test_switch_guard_break_lifo(x: int, ok_flag: bool) -> int {
+    let res = 0;
+    switch x {
+        case 1 {
+            defer println("guard_outer");
+            guard let v = opt_num(ok_flag) else {
+                defer println("guard_else");
+                break;
+            }
+            res = v * 10;
+            return res;
+        }
+        default {
+            res = 1;
+        }
+    }
+    return res + 2;
+}
+
 struct Counter {
     n: int,
 }
@@ -157,3 +312,15 @@ test_ref_own_no_warn();
 println("sw=" + to_str(test_switch_if_defer_break(1, true)));
 test_trip_defer();
 test_link_send_static_defer();
+
+test_ex_method_lvalue_and_gc();
+let mo_t = MutOut { v: 0 };
+let r_t = test_switch_outer_defer_break_return(1, true, mo_t);
+println("sw_outer_brkT=" + to_str(r_t) + ":" + to_str(mo_t.v));
+let mo_f = MutOut { v: 0 };
+let r_f = test_switch_outer_defer_break_return(1, false, mo_f);
+println("sw_outer_brkF=" + to_str(r_f) + ":" + to_str(mo_f.v));
+println("sw_nofpT=" + to_str(test_switch_break_no_false_positive(1, true)));
+println("sw_nofpF=" + to_str(test_switch_break_no_false_positive(1, false)));
+println("sw_nested=" + to_str(test_nested_switch_defer_lifo(1, 2, true, true)));
+println("sw_guard=" + to_str(test_switch_guard_break_lifo(1, false)));

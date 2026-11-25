@@ -926,6 +926,51 @@ int expr_addressable(Expr *e) {
     return e->kind == EX_UNARY && !strcmp(e->as.unary.op, "*");
 }
 
+const char *expr_shared_ref_base(CG *cg, Expr *e) {
+    while (e) {
+        if (e->kind == EX_IDENT) {
+            char *left = NULL, *right = NULL;
+            if (split_dotted(e->as.ident.name, &left, &right) &&
+                !import_try(cg, left)) {
+                const char *bt = infer_ident_name(cg, left, e->line);
+                char *bi = NULL;
+                TypeWrap bw = type_wrap(bt, &bi);
+                free(bi);
+                if (bw == TW_REF)
+                    return bt;
+            }
+            return NULL;
+        }
+        if (e->kind == EX_FIELD) {
+            const char *bt = infer_type(cg, e->as.field.base);
+            char *bi = NULL;
+            TypeWrap bw = type_wrap(bt, &bi);
+            free(bi);
+            if (bw == TW_REF)
+                return bt;
+            if (bw == TW_GC || bw == TW_REFMUT ||
+                (bw == TW_NONE && struct_type_is_gc(cg, bt)))
+                return NULL;
+            e = e->as.field.base;
+            continue;
+        }
+        if (e->kind == EX_UNARY && !strcmp(e->as.unary.op, "*")) {
+            const char *pt = infer_type(cg, e->as.unary.operand);
+            char *pi = NULL;
+            TypeWrap pw = type_wrap(pt, &pi);
+            free(pi);
+            if (pw == TW_REF)
+                return pt;
+            if (pw == TW_GC || pw == TW_REFMUT)
+                return NULL;
+            e = e->as.unary.operand;
+            continue;
+        }
+        return NULL;
+    }
+    return NULL;
+}
+
 static const char *wrap_prefix(TypeWrap w, const char *inner) {
     switch (w) {
     case TW_REF:    return xasprintf("&%s", inner);

@@ -1506,11 +1506,11 @@ char *gen_method(CG *cg, Expr *e) {
     StrBuf prelude;
     sb_init(&prelude);
 
-    char *rtmp = sequence_one(cg, seq_id, 0, ctype_of(cg, recv_t), recv_t,
-                              gen_expr(cg, recv), recv, &prelude);
     char *selfexpr = NULL;
     char *callee = NULL;
     if (fld >= 0) {
+        char *rtmp = sequence_one(cg, seq_id, 0, ctype_of(cg, recv_t), recv_t,
+                                  gen_expr(cg, recv), recv, &prelude);
         callee = xasprintf("((%s)%s%s)", rtmp, struct_access(cg, recv_t),
                            sanitize_ident(name));
     } else {
@@ -1523,11 +1523,55 @@ char *gen_method(CG *cg, Expr *e) {
                          "cannot call '&mut %s' method '%s' on a shared "
                          "reference of type %s",
                          si, name, recv_t);
-            if (rw == TW_NONE)
-                selfexpr = xasprintf("(&(%s))", rtmp);
-            else
-                selfexpr = maybe_cast(cg, sig->param_slang[0], recv_t, rtmp);
+            if (sw == TW_REFMUT) {
+                const char *sref = expr_shared_ref_base(cg, recv);
+                if (sref)
+                    cg_error(e->line,
+                             "cannot call '&mut %s' method '%s' through a "
+                             "shared reference of type %s: declare the "
+                             "reference as '&mut' or call a '&' method "
+                             "instead",
+                             si, name, sref);
+            }
+            if (rw == TW_NONE && expr_lvalue_for_borrow(recv)) {
+                Expr un;
+                memset(&un, 0, sizeof(un));
+                un.kind = EX_UNARY;
+                un.line = e->line;
+                un.as.unary.op =
+                    (sw == TW_REFMUT) ? (char *)"&mut" : (char *)"&";
+                un.as.unary.operand = recv;
+                un.inf_ty = sig->param_slang[0];
+                selfexpr = sequence_one(cg, seq_id, 0,
+                                        ctype_of(cg, sig->param_slang[0]),
+                                        sig->param_slang[0],
+                                        gen_expr(cg, &un), NULL, &prelude);
+                if (type_has_gc_roots(cg, recv_t)) {
+                    char *deref = xasprintf("(*(%s))", selfexpr);
+                    expr_tmp_register(cg, recv, deref, recv_t);
+                    ambient_push_value_roots(cg, deref, recv_t);
+                }
+            } else {
+                if (sw == TW_REFMUT && rw == TW_NONE) {
+                    Expr *cur = recv;
+                    while (cur && cur->kind == EX_FIELD)
+                        cur = cur->as.field.base;
+                    if (cur && cur->kind == EX_INDEX)
+                        index_borrow_refused(cg, cur, 1, e->line);
+                }
+                char *rtmp = sequence_one(cg, seq_id, 0, ctype_of(cg, recv_t),
+                                          recv_t, gen_expr(cg, recv), recv,
+                                          &prelude);
+                if (rw == TW_NONE)
+                    selfexpr = xasprintf("(&(%s))", rtmp);
+                else
+                    selfexpr =
+                        maybe_cast(cg, sig->param_slang[0], recv_t, rtmp);
+            }
         } else {
+            char *rtmp = sequence_one(cg, seq_id, 0, ctype_of(cg, recv_t),
+                                      recv_t, gen_expr(cg, recv), recv,
+                                      &prelude);
             selfexpr = maybe_cast(cg, sig->param_slang[0], recv_t, rtmp);
         }
         free(si);

@@ -241,6 +241,52 @@ fn run_derived_box_check(out: GcNode) {
     }
 }
 
+struct Mid {
+    d: own DeepInner,
+}
+
+struct ValWithOwn2 {
+    pad: int,
+    inner: own Mid,
+}
+
+fn take_val2(v: ValWithOwn2) -> int {
+    return v.inner.d.g.id;
+}
+
+fn read_val2(r: &ValWithOwn2, out: GcNode) {
+    out.id = (*r).inner.d.g.id;
+    out.label = (*r).inner.d.g.label;
+}
+
+fn gc_trig_b2() {
+    for i in 0..300 {
+        let g = GcNode { id: i, label: strings.repeat("z", 16) };
+        let _ = g.id;
+    }
+}
+
+fn test_probe_b2(cond: bool, out: GcNode) -> int {
+    let x = ValWithOwn2 {
+        pad: 1,
+        inner: Mid { d: DeepInner { g: GcNode { id: 10, label: "x-" + strings.repeat("a", 32) } } },
+    };
+    let y = ValWithOwn2 {
+        pad: 2,
+        inner: Mid { d: DeepInner { g: GcNode { id: 11, label: "y-" + strings.repeat("b", 32) } } },
+    };
+    let r = &x;
+    if cond {
+        r = &y;
+    } else {
+        r = &y;
+    }
+    let a = take_val2(x);
+    defer read_val2(r, out);
+    defer gc_trig_b2();
+    return a + 1;
+}
+
 fn main_test() {
     let out_own = GcNode { id: 0, label: "" };
     test_ref_own_gc(out_own);
@@ -266,6 +312,11 @@ fn main_test() {
     }
     println("condMoveF=" + to_str(test_cond_defer_else_move(false)));
     println("condMoveT=" + to_str(test_cond_defer_else_move(true)));
+    let b2_out_t = GcNode { id: 0, label: "" };
+    let b2_res_t = test_probe_b2(true, b2_out_t);
+    let b2_out_f = GcNode { id: 0, label: "" };
+    let b2_res_f = test_probe_b2(false, b2_out_f);
+    println("probeB2=" + to_str(b2_res_t) + ":" + to_str(b2_out_t.id) + ":" + to_str(b2_res_f) + ":" + to_str(b2_out_f.id));
     println("verified=ok");
 }
 

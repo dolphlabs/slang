@@ -17,6 +17,7 @@ typedef struct {
     int cont;
     int brk;
     int is_loop; /* 1 = loop (break+continue target), 0 = switch (break only) */
+    int base_n;  /* defer stack depth at switch arm entry */
     MirDefer *break_defers;
     int nbreak_defers;
 } LoopFrame;
@@ -209,7 +210,7 @@ static void push_loop(Lower *L, int cont, int brk) {
 
 /* A `switch` arm block: `break` targets the switch join, `continue`
  * still targets the enclosing loop. */
-static void push_switch(Lower *L, int join) {
+static void push_switch(Lower *L, int join, int base_n) {
     if (L->nloops == L->loopcap) {
         L->loopcap = L->loopcap ? L->loopcap * 2 : 4;
         L->loops = (LoopFrame *)xrealloc(L->loops,
@@ -219,6 +220,7 @@ static void push_switch(Lower *L, int join) {
     L->loops[L->nloops].cont = -1;
     L->loops[L->nloops].brk = join;
     L->loops[L->nloops].is_loop = 0;
+    L->loops[L->nloops].base_n = base_n;
     L->nloops++;
 }
 
@@ -351,22 +353,6 @@ static void mir_collect_branch_defers(Lower *L, int join, int base_n,
     if (reaches_join(L, join)) {
         for (int k = base_n; k < L->ndefers; k++)
             kept_push_defer_unique(kept, nkept, L->defers[k]);
-        return;
-    }
-    if (sealed(L)) {
-        MirTerm *t = &L->fn->blocks[L->cur].term;
-        if (t->kind == MT_GOTO) {
-            for (int li = L->nloops - 1; li >= 0; li--) {
-                if (!L->loops[li].is_loop && L->loops[li].brk == t->target) {
-                    LoopFrame *sw = &L->loops[li];
-                    for (int k = base_n; k < L->ndefers; k++)
-                        kept_push_defer_unique(&sw->break_defers,
-                                               &sw->nbreak_defers,
-                                               L->defers[k]);
-                    break;
-                }
-            }
-        }
     }
 }
 
@@ -631,7 +617,13 @@ static void lower_stmt(Lower *L, Stmt *s) {
     case ST_BREAK: {
         if (L->nloops <= 0)
             cg_error(s->line, "'break' outside a loop or switch");
-        emit_goto(L, L->loops[L->nloops - 1].brk, s->line);
+        LoopFrame *lf = &L->loops[L->nloops - 1];
+        if (!lf->is_loop) {
+            for (int k = lf->base_n; k < L->ndefers; k++)
+                kept_push_defer_unique(&lf->break_defers, &lf->nbreak_defers,
+                                       L->defers[k]);
+        }
+        emit_goto(L, lf->brk, s->line);
         return;
     }
     case ST_CONTINUE: {
@@ -976,7 +968,7 @@ static void lower_stmt(Lower *L, Stmt *s) {
             }
             L->cur = body;
             L->ndefers = base_n;
-            push_switch(L, join);
+            push_switch(L, join, base_n);
             var_scope_push(L->cg);
             L->block_depth++;
             lower_block(L, s->as.switch_stmt.cases[i].body);
@@ -997,7 +989,7 @@ static void lower_stmt(Lower *L, Stmt *s) {
             emit_goto(L, d, s->line);
             L->cur = d;
             L->ndefers = base_n;
-            push_switch(L, join);
+            push_switch(L, join, base_n);
             var_scope_push(L->cg);
             L->block_depth++;
             lower_block(L, s->as.switch_stmt.def);
@@ -1049,7 +1041,7 @@ static MirRvalue *lower_switch_value(Lower *L, Expr *e) {
             L->cur = next;
         }
         L->cur = body;
-        push_switch(L, join);
+        push_switch(L, join, L->ndefers);
         emit_assign(L, pl_local(tmp),
                     lower_rvalue(L, e->as.switch_expr.cases[i].value),
                     e->line);
@@ -1060,7 +1052,7 @@ static MirRvalue *lower_switch_value(Lower *L, Expr *e) {
         int d = new_bb(L);
         emit_goto(L, d, e->line);
         L->cur = d;
-        push_switch(L, join);
+        push_switch(L, join, L->ndefers);
         emit_assign(L, pl_local(tmp),
                     lower_rvalue(L, e->as.switch_expr.def), e->line);
         pop_loop(L);

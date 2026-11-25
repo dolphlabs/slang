@@ -159,6 +159,17 @@ DeferInfo *defer_build_info(CG *cg, Stmt *s, int id) {
                              "cannot call '&mut %s' method '%s' on a shared "
                              "reference of type %s",
                              si, d->method_name, raw_recv_t);
+                if (sw == TW_REFMUT) {
+                    const char *sref =
+                        expr_shared_ref_base(cg, call->as.method.recv);
+                    if (sref)
+                        cg_error(call->line,
+                                 "cannot call '&mut %s' method '%s' through "
+                                 "a shared reference of type %s: declare the "
+                                 "reference as '&mut' or call a '&' method "
+                                 "instead",
+                                 si, d->method_name, sref);
+                }
                 if (expr_lvalue_for_borrow(call->as.method.recv)) {
                     d->recv_ty = self_t;
                     if (rw == TW_NONE) {
@@ -173,7 +184,8 @@ DeferInfo *defer_build_info(CG *cg, Stmt *s, int id) {
                     }
                 } else {
                     d->recv_ty = raw_recv_t;
-                    if (type_needs_drop(cg, raw_recv_t))
+                    if (!expr_addressable(call->as.method.recv) &&
+                        type_needs_drop(cg, raw_recv_t))
                         d->recv_drop_after = 1;
                 }
             } else if (sw == TW_NONE && rw == TW_OWN &&
@@ -574,10 +586,11 @@ void push_defer_gc_roots(CG *cg, DeferInfo *d) {
             continue;
         char *cn = sanitize_ident(d->borrow_vars[i]);
         char *bw_inner = NULL;
-        if (bv->drop && type_wrap(d->borrow_tys[i], &bw_inner) == TW_OWN) {
-            char *g = xasprintf("%s && _sl_d_%s", act, cn);
-            ambient_push_guarded_value_roots(cg, g, cn, d->borrow_tys[i]);
-        } else if (bv->stack) {
+        TypeWrap bw = type_wrap(d->borrow_tys[i], &bw_inner);
+        free(bw_inner);
+        const char *grd =
+            bv->drop ? xasprintf("%s && _sl_d_%s", act, cn) : act;
+        if (bv->stack && bw != TW_OWN) {
             char *iw = NULL;
             TypeWrap w = type_wrap(bv->slang, &iw);
             const char *boxed = NULL;
@@ -592,21 +605,20 @@ void push_defer_gc_roots(CG *cg, DeferInfo *d) {
                         if (!type_has_gc_roots(cg, sd->ftypes[j]))
                             continue;
                         ambient_push_guarded_value_roots(
-                            cg, act,
+                            cg, grd,
                             xasprintf("(*%s).%s", cn,
                                       sanitize_ident(sd->fields[j])),
                             sd->ftypes[j]);
                     }
                 } else {
                     ambient_push_guarded_value_roots(
-                        cg, act, xasprintf("(*%s)", cn), boxed);
+                        cg, grd, xasprintf("(*%s)", cn), boxed);
                 }
             }
             free(iw);
         } else {
-            ambient_push_guarded_value_roots(cg, act, cn, d->borrow_tys[i]);
+            ambient_push_guarded_value_roots(cg, grd, cn, d->borrow_tys[i]);
         }
-        free(bw_inner);
     }
 }
 
@@ -2858,8 +2870,9 @@ void gen_stmt(CG *cg, Stmt *s) {
 
         if (d->has_recv) {
             char *r_c = NULL;
+            const char *raw_rt = NULL;
             if (d->is_method_expr) {
-                const char *raw_rt = infer_type(cg, call->as.method.recv);
+                raw_rt = infer_type(cg, call->as.method.recv);
                 if (d->recv_by_addr) {
                     char *ri = NULL;
                     TypeWrap rw = type_wrap(d->recv_ty, &ri);
@@ -2871,13 +2884,14 @@ void gen_stmt(CG *cg, Stmt *s) {
                     un.as.unary.op =
                         (rw == TW_REFMUT) ? (char *)"&mut" : (char *)"&";
                     un.as.unary.operand = call->as.method.recv;
+                    un.inf_ty = d->recv_ty;
                     r_c = gen_expr(cg, &un);
                 } else {
                     r_c = maybe_cast(cg, d->recv_ty, raw_rt,
                                      gen_expr(cg, call->as.method.recv));
                 }
             } else {
-                const char *raw_rt = infer_ident_name(cg, d->callee_name, s->line);
+                raw_rt = infer_ident_name(cg, d->callee_name, s->line);
                 r_c = gen_ident_name(cg, d->callee_name, s->line);
                 if (d->recv_by_addr)
                     r_c = xasprintf("(&(%s))", r_c);
@@ -2890,6 +2904,11 @@ void gen_stmt(CG *cg, Stmt *s) {
                 ambient_push_value_roots(cg, rn, d->recv_ty);
                 if (d->is_method_expr)
                     expr_tmp_register(cg, call->as.method.recv, rn, d->recv_ty);
+            } else if (d->is_method_expr && d->recv_by_addr && raw_rt &&
+                       type_has_gc_roots(cg, raw_rt)) {
+                char *deref = xasprintf("(*(%s))", rn);
+                ambient_push_value_roots(cg, deref, raw_rt);
+                expr_tmp_register(cg, call->as.method.recv, deref, raw_rt);
             }
         }
 

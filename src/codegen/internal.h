@@ -799,6 +799,7 @@ TypeWrap type_wrap(const char *t, char **inner);
 char *type_lifetime(const char *t);
 int type_is_boxable(CG *cg, const char *t);
 int expr_addressable(Expr *e);
+const char *expr_shared_ref_base(CG *cg, Expr *e);
 int type_is_gc_ptr(CG *cg, const char *t);
 int type_has_gc_roots(CG *cg, const char *t);
 int type_is_pointer_free(CG *cg, const char *t);
