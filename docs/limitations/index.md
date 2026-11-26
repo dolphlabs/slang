@@ -51,9 +51,9 @@
   supported.
 - JSON: no dynamic/unknown-shape decoding (every decode target is a
   concrete slang type known at compile time — see the `json` section
-  above), and JSON object keys map to struct field names verbatim
-  (no camelCase/snake_case conversion). `bytes` fields are base64
-  strings (RFC 4648).
+  above); struct fields map to their field names by default unless
+  tagged with `` `json:"wireName,omitempty"` `` / `` `json:"-"` ``.
+  `bytes` fields are base64 strings (RFC 4648).
 - `proc`: only `SIGTERM`/`SIGINT` are handled (there's no general
   signal-registration API), and only in a program that calls
   `proc.shutdown_requested()`; a second signal always ends it. A
