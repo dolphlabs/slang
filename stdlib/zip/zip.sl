@@ -3,14 +3,12 @@
 //
 //     import "zip";
 //
-//     let r = zip.open(data);
-//     guard let arc = r else let e = err_of(r) { panic(e); }
+//     guard let arc = zip.open(data) else |e| { panic(e); }
 //     for e in arc.entries {
 //         let pr = zip.safe_path(e.name);       // refuses ../, /abs, C:\ ...
 //         guard let rel = pr else { continue; }
 //         if e.is_dir { continue; }
-//         let br = zip.read(arc, e);           // inflated, size and CRC-32 checked
-//         guard let body = br else let er = err_of(br) { panic(er); }
+//         guard let body = zip.read(arc, e) else |er| { panic(er); }   // inflated, size and CRC-32 checked
 //         // write body under rel ...
 //     }
 //

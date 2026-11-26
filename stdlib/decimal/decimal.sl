@@ -4,8 +4,7 @@
 //
 //     import "decimal";
 //
-//     let r = decimal.parse("19.99");            // result[Decimal, str]
-//     guard let price = r else let e = err_of(r) { panic(e); }
+//     guard let price = decimal.parse("19.99") else |e| { panic(e); }   // result[Decimal, str]
 //     let qty = decimal.from_int(3);
 //     let total = decimal.mul(price, qty) ?? decimal.zero();      // 59.97
 //     let vat = decimal.mul_round(total, decimal.parse("0.075") ?? decimal.zero(),

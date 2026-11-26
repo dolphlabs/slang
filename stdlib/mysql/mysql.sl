@@ -3,10 +3,9 @@
 //
 //     import "mysql";
 //
-//     let cr = mysql.connect("mysql://app:secret@db.internal:3306/shop", deadline);
-//     guard let c = cr else let e = err_of(cr) { panic(e); }
+//     guard let c = mysql.connect("mysql://app:secret@db.internal:3306/shop", deadline) else |e| { panic(e); }
 //     let r = mysql.query(c, "SELECT id, name FROM users WHERE id = ?", [mysql.arg_int(42)], deadline);
-//     guard let rows = r else let e = err_of(r) { panic(e); }
+//     guard let rows = r else |e| { panic(e); }
 //     let users: result[[User], str] = mysql.rows_as(rows);
 //     mysql.exec(c, "CREATE TABLE t (id INT); INSERT INTO t VALUES (1)", deadline);
 //

@@ -1962,11 +1962,9 @@ pub fn exec(c: Conn, sql: str, deadline: until) -> result[int, str] {
 
 // ---- streamed results --------------------------------------------------
 //
-//     let sr = pg.stream(c, "SELECT id, body FROM events", [], dl);
-//     guard let rows = sr else let e = err_of(sr) { ... }
+//     guard let rows = pg.stream(c, "SELECT id, body FROM events", [], dl) else |e| { ... }
 //     while true {
-//         let nr = pg.next_row(c, rows, dl);
-//         guard let more = nr else let e = err_of(nr) { ... }
+//         guard let more = pg.next_row(c, rows, dl) else |e| { ... }
 //         if !more { break; }
 //         handle(pg.get_int(rows, 0, 0), pg.get_text(rows, 0, 1));
 //     }

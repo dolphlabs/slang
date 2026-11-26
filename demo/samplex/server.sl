@@ -112,7 +112,7 @@ fn list_tasks(st: State, req: http.Request, id: int) -> http.Response {
 
 fn create_task(st: State, req: http.Request, id: int) -> http.Response {
     let r: result[NewTask, str] = json.decode(req.body);
-    guard let nt = r else let e = err_of(r) {
+    guard let nt = r else |e| {
         return http.bad_request("invalid JSON: " + e);
     }
     if len(nt.title) == 0 {
@@ -132,7 +132,7 @@ fn create_task(st: State, req: http.Request, id: int) -> http.Response {
 
 fn update_task(st: State, req: http.Request, id: int) -> http.Response {
     let r: result[NewTask, str] = json.decode(req.body);
-    guard let nt = r else let e = err_of(r) {
+    guard let nt = r else |e| {
         return http.bad_request("invalid JSON: " + e);
     }
     if len(nt.title) == 0 {
@@ -313,8 +313,7 @@ let st = State {
 // and stops the server.
 fn env_int(name: str, fallback: str) -> int {
     let raw = proc.getenv(name) ?? fallback;
-    let r = to_int(raw);
-    guard let n = r else let e = err_of(r) {
+    guard let n = to_int(raw) else |e| {
         log.error(name + "=" + raw + " is not a number: " + e);
         exit(2);
     }
@@ -324,8 +323,7 @@ fn env_int(name: str, fallback: str) -> int {
 let port = env_int("PORT", "8080");
 let workers = env_int("WORKERS", "64");
 
-let lr = link_listen(port);
-guard let ln = lr else let e = err_of(lr) {
+guard let ln = link_listen(port) else |e| {
     // Bind the fault and print it. Swallowing it leaves "cannot listen
     // on port 8080" with no cause, and the cause is almost always
     // "another copy is still running" -- worth saying out loud.
