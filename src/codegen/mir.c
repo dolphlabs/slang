@@ -895,7 +895,10 @@ static void lower_stmt(Lower *L, Stmt *s) {
         int join = new_bb(L);
         for (i = 0; i < s->as.select_stmt.ncases; i++) {
             SelectCase *sc = &s->as.select_stmt.cases[i];
-            lower_rvalue(L, sc->ch);
+            if (sc->guard)
+                lower_rvalue(L, sc->guard);
+            if (sc->ch)
+                lower_rvalue(L, sc->ch);
             if (sc->val)
                 lower_rvalue(L, sc->val);
         }

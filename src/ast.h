@@ -46,18 +46,20 @@ typedef struct {
     int cap;
 } Block;
 
-/* One arm of a `select`. A recv arm is
- *     case let v = chan_recv(ch) { ... }
- * and binds `v` to opt[T] for the arm's body, exactly as a plain
- * chan_recv would; a send arm is
- *     case chan_send(ch, v) { ... }
- * and binds nothing. The channel expression is evaluated ONCE, before
- * the select blocks -- see the codegen in stmt.c. */
+/* One arm of a `select`.
+ *   kind 0: `case let v = chan_recv(ch) [when cond] { ... }` (binds `v` to opt[T])
+ *   kind 1: `case chan_send(ch, v) [when cond] { ... }` (binds nothing)
+ *   kind 2: `case after(ns) [when cond] { ... }` (relative timeout in ns)
+ *   kind 3: `case until(deadline) [when cond] { ... }` (`until` deadline)
+ * Channel expressions (and send values / timeouts) are evaluated ONCE, before
+ * the select blocks -- disabled `when` arms skip ch/val evaluation. */
 typedef struct {
+    int kind;
     int is_send;
-    char *bind;  /* recv arm's binding name; NULL for a send arm */
-    Expr *ch;    /* the channel */
-    Expr *val;   /* send arm's value; NULL for a recv arm */
+    char *bind;  /* recv arm's binding name; NULL for send or timeout arm */
+    Expr *ch;    /* channel (kind 0/1); NULL for timeout arms */
+    Expr *val;   /* send value (kind 1) or duration/deadline (kind 2/3) */
+    Expr *guard; /* optional `when <bool>` guard, or NULL */
     Block *body;
     int line;
 } SelectCase;

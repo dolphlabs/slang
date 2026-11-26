@@ -654,6 +654,7 @@ static void resolve_stmt(CG *cg, const char *pkg, Stmt *s) {
             SelectCase *c = &s->as.select_stmt.cases[i];
             resolve_expr(cg, pkg, c->ch);
             resolve_expr(cg, pkg, c->val);
+            resolve_expr(cg, pkg, c->guard);
             resolve_block(cg, pkg, c->body);
         }
         resolve_block(cg, pkg, s->as.select_stmt.def);

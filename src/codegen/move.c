@@ -489,7 +489,10 @@ static void check_stmt(CG *cg, Stmt *s) {
         Arms arms = {0};
         for (i = 0; i < s->as.select_stmt.ncases; i++) {
             SelectCase *sc = &s->as.select_stmt.cases[i];
-            check_rvalue(cg, sc->ch);
+            if (sc->guard)
+                check_rvalue(cg, sc->guard);
+            if (sc->ch)
+                check_rvalue(cg, sc->ch);
             if (sc->val)
                 check_rvalue(cg, sc->val);
         }

@@ -1431,11 +1431,14 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
             ls_union_named_into(joined, arm);
         }
         s->backedge_live_set = ls_clone(live_out);
-        for (i = 0; i < s->as.select_stmt.ncases; i++) {
+        for (i = s->as.select_stmt.ncases - 1; i >= 0; i--) {
             SelectCase *sc = &s->as.select_stmt.cases[i];
             if (sc->val)
                 joined = live_expr(cg, sc->val, joined);
-            joined = live_expr(cg, sc->ch, joined);
+            if (sc->ch)
+                joined = live_expr(cg, sc->ch, joined);
+            if (sc->guard)
+                joined = live_expr(cg, sc->guard, joined);
         }
         return joined;
     }
@@ -2003,7 +2006,10 @@ static void print_stmts(FILE *out, Stmt **stmts, int count) {
             break;
         case ST_SELECT:
             for (int i = 0; i < s->as.select_stmt.ncases; i++) {
-                print_expr(out, s->as.select_stmt.cases[i].ch);
+                if (s->as.select_stmt.cases[i].guard)
+                    print_expr(out, s->as.select_stmt.cases[i].guard);
+                if (s->as.select_stmt.cases[i].ch)
+                    print_expr(out, s->as.select_stmt.cases[i].ch);
                 if (s->as.select_stmt.cases[i].val)
                     print_expr(out, s->as.select_stmt.cases[i].val);
                 print_block(out, s->as.select_stmt.cases[i].body);
