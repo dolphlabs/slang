@@ -55,15 +55,16 @@ consume the shim exactly like any other C library above.
   of any call that retains a pointer beyond that call.
 - Callback function pointers — C calling back into slang — aren't
   supported yet.
-- **Deep C libraries and the task stack.** A task's stack starts at
-  8KB and grows only at slang checkpoints, which C code has none of.
-  A C function that recurses or holds large locals can therefore run
-  off the end of the stack buffer and corrupt the heap — a silent
-  `abort()` from `malloc`, not a clean crash. The compiler-provided
-  packages that wrap deep libraries grow the stack up front
-  (`sl_rt_need_stack`, used by `net.tls_*` for OpenSSL and by `sql`
-  for SQLite); an `extern fn` into a comparably deep library has no
-  such protection, so keep C-side recursion and stack buffers small.
+- **Safe OS-stack switching for `extern fn`.** A task's stack starts at
+  8KB and grows only at slang checkpoints, which C code has none of. To
+  keep deep C recursion or large C stack frames from overflowing into
+  the guard page or corrupting the heap, every `extern fn` call
+  automatically switches onto the current OS worker thread's native
+  stack (`SL_RT_OS_STACK` on workers, or `main`'s stack) inside a
+  preemption-disabled bracket and switches back on return. The task's
+  own stack stays unmoved, so `ptr[T]` arguments pointing into a task
+  frame remain valid across the call. Keep per-call C stack usage within
+  the worker thread stack budget (256 KB on spawned workers).
 
 See `tests/ffi/` for a complete example: a small hand-written C
 fixture library (`lib.c`) built as a static archive, linked and called
