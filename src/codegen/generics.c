@@ -96,7 +96,10 @@ void tmpl_register(CG *cg, const char *pkg, Stmt *decl) {
     t->ntparams = decl->as.struct_decl.ntparams;
     t->fields = decl->as.struct_decl.fields;
     t->ftypes = decl->as.struct_decl.ftypes;
+    t->ftags = decl->as.struct_decl.ftags;
     t->nfields = decl->as.struct_decl.nfields;
+    parse_struct_field_tags(name, decl->line, t->fields, t->ftags, t->nfields,
+                            &t->json_names, &t->json_omit, &t->json_skip);
     t->line = decl->line;
     cg->tmpls.items[cg->tmpls.count++] = t;
 }
@@ -274,6 +277,10 @@ static const char *instantiate(CG *cg, StructTmpl *tm, char **args, int n,
     sd->is_pub = tm->is_pub;
     sd->is_gc = tm->is_gc;
     sd->fields = tm->fields;
+    sd->ftags = tm->ftags;
+    sd->json_names = tm->json_names;
+    sd->json_omit = tm->json_omit;
+    sd->json_skip = tm->json_skip;
     sd->nfields = tm->nfields;
     sd->line = tm->line;
     sd->inst = 1;

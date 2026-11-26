@@ -330,6 +330,7 @@ struct Stmt {
             int is_gc;
             char **fields;
             char **ftypes;
+            char **ftags;
             int nfields;
             char **lts;
             int nlts;

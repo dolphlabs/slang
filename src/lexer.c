@@ -537,6 +537,26 @@ Token lexer_next(Lexer *lx) {
         return t;
     }
 
+    /* Go-style raw struct tag: `json:"wireName,omitempty"` */
+    if (c == '`') {
+        lx->pos++;
+        size_t start = lx->pos;
+        while (src[lx->pos] && src[lx->pos] != '`') {
+            if (src[lx->pos] == '\n')
+                lex_error(line, "unterminated struct tag (missing closing '`')");
+            lx->pos++;
+        }
+        if (src[lx->pos] != '`')
+            lex_error(line, "unterminated struct tag (missing closing '`')");
+        size_t len = lx->pos - start;
+        Token t = make_token(T_TAG, line);
+        t.text = (char *)xmalloc(len + 1);
+        memcpy(t.text, src + start, len);
+        t.text[len] = '\0';
+        lx->pos++;
+        return t;
+    }
+
     /* string literals */
     if (c == '"') {
         lx->pos++;
@@ -732,6 +752,7 @@ const char *token_type_name(TokenType t) {
     case T_DOTDOTEQ: return "'..='";
     case T_ARROW:    return "'->'";
     case T_LIFETIME: return "lifetime";
+    case T_TAG:      return "struct tag";
     }
     return "?";
 }
