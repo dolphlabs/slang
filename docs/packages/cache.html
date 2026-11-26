@@ -102,7 +102,7 @@ try { var t = localStorage.getItem("slang-theme");
 o.max_entries = <span class="n">50000</span>;
 o.ttl_ms = <span class="n">30000</span>;                                          <span class="c">// 0: never expires</span>
 <span class="k">let</span> cr: <span class="t">result</span>[cache.Cache[User], <span class="t">str</span>] = cache.<span class="f">new</span>(o);
-<span class="k">guard</span> <span class="k">let</span> users = cr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(cr) { <span class="f">panic</span>(e); }
+<span class="k">guard</span> <span class="k">let</span> users = cr <span class="k">else</span> |e| { <span class="f">panic</span>(e); }
 
 cache.<span class="f">put</span>(users, <span class="s">&quot;u:42&quot;</span>, u);
 cache.<span class="f">get</span>(users, <span class="s">&quot;u:42&quot;</span>);                                  <span class="c">// opt[User]</span>

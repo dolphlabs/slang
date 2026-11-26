@@ -102,7 +102,7 @@ try { var t = localStorage.getItem("slang-theme");
 <span class="k">let</span> r = s3.<span class="f">new_client</span>(<span class="s">&quot;https://s3.eu-west-1.amazonaws.com&quot;</span>, <span class="s">&quot;eu-west-1&quot;</span>, access_key, secret_key);
 <span class="c">// or s3.from_env(proc.getenv): AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,</span>
 <span class="c">// AWS_SESSION_TOKEN, AWS_REGION, S3_ENDPOINT</span>
-<span class="k">guard</span> <span class="k">let</span> c = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }
+<span class="k">guard</span> <span class="k">let</span> c = r <span class="k">else</span> |e| { <span class="f">panic</span>(e); }
 
 s3.<span class="f">put_object</span>(c, <span class="s">&quot;uploads&quot;</span>, <span class="s">&quot;avatars/42.png&quot;</span>, png, <span class="s">&quot;image/png&quot;</span>, deadline);   <span class="c">// ok(etag)</span>
 s3.<span class="f">get_object</span>(c, <span class="s">&quot;uploads&quot;</span>, <span class="s">&quot;avatars/42.png&quot;</span>, deadline);                     <span class="c">// ok(bytes)</span>

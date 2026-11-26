@@ -4,8 +4,7 @@
 //
 //     import "xml";
 //
-//     let r = xml.parse(body);
-//     guard let doc = r else let e = err_of(r) { panic(e); }   // "xml: line 3 col 9: ..."
+//     guard let doc = xml.parse(body) else |e| { panic(e); }   // "xml: line 3 col 9: ..."
 //     let title = doc.find("channel/title") ?? doc;
 //     println(title.text_content());
 //     for item in doc.find_all("channel/item") {

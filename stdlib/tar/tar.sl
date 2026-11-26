@@ -3,8 +3,7 @@
 //
 //     import "tar";
 //
-//     let r = tar.parse(data);
-//     guard let entries = r else let e = err_of(r) { panic(e); }
+//     guard let entries = tar.parse(data) else |e| { panic(e); }
 //     for e in entries {
 //         let pr = tar.safe_path(e.name);       // refuses ../, /abs ...
 //         guard let rel = pr else { continue; }

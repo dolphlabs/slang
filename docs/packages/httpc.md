@@ -12,8 +12,7 @@ import "time";
 
 let dl = until_of(time.mono() + 5000000000);   // 5s for the whole request
 
-let r = httpc.get("https://api.example.com/users?id=1", dl);
-guard let resp = r else let e = err_of(r) {
+guard let resp = httpc.get("https://api.example.com/users?id=1", dl) else |e| {
     log.error("request failed: " + e);
     return;
 }

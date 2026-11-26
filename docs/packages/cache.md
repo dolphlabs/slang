@@ -14,7 +14,7 @@ let o = cache.options();
 o.max_entries = 50000;
 o.ttl_ms = 30000;                                          // 0: never expires
 let cr: result[cache.Cache[User], str] = cache.new(o);
-guard let users = cr else let e = err_of(cr) { panic(e); }
+guard let users = cr else |e| { panic(e); }
 
 cache.put(users, "u:42", u);
 cache.get(users, "u:42");                                  // opt[User]

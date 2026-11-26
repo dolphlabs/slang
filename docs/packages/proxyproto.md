@@ -11,8 +11,7 @@ import "net";
 import "proxyproto";
 import "time";
 
-let hr = proxyproto.read_until(fd, until_of(time.mono() + 5000000000));
-guard let h = hr else let e = err_of(hr) { net.close(fd); return; }
+guard let h = proxyproto.read_until(fd, until_of(time.mono() + 5000000000)) else |e| { net.close(fd); return; }
 println(h.src_addr + ":" + to_str(h.src_port));   // the real client
 // h.rest: bytes that came after the header, the start of the stream
 ```

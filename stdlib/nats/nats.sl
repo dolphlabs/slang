@@ -4,10 +4,8 @@
 //
 //     import "nats";
 //
-//     let r = nats.connect("nats://127.0.0.1:4222", deadline);
-//     guard let nc = r else let e = err_of(r) { panic(e); }
-//     let sr = nats.subscribe(nc, "orders.*");
-//     guard let sub = sr else let e = err_of(sr) { panic(e); }
+//     guard let nc = nats.connect("nats://127.0.0.1:4222", deadline) else |e| { panic(e); }
+//     guard let sub = nats.subscribe(nc, "orders.*") else |e| { panic(e); }
 //     nats.publish(nc, "orders.new", b"{\"id\":1}");
 //     let m = nats.next_msg(sub, deadline);       // result[opt[Msg], str]
 //     let reply = nats.request(nc, "pricing.quote", b"BTC", deadline);

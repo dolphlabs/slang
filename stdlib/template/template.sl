@@ -5,7 +5,7 @@
 //     let r = template.parse("page", "<h1>{{ .title }}</h1>" +
 //         "<a href=\"{{ .url }}\">{{ .name }}</a>" +
 //         "<script>let user = {{ .user }};</script>");
-//     guard let t = r else let e = err_of(r) { panic(e); }
+//     guard let t = r else |e| { panic(e); }
 //     let html = template.render(t, page);          // result[str, str]
 //
 // Data is any value json.encode accepts: a struct's fields are .name, a

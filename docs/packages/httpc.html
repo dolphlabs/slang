@@ -101,8 +101,7 @@ try { var t = localStorage.getItem("slang-theme");
 
 <span class="k">let</span> dl = <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">5000000000</span>);   <span class="c">// 5s for the whole request</span>
 
-<span class="k">let</span> r = httpc.<span class="f">get</span>(<span class="s">&quot;https://api.example.com/users?id=1&quot;</span>, dl);
-<span class="k">guard</span> <span class="k">let</span> resp = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) {
+<span class="k">guard</span> <span class="k">let</span> resp = httpc.<span class="f">get</span>(<span class="s">&quot;https://api.example.com/users?id=1&quot;</span>, dl) <span class="k">else</span> |e| {
     log.<span class="f">error</span>(<span class="s">&quot;request failed: &quot;</span> + e);
     <span class="k">return</span>;
 }

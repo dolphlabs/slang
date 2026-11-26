@@ -7,8 +7,7 @@ CSV (RFC 4180): read a whole document or stream a large one, and write.
 ```slang
 import "csv";
 
-let r = csv.parse("name,qty\n\"Smith, J\",3\n");   // result[[[str]], str]
-guard let rows = r else let e = err_of(r) { panic(e); }
+guard let rows = csv.parse("name,qty\n\"Smith, J\",3\n") else |e| { panic(e); }   // result[[[str]], str]
 csv.to_maps(rows);                                     // the header row as keys: [map[str]str]
 
 let o = csv.options();

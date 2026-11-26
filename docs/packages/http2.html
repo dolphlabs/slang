@@ -98,12 +98,10 @@ try { var t = localStorage.getItem("slang-theme");
 <p>HTTP/2 framing and HPACK header compression (RFC 9113, RFC 7541), written in slang — the frame codec is what the bitwise operators were added for.</p>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;http2&quot;</span>;
 
-<span class="k">let</span> f = http2.<span class="f">decode</span>(buf, <span class="n">0</span>, <span class="n">16384</span>);        <span class="c">// one frame, bounds-checked</span>
-<span class="k">guard</span> <span class="k">let</span> fr = f <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(f) { <span class="k">return</span>; }
+<span class="k">guard</span> <span class="k">let</span> fr = http2.<span class="f">decode</span>(buf, <span class="n">0</span>, <span class="n">16384</span>) <span class="k">else</span> |e| { <span class="k">return</span>; }   <span class="c">// one frame, bounds-checked</span>
 
 <span class="k">let</span> d = http2.<span class="f">decoder_new</span>(<span class="n">4096</span>);            <span class="c">// per-connection HPACK state</span>
-<span class="k">let</span> hr = http2.<span class="f">decode_block</span>(d, fr.payload, <span class="n">64</span>);
-<span class="k">guard</span> <span class="k">let</span> hs = hr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(hr) { <span class="k">return</span>; }
+<span class="k">guard</span> <span class="k">let</span> hs = http2.<span class="f">decode_block</span>(d, fr.payload, <span class="n">64</span>) <span class="k">else</span> |e| { <span class="k">return</span>; }
 <span class="k">for</span> i <span class="k">in</span> <span class="n">0..len</span>(hs) {
     <span class="b">println</span>(hs[i].name + <span class="s">&quot;: &quot;</span> + hs[i].value);
 }</code></pre></div>
@@ -136,8 +134,7 @@ http2.<span class="f">transport_tls</span>(ssl)   <span class="c">// h2 over TLS
     <span class="k">guard</span> <span class="k">let</span> _p = http2.<span class="f">accept_preface</span>(rd, fd, wch,
             <span class="b">until_of</span>(time.<span class="f">mono</span>() + lim.handshake)) <span class="k">else</span> { <span class="k">return</span>; }
     <span class="k">while</span> <span class="k">true</span> {
-        <span class="k">let</span> rr = http2.<span class="f">read_request</span>(cn, rd, fd, wch, lim);
-        <span class="k">guard</span> <span class="k">let</span> req = rr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(rr) {
+        <span class="k">guard</span> <span class="k">let</span> req = http2.<span class="f">read_request</span>(cn, rd, fd, wch, lim) <span class="k">else</span> |e| {
             <span class="k">if</span> http2.<span class="f">is_timeout</span>(e) { /* slow <span class="t">peer</span>; shed it */ }
             <span class="b">chan_close</span>(wch);
             <span class="k">return</span>;
@@ -178,12 +175,11 @@ http2.<span class="f">transport_tls</span>(ssl)   <span class="c">// h2 over TLS
 <p><code>tests/http2_flood</code> drives both shapes, resetting and not, and fails if either exceeds the cap.</p>
 <h6 id="client">Client<a class="anchor" href="#client" aria-label="Link to this section">#</a></h6>
 <p>The same pieces, from the other end: a <code>Transport</code>, one <code>writer_task</code>, one reader. <code>client_start</code> performs the handshake and returns a <code>Client</code> whose own reader task routes each response to the task that asked for it, so <code>client_call</code> is safe from any number of tasks on one connection:</p>
-<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> started = http2.<span class="f">client_start</span>(http2.<span class="f">transport_tls</span>(ssl), http2.<span class="f">default_limits</span>());
-<span class="k">guard</span> <span class="k">let</span> c = started <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(started) { <span class="k">return</span>; }
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">guard</span> <span class="k">let</span> c = http2.<span class="f">client_start</span>(http2.<span class="f">transport_tls</span>(ssl), http2.<span class="f">default_limits</span>()) <span class="k">else</span> |e| { <span class="k">return</span>; }
 <span class="k">let</span> none_h: [http2.Header] = [];
 <span class="k">let</span> r = http2.<span class="f">client_call</span>(c, <span class="s">&quot;GET&quot;</span>, <span class="s">&quot;https&quot;</span>, <span class="s">&quot;api.example&quot;</span>, <span class="s">&quot;/v1/users&quot;</span>, none_h,
                           b<span class="s">&quot;&quot;</span>, <span class="n">2000000000</span>, <span class="n">1048576</span>);   <span class="c">// timeout ns, max body</span>
-<span class="k">guard</span> <span class="k">let</span> resp = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="k">return</span>; }
+<span class="k">guard</span> <span class="k">let</span> resp = r <span class="k">else</span> |e| { <span class="k">return</span>; }
 <span class="b">println</span>(resp.status + <span class="s">&quot; &quot;</span> + <span class="b">to_str</span>(<span class="b">len</span>(resp.body)));
 http2.<span class="f">client_close</span>(c);</code></pre></div>
 <p><code>client_call</code> allocates stream ids (odd, increasing, in wire order), waits for a slot under the peer&#x27;s <code>SETTINGS_MAX_CONCURRENT_STREAMS</code> (capped by <code>Limits.max_concurrent</code>), and times each call out on its own: an expired call is reset with <code>RST_STREAM(CANCEL)</code> and answers <code>&quot;timeout&quot;</code>, and the late response&#x27;s header block is still decoded so HPACK state stays in step for the rest of the connection. A <code>Response</code> carries <code>status</code>, <code>headers</code>, <code>body</code> and <code>trailers</code>. Calls are never retried; a stream refused by <code>GOAWAY</code> says so, since only those are safe to repeat elsewhere.</p>

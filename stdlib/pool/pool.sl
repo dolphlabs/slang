@@ -8,8 +8,7 @@
 //     fn alive(fd: i32) -> bool { return net.idle_alive(fd); }
 //
 //     let p = pool.new(pool.options(64), dial_redis, close_redis, alive);
-//     let lr = pool.acquire(p, deadline);
-//     guard let lease = lr else let e = err_of(lr) { ... }  // "timeout"
+//     guard let lease = pool.acquire(p, deadline) else |e| { ... }  // "timeout"
 //     use(lease.v);
 //     pool.release(p, lease);          // or pool.discard if it broke
 //

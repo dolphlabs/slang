@@ -7,7 +7,7 @@
 //     struct Config { name: str, db: Db }
 //
 //     let r: result[Config, str] = yaml.decode(text);
-//     guard let cfg = r else let e = err_of(r) { panic(e); }   // "yaml: line 4: ..."
+//     guard let cfg = r else |e| { panic(e); }   // "yaml: line 4: ..."
 //
 //     yaml.to_json(text);              // result[str, str]: the one document
 //     yaml.to_json_all(text);          // result[[str], str]: every document

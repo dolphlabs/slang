@@ -11,19 +11,16 @@ import "webauthn";
 let rp = webauthn.relying_party("example.com", "Example", ["https://example.com"]);
 
 // Registration: send ch.options to the page, keep ch.value in the session.
-let cr = webauthn.begin_registration(rp, user, existing_credentials);
-guard let ch = cr else let e = err_of(cr) { return fail(e); }
+guard let ch = webauthn.begin_registration(rp, user, existing_credentials) else |e| { return fail(e); }
 // page: navigator.credentials.create({ publicKey:
 //         PublicKeyCredential.parseCreationOptionsFromJSON(options) }),
 //       then POST JSON.stringify(credential)
-let fr = webauthn.finish_registration(rp, ch.value, posted_json);
-guard let cred = fr else let e = err_of(fr) { return fail(e); }   // store cred
+guard let cred = webauthn.finish_registration(rp, ch.value, posted_json) else |e| { return fail(e); }   // store cred
 
 // Login: the same shape.
 let lc = webauthn.begin_login(rp, []);          // [] lets the user pick any passkey
 let id = webauthn.login_credential_id(posted_json) ?? b"";   // look up the stored credential
-let lr = webauthn.finish_login(rp, challenge, stored, posted_json);
-guard let login = lr else let e = err_of(lr) { return fail(e); }
+guard let login = webauthn.finish_login(rp, challenge, stored, posted_json) else |e| { return fail(e); }
 stored.sign_count = login.sign_count;           // and store it back
 ```
 

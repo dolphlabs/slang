@@ -15,8 +15,7 @@ import "log";
 
 let dl = until_of(time.mono() + 5000000000);
 
-let pr = pg.new_pool("postgres://app:secret@db.internal/shop", 10);
-guard let pool = pr else let e = err_of(pr) {
+guard let pool = pg.new_pool("postgres://app:secret@db.internal/shop", 10) else |e| {
     log.error("db url: " + e);
     exit(1);
 }
@@ -24,7 +23,7 @@ guard let pool = pr else let e = err_of(pr) {
 let r = pg.pool_query(pool,
     "SELECT id, name, price FROM products WHERE price < $1 ORDER BY id",
     [pg.arg_float(20.0)], dl);
-guard let rows = r else let e = err_of(r) {
+guard let rows = r else |e| {
     log.error("query: " + e);   // ERROR: relation "products" does not exist (SQLSTATE 42P01)
     exit(1);
 }
@@ -116,8 +115,7 @@ it back, so they cannot leak one. A transaction needs several statements
 on one connection, so it uses `acquire` and `release`:
 
 ```slang
-let cr = pg.acquire(pool, dl);
-guard let c = cr else let e = err_of(cr) { return; }
+guard let c = pg.acquire(pool, dl) else |e| { return; }
 pg.exec(c, "BEGIN", dl);
 let moved = pg.query(c, "UPDATE accounts SET balance = balance - $1 WHERE id = $2",
                      [pg.arg_int(100), pg.arg_int(from)], dl);
@@ -192,7 +190,7 @@ task, and returns immediately. A broken connection only returns
 
 ```slang
 let r = pg.query(c, "INSERT INTO users (email) VALUES ($1)", [pg.arg_text(email)], dl);
-guard let ok_ = r else let e = err_of(r) {
+guard let ok_ = r else |e| {
     if pg.sqlstate(e) == "23505" {     // unique_violation
         return respond(409, "email already registered");
     }
@@ -210,11 +208,9 @@ time, so memory holds one row however large the result, and the server
 is held back by TCP flow control rather than the client reading ahead:
 
 ```slang
-let sr = pg.stream(c, "SELECT id, body FROM events ORDER BY id", [], dl);
-guard let rows = sr else let e = err_of(sr) { return; }
+guard let rows = pg.stream(c, "SELECT id, body FROM events ORDER BY id", [], dl) else |e| { return; }
 while true {
-    let nr = pg.next_row(c, rows, dl);
-    guard let more = nr else let e = err_of(nr) { log.error(e); break; }
+    guard let more = pg.next_row(c, rows, dl) else |e| { log.error(e); break; }
     if !more { break; }
     archive(pg.get_int(rows, 0, 0), pg.get_text(rows, 0, 1));   // always row 0
 }
@@ -272,8 +268,7 @@ this package does not build or parse it.
 ```slang
 pg.listen(c, "jobs", dl);
 while true {
-    let wr = pg.wait_notification(c, until_of(time.mono() + 30000000000));
-    guard let got = wr else let e = err_of(wr) { log.error(e); break; }
+    guard let got = pg.wait_notification(c, until_of(time.mono() + 30000000000)) else |e| { log.error(e); break; }
     guard let note = got else { continue; }        // 30s with nothing: none
     run_job(note.payload);
 }

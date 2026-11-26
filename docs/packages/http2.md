@@ -9,12 +9,10 @@ added for.
 ```slang
 import "http2";
 
-let f = http2.decode(buf, 0, 16384);        // one frame, bounds-checked
-guard let fr = f else let e = err_of(f) { return; }
+guard let fr = http2.decode(buf, 0, 16384) else |e| { return; }   // one frame, bounds-checked
 
 let d = http2.decoder_new(4096);            // per-connection HPACK state
-let hr = http2.decode_block(d, fr.payload, 64);
-guard let hs = hr else let e = err_of(hr) { return; }
+guard let hs = http2.decode_block(d, fr.payload, 64) else |e| { return; }
 for i in 0..len(hs) {
     println(hs[i].name + ": " + hs[i].value);
 }
@@ -97,8 +95,7 @@ fn serve(fd: i32) {
     guard let _p = http2.accept_preface(rd, fd, wch,
             until_of(time.mono() + lim.handshake)) else { return; }
     while true {
-        let rr = http2.read_request(cn, rd, fd, wch, lim);
-        guard let req = rr else let e = err_of(rr) {
+        guard let req = http2.read_request(cn, rd, fd, wch, lim) else |e| {
             if http2.is_timeout(e) { /* slow peer; shed it */ }
             chan_close(wch);
             return;
@@ -250,12 +247,11 @@ whose own reader task routes each response to the task that asked for
 it, so `client_call` is safe from any number of tasks on one connection:
 
 ```slang
-let started = http2.client_start(http2.transport_tls(ssl), http2.default_limits());
-guard let c = started else let e = err_of(started) { return; }
+guard let c = http2.client_start(http2.transport_tls(ssl), http2.default_limits()) else |e| { return; }
 let none_h: [http2.Header] = [];
 let r = http2.client_call(c, "GET", "https", "api.example", "/v1/users", none_h,
                           b"", 2000000000, 1048576);   // timeout ns, max body
-guard let resp = r else let e = err_of(r) { return; }
+guard let resp = r else |e| { return; }
 println(resp.status + " " + to_str(len(resp.body)));
 http2.client_close(c);
 ```

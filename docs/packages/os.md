@@ -28,8 +28,7 @@ import "os";
 if !os.is_file(path) {
     return not_found();
 }
-let sr = os.size(path);
-guard let n = sr else let e = err_of(sr) {
+guard let n = os.size(path) else |e| {
     log.error("stat " + path + ": " + e);      // "No such file or directory"
     return server_error();
 }

@@ -9,8 +9,7 @@ import "memcache";
 
 let mc = memcache.new(["cache-1:11211", "cache-2:11211"]);
 memcache.set(mc, "user:42", to_bytes(body), 300, deadline);   // 5 minutes
-let gr = memcache.get(mc, "user:42", deadline);
-guard let found = gr else let e = err_of(gr) { return err(e); }  // I/O error
+guard let found = memcache.get(mc, "user:42", deadline) else |e| { return err(e); }  // I/O error
 if let v = found { use(v); } else { /* a miss */ }
 ```
 

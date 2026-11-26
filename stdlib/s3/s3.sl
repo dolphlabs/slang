@@ -7,7 +7,7 @@
 //
 //     let r = s3.new_client("https://s3.eu-west-1.amazonaws.com", "eu-west-1",
 //                           access_key, secret_key);
-//     guard let c = r else let e = err_of(r) { panic(e); }
+//     guard let c = r else |e| { panic(e); }
 //     s3.put_object(c, "uploads", "avatars/42.png", png, "image/png", deadline);
 //     let body = s3.get_object(c, "uploads", "avatars/42.png", deadline);
 //     let url = s3.presign_get(c, "uploads", "avatars/42.png", 900);

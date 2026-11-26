@@ -374,13 +374,11 @@ fn handle_http_conn(st: AppState, c: link) {
     let buf = ra.wire(65536);
     let filled = 0;
     while true {
-        let rr = http.read(&mut c, buf, filled, until_never());
-        guard let got = rr else let e = err_of(rr) {
+        guard let got = http.read(&mut c, buf, filled, until_never()) else |e| {
             log.warn("http read failed: " + e);
             return;
         }
-        let wr = http.write(&mut c, route(st, got.req), &mut sa, until_never());
-        guard let _n = wr else let e = err_of(wr) {
+        guard let _n = http.write(&mut c, route(st, got.req), &mut sa, until_never()) else |e| {
             log.warn("http write failed: " + e);
             return;
         }
@@ -420,13 +418,13 @@ fn http_accept_loop(ln: link, work: chan[link], done: chan[bool]) {
 // either way.
 fn handle_tls_conn(st: AppState, conn: rawptr) {
     let recv_r: result[bytes, str] = net.tls_recv(conn, 65536);
-    guard let raw = recv_r else let e = err_of(recv_r) {
+    guard let raw = recv_r else |e| {
         log.warn("tls recv failed: " + e);
         net.tls_close(conn);
         return;
     }
     let parsed: result[http.Request, str] = http.parse(raw);
-    guard let req = parsed else let e = err_of(parsed) {
+    guard let req = parsed else |e| {
         log.warn("tls request parse failed: " + e);
         net.tls_send(conn, http.serialize(http.bad_request("malformed request")));
         net.tls_close(conn);
@@ -469,12 +467,12 @@ fn tls_accept_loop(lfd: i32, sctx: rawptr, work: chan[rawptr], done: chan[bool])
 fn try_start_tls(st: AppState, tls_port: i32, workers: int,
                  work: chan[rawptr], done: chan[bool]) -> bool {
     let sctx_r: result[rawptr, str] = net.tls_server_ctx("cert.pem", "key.pem");
-    guard let sctx = sctx_r else let e = err_of(sctx_r) {
+    guard let sctx = sctx_r else |e| {
         log.warn("tls disabled: " + e);
         return false;
     }
     let lr: result[i32, str] = net.listen(tls_port);
-    guard let lfd = lr else let e = err_of(lr) {
+    guard let lfd = lr else |e| {
         log.warn("tls listen failed: " + e);
         return false;
     }
@@ -510,8 +508,7 @@ let st = AppState {
 // typo in PORT used to bind an ephemeral port silently.
 fn env_int(name: str, fallback: str) -> int {
     let raw = proc.getenv(name) ?? fallback;
-    let r = to_int(raw);
-    guard let n = r else let e = err_of(r) {
+    guard let n = to_int(raw) else |e| {
         println(name + "=" + raw + " is not a number: " + e);
         exit(2);
     }

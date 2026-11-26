@@ -61,8 +61,7 @@ fn serve(ln: link, routes: [Route], cfg: Config) {
 }
 
 let cfg = Config { greeting: "world" };
-let lr = link_listen(0);
-guard let ln = lr else let e = err_of(lr) {
+guard let ln = link_listen(0) else |e| {
     log.error("listen: " + to_str(e));
     exit(1);
 }
@@ -74,15 +73,13 @@ fn soon() -> until {
 }
 
 let base = "http://127.0.0.1:" + to_str(port);
-let h = httpc.get(base + "/hi", soon());
-guard let hello_resp = h else let e = err_of(h) {
+guard let hello_resp = httpc.get(base + "/hi", soon()) else |e| {
     log.error("self-hit: " + e);
     exit(1);
 }
 assert(hello_resp.status == 200, "hi status");
 
-let m = httpc.get(base + "/missing", soon());
-guard let missing = m else let e = err_of(m) {
+guard let missing = httpc.get(base + "/missing", soon()) else |e| {
     log.error("self-hit: " + e);
     exit(1);
 }

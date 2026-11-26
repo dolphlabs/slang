@@ -101,8 +101,7 @@ try { var t = localStorage.getItem("slang-theme");
 <p><code>find</code> returns byte offsets as <code>[start, end, g1start, g1end, ...]</code>, or an <strong>empty list</strong> when there is no match — so the result is GC-owned and there is no match handle to leak. <code>find_at</code> starts at an offset, which is how you walk every match.</p>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;regex&quot;</span>;
 
-<span class="k">let</span> cr = regex.<span class="f">compile</span>(<span class="s">&quot;(\\d{4})-(\\d{2})-(\\d{2})&quot;</span>);
-<span class="k">guard</span> <span class="k">let</span> re = cr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(cr) {
+<span class="k">guard</span> <span class="k">let</span> re = regex.<span class="f">compile</span>(<span class="s">&quot;(\\d{4})-(\\d{2})-(\\d{2})&quot;</span>) <span class="k">else</span> |e| {
     log.<span class="f">error</span>(<span class="s">&quot;bad pattern: &quot;</span> + e);   <span class="c">// e.g. &quot;missing ) at offset 9&quot;</span>
     <span class="b">exit</span>(<span class="n">1</span>);
 }
