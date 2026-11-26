@@ -183,6 +183,13 @@ DeferInfo *defer_build_info(CG *cg, Stmt *s, int id) {
                             s->line);
                     }
                 } else {
+                    if (sw == TW_REFMUT && rw == TW_NONE) {
+                        Expr *cur = call->as.method.recv;
+                        while (cur && cur->kind == EX_FIELD)
+                            cur = cur->as.field.base;
+                        if (cur && cur->kind == EX_INDEX)
+                            index_borrow_refused(cg, cur, 1, call->line);
+                    }
                     d->recv_ty = raw_recv_t;
                     if (!expr_addressable(call->as.method.recv) &&
                         type_needs_drop(cg, raw_recv_t))
