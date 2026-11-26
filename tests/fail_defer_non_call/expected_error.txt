@@ -1,0 +1,1 @@
+'defer' requires a function or method call

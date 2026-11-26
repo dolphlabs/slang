@@ -150,20 +150,20 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
     alternative is corruption in whatever the lock was protecting,
     discovered much later and somewhere else.
 
-  There is no scope guard (no `defer`, no closures), so an early
-  `return` between lock and unlock leaks the lock. Keep the critical
-  section small enough to see both ends of it at once:
+  Use `defer mutex_unlock(st.lock);` inside a function so every
+  exit path — including early returns — releases the lock in LIFO
+  order after evaluating the return expression:
 
   ```slang
   gc struct State { tasks: [Task], next_id: int, lock: mutex }
 
   fn create(st: State, title: str) -> Task {
       mutex_lock(st.lock);
+      defer mutex_unlock(st.lock);
       let t = Task { id: st.next_id, title: title, done: false };
       st.next_id = st.next_id + 1;
       push(st.tasks, t);
-      mutex_unlock(st.lock);
-      return t;                 // unlock BEFORE the return, every path
+      return t;                 // t is evaluated, then mutex_unlock runs
   }
   ```
 

@@ -137,6 +137,8 @@ typedef struct {
     int drop;
     int stack;
     int moved;
+    int scope_depth;
+    int defer_id;
 } VarSym;
 
 typedef struct {
@@ -400,6 +402,29 @@ typedef struct {
     int cap;
 } InspectTable;
 
+typedef struct {
+    int id;
+    int line;
+    Stmt *stmt;
+    int is_print;       /* 1 = print, 2 = println */
+    int is_method_expr; /* 1 = EX_METHOD, 0 = EX_CALL */
+    int has_cal;        /* EX_CALL with callee expr / fn field / fn var */
+    int has_recv;        /* EX_METHOD or dotted method/arena/link/trip */
+    int recv_by_addr;    /* 1 for value/arena/link receiver captured via &x */
+    int recv_drop_after; /* 1 for rvalue receiver needing drop after call */
+    int is_send_static;  /* 1 for link.send_static(bytes_lit, until) */
+    char *callee_name;
+    char *method_name;
+    const char *cal_ty;
+    const char *recv_ty;
+    const char **arg_tys;
+    int nargs;
+    const char *ret_ty;
+    char **borrow_vars;
+    const char **borrow_tys;
+    int nborrows;
+} DeferInfo;
+
 struct CG {
     StrBuf *out;
     int indent;
@@ -567,6 +592,11 @@ struct CG {
     int want_fswatch; /* set once os.watch is type-checked */
     int stack_box;
     MirTable mirs;
+    DeferInfo **fn_defers;
+    int fn_ndefers;
+    int fn_defer_cap;
+    int in_defer_cleanup;
+    void *exit_live_set;
 };
 
 /* C typedef name for a distinct opt[T] instantiation. */
@@ -769,6 +799,7 @@ TypeWrap type_wrap(const char *t, char **inner);
 char *type_lifetime(const char *t);
 int type_is_boxable(CG *cg, const char *t);
 int expr_addressable(Expr *e);
+const char *expr_shared_ref_base(CG *cg, Expr *e);
 int type_is_gc_ptr(CG *cg, const char *t);
 int type_has_gc_roots(CG *cg, const char *t);
 int type_is_pointer_free(CG *cg, const char *t);
@@ -817,6 +848,7 @@ void expr_tmp_register(CG *cg, Expr *e, const char *name, const char *type);
 const char *expr_tmp_find(CG *cg, Expr *e);
 void ambient_root_push(CG *cg, const char *name);
 void ambient_push_value_roots(CG *cg, const char *expr, const char *t);
+void ambient_push_guarded_value_roots(CG *cg, const char *guard, const char *expr, const char *t);
 char *sequence_one(CG *cg, int seq_id, int idx, const char *ctype,
                    const char *slang_type, char *text, Expr *expr_node,
                    StrBuf *prelude);
@@ -876,6 +908,7 @@ void resolve_enum_refs(CG *cg, Package *pkgs, int npkgs);
 void resolve_enum_in_body(CG *cg, const char *pkg, FuncDecl *f);
 void emit_enum_tables(CG *cg);
 const char *ctype_of(CG *cg, const char *t);
+const char *ctype_defer_slot(CG *cg, const char *t);
 const char *canon_type(CG *cg, const char *t, int line);
 /* funcs.c: the one iterator over every function body a pass must visit. */
 typedef struct {
@@ -900,6 +933,7 @@ void move_reinit(CG *cg, const char *name);
 void emit_drop_flag(CG *cg, const char *name);
 void emit_drop_overwrite(CG *cg, const char *name);
 void emit_scope_drops(CG *cg, int from);
+void emit_drop_ty(CG *cg, const char *cexpr, const char *ty, int stack);
 void emit_line(CG *cg, const char *fmt, ...);
 int is_builtin_name(const char *name);
 FuncSig *method_find(CG *cg, StructDef *sd, const char *name, int line);
@@ -947,9 +981,19 @@ void index_borrow_refused(CG *cg, Expr *e, int mut, int line);
 char *gen_slice(CG *cg, Expr *e);
 char *gen_list(CG *cg, Expr *e, const char *expect_elem);
 char *gen_expr(CG *cg, Expr *e);
+void gen_print_val(CG *cg, const char *t, const char *v, int newline, int line);
 void gen_print(CG *cg, Expr *call, int newline);
 void gen_stmt(CG *cg, Stmt *s);
 void gen_stmts(CG *cg, Stmt **stmts, int count);
+void gen_fn_body(CG *cg, Block *b);
+DeferInfo *defer_build_info(CG *cg, Stmt *s, int id);
+void defer_push_fn(CG *cg, DeferInfo *d);
+void defer_register_fn_slots(CG *cg, DeferInfo *d);
+void defer_emit_fn_decls_at(CG *cg, size_t decl_at);
+void defer_collect_fn_defers(CG *cg, Block *b);
+void emit_defers_exit(CG *cg, const char *ret_ty, const char *ret_expr);
+void defer_add_borrow_var(CG *cg, DeferInfo *d, const char *rname, int line);
+int expr_lvalue_for_borrow(Expr *e);
 int block_leaves_scope(CG *cg, Block *b);
 int call_never_returns(CG *cg, Expr *e);
 void compute_noreturn(CG *cg, Package *pkgs, int npkgs);

@@ -480,6 +480,9 @@ static void walk_stmt(CG *cg, Esc *esc, Stmt *s) {
         }
         return;
     }
+    case ST_DEFER:
+        scan_expr_any(cg, esc, s->as.defer_stmt.call);
+        return;
     case ST_UNSAFE:
         walk_block(cg, esc, s->as.unsafe_blk.body);
         return;

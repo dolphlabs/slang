@@ -1164,6 +1164,16 @@ const char *infer_type(CG *cg, Expr *e) {
         if (!strcmp(op, "&") || !strcmp(op, "&mut")) {
             if (!expr_addressable(e->as.unary.operand))
                 cg_error(e->line, "cannot take the address of a temporary");
+            if (!strcmp(op, "&mut")) {
+                const char *sref =
+                    expr_shared_ref_base(cg, e->as.unary.operand);
+                if (sref)
+                    cg_error(e->line,
+                             "cannot take '&mut' through a shared reference "
+                             "of type %s: declare the outer reference as "
+                             "'&mut' or use '&' instead",
+                             sref);
+            }
             return !strcmp(op, "&mut") ? xasprintf("&mut %s", t)
                                        : xasprintf("&%s", t);
         }

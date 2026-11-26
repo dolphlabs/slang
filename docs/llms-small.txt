@@ -199,6 +199,11 @@ fn worker(jobs: chan[int], results: chan[int]) {
 }
 
 fn square(n: int) -> int { return n * n; }
+fn bump_locked(m: mutex, v: int) -> int {
+    mutex_lock(m);
+    defer mutex_unlock(m);
+    return v + 1;
+}
 
 let jobs: chan[int] = make_chan(16);
 let results: chan[int] = make_chan(16);
@@ -214,9 +219,7 @@ let r = join_wait(h);                        // result[int, str]; err if it pani
 println(r ?? -1);
 
 let m = make_mutex();
-mutex_lock(m);
-total += 1;                                  // no defer: unlock on every path
-mutex_unlock(m);
+total = bump_locked(m, total);               // defer unlocks before return
 ```
 
 `spawn f(args)` runs `f` on a green thread; arguments are evaluated first and
@@ -438,7 +441,8 @@ println("ok");
 - `let xs = [];` or `let m = {};`: annotate, `let xs: [int] = [];`.
 - `m[k]` on a missing key panics: check `has(m, k)`.
 - A closure or lambda: write a top-level function and pass its state in.
-- `return` between `mutex_lock` and `mutex_unlock`: unlock first.
+- `return` between `mutex_lock` and `mutex_unlock`: use `defer mutex_unlock(m);` inside a `fn`.
+- `defer { ... }` or `defer` in a loop/top-level: `defer` takes a call/method inside a `fn`, never blocks/closures or loops (extract a helper `fn`).
 - A `guard` whose `else` falls through is rejected: leave the scope, or use
   `if let v = x { .. } else { .. }` when both paths continue.
 - `let v = chan_recv(c);` is `opt[T]`: unwrap with `guard let` or `??`.

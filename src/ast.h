@@ -238,7 +238,8 @@ typedef enum {
     ST_UNSAFE, /* unsafe { ... } */
     ST_SELECT,  /* select { case ... { } ... default { } } */
     ST_SWITCH,  /* switch scrut { case v, ... { } ... default { } } */
-    ST_IF_LET   /* if let x = opt_or_result { } [else [|e| | let e = err_of(..)] { }] */
+    ST_IF_LET,  /* if let x = opt_or_result { } [else [|e| | let e = err_of(..)] { }] */
+    ST_DEFER    /* defer call(args...) -- function-scoped cleanup */
 } StmtKind;
 
 typedef struct Stmt Stmt;
@@ -297,6 +298,7 @@ struct Stmt {
             Block *body; /* else block: must exit (return/break/...) */
         } guard_let;
         struct { Expr *call; } spawn; /* EX_CALL to a plain/extern fn */
+        struct { Expr *call; void *defer_info; } defer_stmt; /* EX_CALL or EX_METHOD */
         struct { Block *body; } unsafe_blk;
         /* `if let name = expr { then } else |err_name| { else }` (or legacy
            `else let err_name = err_expr`): name is bound in then_blk only,

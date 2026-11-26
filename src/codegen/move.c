@@ -77,8 +77,12 @@ static int method_value_self(CG *cg, Expr *call, const char *name) {
     if (!sig || sig->nparams < 1)
         return 0;
     const char *self_t = sig->param_slang[0];
-    char *inner;
-    if (type_wrap(self_t, &inner) != TW_NONE)
+    char *inner = NULL;
+    TypeWrap sw = type_wrap(self_t, &inner);
+    free(inner);
+    if (sw == TW_REF || sw == TW_REFMUT)
+        return 1;
+    if (sw != TW_NONE)
         return 0;
     if (struct_type_is_gc(cg, self_t))
         return 0;
@@ -86,11 +90,8 @@ static int method_value_self(CG *cg, Expr *call, const char *name) {
 }
 
 /* The receiver of an EX_METHOD, the way method_value_self answers it for
- * a bare `p.m()`: is `self` a plain, Copy value struct (read in place, so
- * the receiver is not consumed)? Anything else -- a reference, an `own`,
- * a gc struct -- takes `p.m()` down the consuming path, which for a
- * receiver that is itself Copy (a gc struct, an ordinary value struct
- * without `own` fields) does nothing. */
+ * a bare `p.m()`: is `self` a plain, Copy value struct or borrowed
+ * reference (read in place, so the receiver is not consumed)? */
 static int recv_value_self(CG *cg, Expr *call) {
     const char *recv_t = infer_type(cg, call->as.method.recv);
     if (type_is_arena(recv_t) || type_is_link(recv_t) || type_is_trip(recv_t))
@@ -102,8 +103,12 @@ static int recv_value_self(CG *cg, Expr *call) {
     if (!sig || sig->nparams < 1)
         return 0; /* a fn-typed field: the value is called, not consumed */
     const char *self_t = sig->param_slang[0];
-    char *inner;
-    if (type_wrap(self_t, &inner) != TW_NONE)
+    char *inner = NULL;
+    TypeWrap sw = type_wrap(self_t, &inner);
+    free(inner);
+    if (sw == TW_REF || sw == TW_REFMUT)
+        return 1;
+    if (sw != TW_NONE)
         return 0;
     if (struct_type_is_gc(cg, self_t))
         return 0;
@@ -309,9 +314,17 @@ typedef struct MvLoop {
 } MvLoop;
 
 static MvLoop *mv_loop;
-/* break inside a switch leaves only the switch: depth of switches
- * entered since the innermost loop */
-static int mv_switch_depth;
+
+typedef struct MvSwitch {
+    int *carry;
+    int n;
+    int broken;
+    struct MvSwitch *up;
+} MvSwitch;
+
+/* break inside a switch leaves only the switch: its moved state joins
+ * with the switch's falling-through arms */
+static MvSwitch *mv_switch;
 
 static void loop_carry(CG *cg) {
     if (!mv_loop)
@@ -368,9 +381,9 @@ static void check_loop(CG *cg, int n, mv_body_fn body, void *ctx) {
     lp.carry = (int *)xmalloc((size_t)(n > 0 ? n : 1) * sizeof(int));
     memset(lp.carry, 0, (size_t)(n > 0 ? n : 1) * sizeof(int));
     lp.up = mv_loop;
-    int saved_sw = mv_switch_depth;
+    MvSwitch *saved_sw = mv_switch;
     mv_loop = &lp;
-    mv_switch_depth = 0;
+    mv_switch = NULL;
     for (;;) {
         int *start = snap_moved(cg, n);
         mv_dead = 0;
@@ -387,7 +400,7 @@ static void check_loop(CG *cg, int n, mv_body_fn body, void *ctx) {
             break;
     }
     mv_loop = lp.up;
-    mv_switch_depth = saved_sw;
+    mv_switch = saved_sw;
     mv_dead = 0;
 }
 
@@ -514,7 +527,13 @@ static void check_stmt(CG *cg, Stmt *s) {
             for (int j = 0; j < s->as.switch_stmt.cases[i].nvals; j++)
                 check_rvalue(cg, s->as.switch_stmt.cases[i].vals[j]);
         }
-        mv_switch_depth++;
+        MvSwitch sw;
+        sw.n = n;
+        sw.carry = (int *)xmalloc((size_t)(n > 0 ? n : 1) * sizeof(int));
+        memset(sw.carry, 0, (size_t)(n > 0 ? n : 1) * sizeof(int));
+        sw.broken = 0;
+        sw.up = mv_switch;
+        mv_switch = &sw;
         for (int i = 0; i < s->as.switch_stmt.ncases; i++) {
             restore_moved(cg, before, n);
             var_scope_push(cg);
@@ -532,7 +551,19 @@ static void check_stmt(CG *cg, Stmt *s) {
             restore_moved(cg, before, n);
             arms_add(cg, &arms, n);
         }
-        mv_switch_depth--;
+        mv_switch = sw.up;
+        if (sw.broken) {
+            if (!arms.acc) {
+                arms.acc = sw.carry;
+            } else {
+                for (int i = 0; i < n; i++)
+                    arms.acc[i] |= sw.carry[i];
+                free(sw.carry);
+            }
+            arms.live = 1;
+        } else {
+            free(sw.carry);
+        }
         arms_end(cg, &arms, before, n);
         return;
     }
@@ -583,6 +614,9 @@ static void check_stmt(CG *cg, Stmt *s) {
         return;
     case ST_SPAWN:
         check_rvalue(cg, s->as.spawn.call);
+        return;
+    case ST_DEFER:
+        check_rvalue(cg, s->as.defer_stmt.call);
         return;
     case ST_GUARD_LET: {
         check_rvalue(cg, s->as.guard_let.expr);
@@ -691,16 +725,24 @@ static void check_stmt(CG *cg, Stmt *s) {
         check_block(cg, s->as.unsafe_blk.body);
         return;
     case ST_BREAK:
-        /* inside a switch, break leaves only the switch: its state
-         * reaches the statement after it, as a falling-through arm's
-         * does */
-        if (mv_switch_depth)
+        /* inside a switch, break leaves only the switch: record its
+         * moved state into the switch join and mark the path dead */
+        if (mv_switch) {
+            if (!mv_dead) {
+                for (int i = 0; i < mv_switch->n; i++)
+                    mv_switch->carry[i] |= cg->vars.items[i].moved;
+                mv_switch->broken = 1;
+            }
+            mv_dead = 1;
             return;
-        loop_carry(cg);
+        }
+        if (!mv_dead)
+            loop_carry(cg);
         mv_dead = 1;
         return;
     case ST_CONTINUE:
-        loop_carry(cg);
+        if (!mv_dead)
+            loop_carry(cg);
         mv_dead = 1;
         return;
     case ST_STRUCT:
@@ -727,7 +769,7 @@ static void check_fn(CG *cg, Block *body, char **params,
     var_scope_push(cg);
     mv_dead = 0;
     mv_loop = NULL;
-    mv_switch_depth = 0;
+    mv_switch = NULL;
     for (int i = 0; i < nparams; i++)
         var_push(cg, params[i], param_types[i]);
     check_stmts(cg, body->stmts, body->count);
@@ -749,9 +791,7 @@ void compute_moves(CG *cg, Package *pkgs, int npkgs, int main_index) {
     cg->in_function = 0;
 }
 
-static void emit_drop_ty(CG *cg, const char *cexpr, const char *ty, int stack);
-
-static void emit_drop_ty(CG *cg, const char *cexpr, const char *ty, int stack) {
+void emit_drop_ty(CG *cg, const char *cexpr, const char *ty, int stack) {
     char *inner;
     TypeWrap w = type_wrap(ty, &inner);
     if (w == TW_OWN) {

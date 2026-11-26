@@ -414,6 +414,9 @@ static void resolve_stmt(CG *cg, const char *pkg, Stmt *s) {
     case ST_SPAWN:
         resolve_expr(cg, pkg, s->as.spawn.call);
         return;
+    case ST_DEFER:
+        resolve_expr(cg, pkg, s->as.defer_stmt.call);
+        return;
     case ST_UNSAFE:
         resolve_block(cg, pkg, s->as.unsafe_blk.body);
         return;

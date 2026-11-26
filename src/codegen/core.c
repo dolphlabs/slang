@@ -926,6 +926,51 @@ int expr_addressable(Expr *e) {
     return e->kind == EX_UNARY && !strcmp(e->as.unary.op, "*");
 }
 
+const char *expr_shared_ref_base(CG *cg, Expr *e) {
+    while (e) {
+        if (e->kind == EX_IDENT) {
+            char *left = NULL, *right = NULL;
+            if (split_dotted(e->as.ident.name, &left, &right) &&
+                !import_try(cg, left)) {
+                const char *bt = infer_ident_name(cg, left, e->line);
+                char *bi = NULL;
+                TypeWrap bw = type_wrap(bt, &bi);
+                free(bi);
+                if (bw == TW_REF)
+                    return bt;
+            }
+            return NULL;
+        }
+        if (e->kind == EX_FIELD) {
+            const char *bt = infer_type(cg, e->as.field.base);
+            char *bi = NULL;
+            TypeWrap bw = type_wrap(bt, &bi);
+            free(bi);
+            if (bw == TW_REF)
+                return bt;
+            if (bw == TW_GC || bw == TW_REFMUT ||
+                (bw == TW_NONE && struct_type_is_gc(cg, bt)))
+                return NULL;
+            e = e->as.field.base;
+            continue;
+        }
+        if (e->kind == EX_UNARY && !strcmp(e->as.unary.op, "*")) {
+            const char *pt = infer_type(cg, e->as.unary.operand);
+            char *pi = NULL;
+            TypeWrap pw = type_wrap(pt, &pi);
+            free(pi);
+            if (pw == TW_REF)
+                return pt;
+            if (pw == TW_GC || pw == TW_REFMUT)
+                return NULL;
+            e = e->as.unary.operand;
+            continue;
+        }
+        return NULL;
+    }
+    return NULL;
+}
+
 static const char *wrap_prefix(TypeWrap w, const char *inner) {
     switch (w) {
     case TW_REF:    return xasprintf("&%s", inner);
@@ -1104,12 +1149,20 @@ int struct_has_gc_fields(CG *cg, StructDef *sd) {
     return found;
 }
 
-static void append_gc_root_expr(CG *cg, StrBuf *sb, const char *c_expr,
-                                const char *slang_t, int *wrote) {
+static void append_gc_root_expr_guarded_rec(CG *cg, StrBuf *sb,
+                                            const char *guard,
+                                            const char *c_expr,
+                                            const char *slang_t, int *wrote,
+                                            StructDef **visiting,
+                                            int nvisiting) {
     if (type_is_gc_ptr(cg, slang_t)) {
         if ((*wrote)++)
             sb_append(sb, ", ");
-        sb_append(sb, xasprintf("(void *)%s", c_expr));
+        if (guard)
+            sb_append(sb, xasprintf("((%s) ? (void *)(%s) : NULL)", guard,
+                                    c_expr));
+        else
+            sb_append(sb, xasprintf("(void *)%s", c_expr));
         return;
     }
     if (is_result(slang_t)) {
@@ -1117,27 +1170,76 @@ static void append_gc_root_expr(CG *cg, StrBuf *sb, const char *c_expr,
          * set, and the collector ignores NULL. */
         char *tv, *te;
         result_te(slang_t, &tv, &te);
-        append_gc_root_expr(cg, sb, xasprintf("%s.v", c_expr), tv, wrote);
-        append_gc_root_expr(cg, sb, xasprintf("%s.e", c_expr), te, wrote);
+        append_gc_root_expr_guarded_rec(cg, sb, guard,
+                                        xasprintf("%s.v", c_expr), tv, wrote,
+                                        visiting, nvisiting);
+        append_gc_root_expr_guarded_rec(cg, sb, guard,
+                                        xasprintf("%s.e", c_expr), te, wrote,
+                                        visiting, nvisiting);
         return;
     }
     if (is_opt(slang_t)) {
         /* none() zero-fills v, and the collector ignores NULL */
-        append_gc_root_expr(cg, sb, xasprintf("%s.v", c_expr),
-                            opt_inner(slang_t), wrote);
+        append_gc_root_expr_guarded_rec(cg, sb, guard,
+                                        xasprintf("%s.v", c_expr),
+                                        opt_inner(slang_t), wrote, visiting,
+                                        nvisiting);
+        return;
+    }
+    char *inner = NULL;
+    if (type_wrap(slang_t, &inner) == TW_OWN) {
+        StructDef *sd = struct_find_canon(cg, inner);
+        free(inner);
+        if (!sd || sd->is_gc || !struct_has_gc_fields(cg, sd))
+            return;
+        for (int i = 0; i < nvisiting; i++)
+            if (visiting[i] == sd)
+                return;
+        if (nvisiting == 64)
+            return;
+        visiting[nvisiting++] = sd;
+        char *g2 = guard ? xasprintf("(%s) && (%s)", guard, c_expr)
+                         : xasprintf("(%s)", c_expr);
+        for (int j = 0; j < sd->nfields; j++) {
+            if (!type_has_gc_roots(cg, sd->ftypes[j]))
+                continue;
+            append_gc_root_expr_guarded_rec(
+                cg, sb, g2,
+                xasprintf("%s->%s", c_expr, sanitize_ident(sd->fields[j])),
+                sd->ftypes[j], wrote, visiting, nvisiting);
+        }
         return;
     }
     StructDef *sd = struct_find_canon(cg, slang_t);
     if (!sd || sd->is_gc)
         return;
+    for (int i = 0; i < nvisiting; i++)
+        if (visiting[i] == sd)
+            return;
+    if (nvisiting == 64)
+        return;
+    visiting[nvisiting++] = sd;
     for (int j = 0; j < sd->nfields; j++) {
         if (!type_has_gc_roots(cg, sd->ftypes[j]))
             continue;
-        append_gc_root_expr(cg, sb,
-                            xasprintf("%s.%s", c_expr,
-                                      sanitize_ident(sd->fields[j])),
-                            sd->ftypes[j], wrote);
+        append_gc_root_expr_guarded_rec(
+            cg, sb, guard,
+            xasprintf("%s.%s", c_expr, sanitize_ident(sd->fields[j])),
+            sd->ftypes[j], wrote, visiting, nvisiting);
     }
+}
+
+static void append_gc_root_expr_guarded(CG *cg, StrBuf *sb, const char *guard,
+                                        const char *c_expr,
+                                        const char *slang_t, int *wrote) {
+    StructDef *visiting[64];
+    append_gc_root_expr_guarded_rec(cg, sb, guard, c_expr, slang_t, wrote,
+                                    visiting, 0);
+}
+
+static void append_gc_root_expr(CG *cg, StrBuf *sb, const char *c_expr,
+                                const char *slang_t, int *wrote) {
+    append_gc_root_expr_guarded(cg, sb, NULL, c_expr, slang_t, wrote);
 }
 
 /* The roots a C expression of slang type `slang_t` holds, appended to a
@@ -1149,23 +1251,60 @@ void append_gc_roots_of(CG *cg, StrBuf *sb, const char *c_expr,
     append_gc_root_expr(cg, sb, c_expr, slang_t, wrote);
 }
 
-int count_gc_root_exprs(CG *cg, const char *slang_t) {
+static int count_gc_root_exprs_rec(CG *cg, const char *slang_t,
+                                   StructDef **visiting, int nvisiting) {
     if (type_is_gc_ptr(cg, slang_t))
         return 1;
     if (is_result(slang_t)) {
         char *tv, *te;
         result_te(slang_t, &tv, &te);
-        return count_gc_root_exprs(cg, tv) + count_gc_root_exprs(cg, te);
+        return count_gc_root_exprs_rec(cg, tv, visiting, nvisiting) +
+               count_gc_root_exprs_rec(cg, te, visiting, nvisiting);
     }
     if (is_opt(slang_t))
-        return count_gc_root_exprs(cg, opt_inner(slang_t));
+        return count_gc_root_exprs_rec(cg, opt_inner(slang_t), visiting,
+                                       nvisiting);
+    char *inner = NULL;
+    if (type_wrap(slang_t, &inner) == TW_OWN) {
+        StructDef *sd = struct_find_canon(cg, inner);
+        free(inner);
+        if (!sd || sd->is_gc || !struct_has_gc_fields(cg, sd))
+            return 0;
+        for (int i = 0; i < nvisiting; i++)
+            if (visiting[i] == sd)
+                return 0;
+        if (nvisiting == 64)
+            return 0;
+        visiting[nvisiting++] = sd;
+        int n = 0;
+        for (int j = 0; j < sd->nfields; j++) {
+            if (type_has_gc_roots(cg, sd->ftypes[j]))
+                n += count_gc_root_exprs_rec(cg, sd->ftypes[j], visiting,
+                                             nvisiting);
+        }
+        return n;
+    }
     StructDef *sd = struct_find_canon(cg, slang_t);
     if (!sd || sd->is_gc)
         return 0;
+    for (int i = 0; i < nvisiting; i++)
+        if (visiting[i] == sd)
+            return 0;
+    if (nvisiting == 64)
+        return 0;
+    visiting[nvisiting++] = sd;
     int n = 0;
-    for (int j = 0; j < sd->nfields; j++)
-        n += count_gc_root_exprs(cg, sd->ftypes[j]);
+    for (int j = 0; j < sd->nfields; j++) {
+        if (type_has_gc_roots(cg, sd->ftypes[j]))
+            n += count_gc_root_exprs_rec(cg, sd->ftypes[j], visiting,
+                                         nvisiting);
+    }
     return n;
+}
+
+int count_gc_root_exprs(CG *cg, const char *slang_t) {
+    StructDef *visiting[64];
+    return count_gc_root_exprs_rec(cg, slang_t, visiting, 0);
 }
 
 /* A variable escape analysis kept on the stack (`let x = Outer { ... }`
@@ -1231,19 +1370,18 @@ void append_named_gc_roots(CG *cg, StrBuf *sb, const char *name, int *wrote) {
         char *inner = NULL;
         if (type_wrap(t, &inner) == TW_OWN) {
             StructDef *sd = struct_find_canon(cg, inner);
+            free(inner);
             if (sd && !sd->is_gc && struct_has_gc_fields(cg, sd)) {
-                for (int j = 0; j < sd->nfields; j++) {
-                    if (!type_has_gc_roots(cg, sd->ftypes[j]))
-                        continue;
-                    append_gc_root_expr(cg, sb,
-                                        xasprintf("%s->%s", c_name,
-                                                  sanitize_ident(
-                                                      sd->fields[j])),
-                                        sd->ftypes[j], wrote);
-                }
+                const char *grd = NULL;
+                if (v && v->defer_id >= 0)
+                    grd = xasprintf("_sl_def_act_%d", v->defer_id);
+                else if (v && v->drop)
+                    grd = xasprintf("_sl_d_%s", c_name);
+                append_gc_root_expr_guarded(cg, sb, grd, c_name, t, wrote);
                 return;
             }
         }
+        free(inner);
     }
     if (v && v->stack) {
         const char *boxed = stack_box_pointee(cg, v);
@@ -1252,9 +1390,14 @@ void append_named_gc_roots(CG *cg, StrBuf *sb, const char *name, int *wrote) {
             stack_box_roots(cg, sb, c_name, boxed, wrote, &count);
         return;
     }
-    if (t && type_has_gc_roots(cg, t) && !type_is_gc_ptr(cg, t))
-        append_gc_root_expr(cg, sb, c_name, t, wrote);
-    else {
+    if (t && type_has_gc_roots(cg, t) && !type_is_gc_ptr(cg, t)) {
+        const char *grd = NULL;
+        if (v && v->defer_id >= 0)
+            grd = xasprintf("_sl_def_act_%d", v->defer_id);
+        else if (v && v->drop)
+            grd = xasprintf("_sl_d_%s", c_name);
+        append_gc_root_expr_guarded(cg, sb, grd, c_name, t, wrote);
+    } else {
         if ((*wrote)++)
             sb_append(sb, ", ");
         sb_append(sb, xasprintf("(void *)%s", c_name));
@@ -1270,13 +1413,11 @@ int count_named_gc_roots(CG *cg, const char *name) {
         char *inner = NULL;
         if (type_wrap(v->slang, &inner) == TW_OWN) {
             StructDef *sd = struct_find_canon(cg, inner);
-            if (sd && !sd->is_gc && struct_has_gc_fields(cg, sd)) {
-                int n = 0;
-                for (int j = 0; j < sd->nfields; j++)
-                    n += count_gc_root_exprs(cg, sd->ftypes[j]);
-                return n;
-            }
+            free(inner);
+            if (sd && !sd->is_gc && struct_has_gc_fields(cg, sd))
+                return count_gc_root_exprs(cg, v->slang);
         }
+        free(inner);
     }
     if (v && v->stack) {
         const char *boxed = stack_box_pointee(cg, v);
@@ -1742,6 +1883,8 @@ void var_push(CG *cg, const char *name, const char *slang) {
     cg->vars.items[cg->vars.count].drop = slang ? type_needs_drop(cg, slang) : 0;
     cg->vars.items[cg->vars.count].stack = 0;
     cg->vars.items[cg->vars.count].moved = 0;
+    cg->vars.items[cg->vars.count].scope_depth = cg->var_scope_sp;
+    cg->vars.items[cg->vars.count].defer_id = -1;
     cg->vars.count++;
 }
 
@@ -1854,20 +1997,43 @@ char *sequence_one(CG *cg, int seq_id, int idx, const char *ctype,
  * the value itself when it is one, else each pointer inside it -- a value
  * struct's fields and a result's two sides, recursively. A value struct
  * nested in another used to be pushed as if it were a single pointer. */
-void ambient_push_value_roots(CG *cg, const char *expr, const char *t) {
+void ambient_push_guarded_value_roots(CG *cg, const char *guard,
+                                        const char *expr, const char *t) {
     if (type_is_gc_ptr(cg, t)) {
-        ambient_root_push(cg, expr);
+        if (guard)
+            ambient_root_push(cg, xasprintf("((%s) ? (void *)(%s) : NULL)",
+                                            guard, expr));
+        else
+            ambient_root_push(cg, expr);
+        return;
+    }
+    char *inner = NULL;
+    if (type_wrap(t, &inner) == TW_OWN) {
+        StructDef *sd = struct_find_canon(cg, inner);
+        if (sd && !sd->is_gc && struct_has_gc_fields(cg, sd)) {
+            char *g2 = guard ? xasprintf("(%s) && (%s)", guard, expr)
+                             : xasprintf("(%s)", expr);
+            for (int j = 0; j < sd->nfields; j++) {
+                if (type_has_gc_roots(cg, sd->ftypes[j]))
+                    ambient_push_guarded_value_roots(
+                        cg, g2,
+                        xasprintf("%s->%s", expr,
+                                  sanitize_ident(sd->fields[j])),
+                        sd->ftypes[j]);
+            }
+        }
         return;
     }
     if (is_result(t)) {
         char *tv, *te;
         result_te(t, &tv, &te);
-        ambient_push_value_roots(cg, xasprintf("%s.v", expr), tv);
-        ambient_push_value_roots(cg, xasprintf("%s.e", expr), te);
+        ambient_push_guarded_value_roots(cg, guard, xasprintf("%s.v", expr), tv);
+        ambient_push_guarded_value_roots(cg, guard, xasprintf("%s.e", expr), te);
         return;
     }
     if (is_opt(t)) {
-        ambient_push_value_roots(cg, xasprintf("%s.v", expr), opt_inner(t));
+        ambient_push_guarded_value_roots(cg, guard, xasprintf("%s.v", expr),
+                                         opt_inner(t));
         return;
     }
     StructDef *sd = struct_find_canon(cg, t);
@@ -1875,10 +2041,14 @@ void ambient_push_value_roots(CG *cg, const char *expr, const char *t) {
         return;
     for (int j = 0; j < sd->nfields; j++)
         if (type_has_gc_roots(cg, sd->ftypes[j]))
-            ambient_push_value_roots(cg,
-                                     xasprintf("%s.%s", expr,
-                                               sanitize_ident(sd->fields[j])),
-                                     sd->ftypes[j]);
+            ambient_push_guarded_value_roots(
+                cg, guard,
+                xasprintf("%s.%s", expr, sanitize_ident(sd->fields[j])),
+                sd->ftypes[j]);
+}
+
+void ambient_push_value_roots(CG *cg, const char *expr, const char *t) {
+    ambient_push_guarded_value_roots(cg, NULL, expr, t);
 }
 
 void ambient_root_push(CG *cg, const char *name) {
@@ -2141,8 +2311,8 @@ char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
             return inner;
         return xasprintf("({ %s%s; })", prelude, inner);
     }
-    int nlive_named = live_set_nnamed(e->live_set);
-    int nlive_pending = live_set_npending(e->live_set);
+    int nlive_named = cg->in_defer_cleanup ? 0 : live_set_nnamed(e->live_set);
+    int nlive_pending = cg->in_defer_cleanup ? 0 : live_set_npending(e->live_set);
     int nambient = cg->ambient_count;
     int nroots = nambient;
     for (int i = 0; i < nlive_named; i++)
@@ -2486,6 +2656,15 @@ char *mangle_struct(const char *canon) {
 
 /* C type for a slang type, including maps, user-defined structs, and
  * monomorphized opt/result instantiations. */
+const char *ctype_defer_slot(CG *cg, const char *t) {
+    char *inner;
+    if (t && type_wrap(t, &inner) == TW_REFMUT) {
+        const char *ic = ctype_of(cg, inner);
+        return ic ? xasprintf("%s *", ic) : NULL;
+    }
+    return ctype_of(cg, t);
+}
+
 const char *ctype_of(CG *cg, const char *t) {
     char *inner;
     TypeWrap w = type_wrap(t, &inner);
@@ -2493,8 +2672,13 @@ const char *ctype_of(CG *cg, const char *t) {
         const char *ic = ctype_of(cg, inner);
         if (!ic)
             return NULL;
-        if (w == TW_REF)
+        if (w == TW_REF) {
+            size_t len = strlen(ic);
+            if ((len > 0 && ic[len - 1] == '*') ||
+                (len >= 9 && !strcmp(ic + len - 9, "*restrict")))
+                return xasprintf("%s const *", ic);
             return xasprintf("const %s *", ic);
+        }
         if (w == TW_REFMUT)
             return xasprintf("%s *restrict", ic);
         return xasprintf("%s *", ic);

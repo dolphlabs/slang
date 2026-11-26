@@ -286,6 +286,53 @@ static void check_read(BK *bk, const char *root, const char *path, int moving,
     }
 }
 
+static const char *place_ty(CG *cg, MirFn *fn, MirPlace *p) {
+    if (!p)
+        return NULL;
+    switch (p->kind) {
+    case MP_LOCAL:
+        return local_ty(fn, p->as.local);
+    case MP_FIELD: {
+        const char *bt = place_ty(cg, fn, p->as.field.base);
+        StructDef *sd = bt ? struct_of_type(cg, bt) : NULL;
+        if (!sd)
+            return NULL;
+        for (int i = 0; i < sd->nfields; i++) {
+            if (!strcmp(sd->fields[i], p->as.field.field))
+                return sd->ftypes[i];
+        }
+        return NULL;
+    }
+    case MP_DEREF: {
+        const char *bt = place_ty(cg, fn, p->as.deref);
+        char *inner = NULL;
+        if (!bt)
+            return NULL;
+        if (type_wrap(bt, &inner) != TW_NONE) {
+            const char *r = xstrdup(inner);
+            free(inner);
+            return r;
+        }
+        free(inner);
+        return bt;
+    }
+    case MP_INDEX: {
+        const char *bt = place_ty(cg, fn, p->as.index.base);
+        if (!bt)
+            return NULL;
+        if (is_arr(bt))
+            return arr_elem(bt);
+        if (is_map(bt)) {
+            char *mk = NULL, *mv = NULL;
+            map_kv(bt, &mk, &mv);
+            return mv;
+        }
+        return NULL;
+    }
+    }
+    return NULL;
+}
+
 static const char *place_base(MirPlace *p) {
     if (!p)
         return NULL;
@@ -379,11 +426,53 @@ static void copy_loans(BK *bk, const char *src, const char *dest, int mut,
     }
 }
 
+static const char *place_shared_ref_base(BK *bk, MirPlace *p) {
+    if (!p || !place_deep(p))
+        return NULL;
+    while (p) {
+        if (p->kind == MP_LOCAL)
+            return NULL;
+        MirPlace *base = NULL;
+        if (p->kind == MP_FIELD)
+            base = p->as.field.base;
+        else if (p->kind == MP_DEREF)
+            base = p->as.deref;
+        else if (p->kind == MP_INDEX)
+            base = p->as.index.base;
+        if (!base)
+            return NULL;
+        const char *bt = place_ty(bk->cg, bk->fn, base);
+        if (!bt)
+            return NULL;
+        char *bi = NULL;
+        TypeWrap bw = type_wrap(bt, &bi);
+        free(bi);
+        if (bw == TW_REF)
+            return bt;
+        if (bw == TW_GC || bw == TW_REFMUT ||
+            (bw == TW_NONE && struct_type_is_gc(bk->cg, bt)))
+            return NULL;
+        p = base;
+    }
+    return NULL;
+}
+
 static void borrow_place(BK *bk, MirPlace *p, int mut, const char *dest,
                          int line) {
     const char *base = place_base(p);
     char *path;
-    if (!base || skip_gc(bk, base))
+    if (!base)
+        return;
+    if (mut) {
+        const char *sref = place_shared_ref_base(bk, p);
+        if (sref)
+            cg_error(line,
+                     "cannot borrow '%s' as mutable through a shared "
+                     "reference of type %s: declare the reference as '&mut' "
+                     "instead",
+                     disp_place(base, fields_of(p)), sref);
+    }
+    if (skip_gc(bk, base))
         return;
     if (local_is_ref(bk, base)) {
         copy_loans(bk, base, dest, mut, line);
@@ -795,7 +884,9 @@ static void walk_call(BK *bk, Expr *e, const char *ret_to) {
     const char *ameth = NULL;
     FuncSig *sig = call_sig_of(bk, e, &self_off, &recv);
     const char *rt = sig && sig->ret_slang ? sig->ret_slang : e->inf_ty;
-    if (arena_method_call(bk, e, &recv, &ameth) && arena_alloc_meth(ameth)) {
+    char *arecv = NULL;
+    if (arena_method_call(bk, e, &arecv, &ameth) && arena_alloc_meth(ameth)) {
+        recv = arecv;
         MirPlace tmp;
         memset(&tmp, 0, sizeof(tmp));
         tmp.kind = MP_LOCAL;
@@ -816,7 +907,11 @@ static void walk_call(BK *bk, Expr *e, const char *ret_to) {
         memset(&tmp, 0, sizeof(tmp));
         tmp.kind = MP_LOCAL;
         tmp.as.local = recv;
-        access_place(bk, &tmp, 0, 0, e->line);
+        int rmut = 0;
+        if (sig && sig->nparams > 0 && wrap_is_ref(sig->param_slang[0], &rmut))
+            borrow_place(bk, &tmp, rmut, NULL, e->line);
+        else
+            access_place(bk, &tmp, 0, 0, e->line);
         if (ret_to && wrap_is_ref(rt, &ret_mut) && param_feeds_ret(sig, 0)) {
             if (local_is_ref(bk, recv) || has_loans(bk, recv))
                 copy_loans(bk, recv, ret_to, 0, e->line);
@@ -853,7 +948,9 @@ static void walk_expr(BK *bk, Expr *e, const char *ret_to) {
         const char *ty;
         if (!p)
             return;
-        ty = local_ty(bk->fn, place_base(p));
+        ty = place_ty(bk->cg, bk->fn, p);
+        if (!ty && place_deep(p))
+            ty = e->inf_ty;
         if (ty && !type_is_copy(bk->cg, ty) && !local_is_ref(bk, place_base(p)))
             moving = 1;
         if (!place_deep(p) &&
@@ -930,7 +1027,33 @@ static void walk_expr(BK *bk, Expr *e, const char *ret_to) {
                      "the receiver to a variable first, so the borrow has "
                      "an owner",
                      e->as.method.name);
-        walk_expr(bk, e->as.method.recv, NULL);
+        MirPlace *p = ast_place(bk->cg, e->as.method.recv);
+        const char *rt = p ? place_ty(bk->cg, bk->fn, p)
+                           : (e->as.method.recv->inf_ty
+                                  ? e->as.method.recv->inf_ty
+                                  : infer_type(bk->cg, e->as.method.recv));
+        FuncSig *sig = NULL;
+        if (rt && !type_is_arena(rt) && !type_is_link(rt) &&
+            !type_is_trip(rt)) {
+            StructDef *sd = struct_of_type(bk->cg, rt);
+            int fld = -1;
+            for (int fi = 0; sd && fi < sd->nfields; fi++) {
+                if (!strcmp(sd->fields[fi], e->as.method.name) &&
+                    is_fn(sd->ftypes[fi])) {
+                    fld = fi;
+                    break;
+                }
+            }
+            if (sd && fld < 0)
+                sig = method_find(bk->cg, sd, e->as.method.name, e->line);
+        }
+        int rmut = 0;
+        if (p && expr_lvalue_for_borrow(e->as.method.recv) && sig &&
+            sig->nparams > 0 && wrap_is_ref(sig->param_slang[0], &rmut)) {
+            borrow_place(bk, p, rmut, NULL, e->line);
+        } else {
+            walk_expr(bk, e->as.method.recv, NULL);
+        }
         for (i = 0; i < e->as.method.nargs; i++)
             walk_expr(bk, e->as.method.args[i], NULL);
         return;
@@ -985,7 +1108,7 @@ static void walk_rvalue(BK *bk, MirRvalue *r, const char *dest) {
     case MR_USE: {
         const char *base = place_base(r->place);
         int moving = 0;
-        const char *ty = base ? local_ty(bk->fn, base) : NULL;
+        const char *ty = place_ty(bk->cg, bk->fn, r->place);
         if (base && local_is_ref(bk, base) && !place_deep(r->place)) {
             int mut = 0;
             wrap_is_ref(ty, &mut);
@@ -1108,6 +1231,20 @@ static void walk_stmt(BK *bk, MirStmt *s) {
             access_place(bk, s->dest, 1, 0, s->line);
     }
     walk_rvalue(bk, s->src, dest);
+    if (dest && !strncmp(dest, "_def_", 5)) {
+        int i;
+        for (i = 0; i < bk->cur.n; i++) {
+            Loan *l = &bk->cur.items[i];
+            if (!l->borrower || strcmp(l->borrower, dest))
+                continue;
+            int ri = loc_idx(bk->fn, l->root);
+            if (ri >= 0 && bk->fn->locals[ri].inner_scope && !bk->is_param[ri])
+                cg_error(s->line,
+                         "deferred call cannot borrow inner-scope variable '%s': "
+                         "declare '%s' at function scope or pass it by value",
+                         l->root, l->root);
+        }
+    }
 }
 
 static void walk_term(BK *bk, MirTerm *t) {

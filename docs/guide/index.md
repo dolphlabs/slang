@@ -99,6 +99,15 @@ fn fib(n: int) -> int {
     if n < 2 { return n; }
     return fib(n - 1) + fib(n - 2);
 }
+
+// function-scoped defer: runs a call or method call LIFO on every return
+// or fallthrough (arguments are evaluated eagerly; no blocks/closures,
+// and not inside loops or at top level)
+fn with_cleanup(tag: str) -> int {
+    defer println("cleanup:" + tag);
+    if tag == "skip" { return 0; }
+    return 1;
+}
 ```
 
 ### Built-ins
