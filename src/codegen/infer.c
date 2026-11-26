@@ -408,6 +408,26 @@ const char *infer_call(CG *cg, Expr *e) {
         res_cname(cg, e->as.call.enum_ty, "str"); /* register the instantiation */
         return xasprintf("result[%s,str]", e->as.call.enum_ty);
     }
+    if (!strcmp(name, "__enum_ctor")) {
+        EnumDef *ed = enum_find_canon(cg, e->as.call.enum_ty);
+        int v = e->as.call.enum_variant;
+        if (n != ed->v_ntypes[v])
+            cg_error(e->line,
+                     "variant '%s.%s' expects %d argument(s), got %d",
+                     ed->name, ed->variants[v], ed->v_ntypes[v], n);
+        for (int i = 0; i < n; i++) {
+            const char *pt = ed->v_types[v][i];
+            const char *saved = expect_push(cg, pt);
+            const char *at = infer_type(cg, e->as.call.args[i]);
+            cg->expect = saved;
+            if (!value_assignable(pt, e->as.call.args[i], at))
+                cg_error(e->line,
+                         "variant '%s.%s' argument %d: cannot use %s where "
+                         "%s expected",
+                         ed->name, ed->variants[v], i + 1, at, pt);
+        }
+        return ed->canonical;
+    }
     if (!strcmp(name, "make_mutex")) {
         if (n != 0)
             cg_error(e->line, "make_mutex() takes no arguments");
@@ -1022,8 +1042,14 @@ const char *infer_binary(CG *cg, Expr *e) {
             is_until(rt))
             return "bool";
         if ((!strcmp(op, "==") || !strcmp(op, "!=")) && is_enum(cg, lt) &&
-            !strcmp(lt, rt))
+            !strcmp(lt, rt)) {
+            if (is_tagged_enum(cg, lt))
+                cg_error(e->line,
+                         "cannot compare tagged enum '%s' with '%s'; use "
+                         "'switch' to inspect its variant",
+                         enum_find_canon(cg, lt)->name, op);
             return "bool";
+        }
         /* Equality only: `true < false` has no meaning worth giving it.
            Before this, `a == b` on two bools was "cannot compare bool and
            bool", forcing `a && b || !a && !b` for the most basic test a
@@ -1038,11 +1064,16 @@ const char *infer_binary(CG *cg, Expr *e) {
     }
     if (!strcmp(op, "+")) {
         if (is_str(lt) || is_str(rt) || is_fault(lt) || is_fault(rt) ||
-            is_enum(cg, lt) || is_enum(cg, rt)) {
+            (is_enum(cg, lt) && !is_tagged_enum(cg, lt)) ||
+            (is_enum(cg, rt) && !is_tagged_enum(cg, rt))) {
             const char *other =
-                (is_str(lt) || is_fault(lt) || is_enum(cg, lt)) ? rt : lt;
+                (is_str(lt) || is_fault(lt) ||
+                 (is_enum(cg, lt) && !is_tagged_enum(cg, lt)))
+                    ? rt
+                    : lt;
             if (!(is_str(other) || is_num(other) || !strcmp(other, "bool") ||
-                  is_bytes(other) || is_fault(other) || is_enum(cg, other)))
+                  is_bytes(other) || is_fault(other) ||
+                  (is_enum(cg, other) && !is_tagged_enum(cg, other))))
                 cg_error(e->line,
                          "cannot concatenate %s onto a string with '+'",
                          other);
@@ -1236,6 +1267,11 @@ const char *infer_type(CG *cg, Expr *e) {
          * variant), so it goes through Type.from_int instead, which
          * returns a result. */
         if (is_enum(cg, t)) {
+            if (is_tagged_enum(cg, t))
+                cg_error(e->line,
+                         "cannot cast tagged enum '%s' to %s; use 'switch' "
+                         "to inspect its variants",
+                         enum_find_canon(cg, t)->name, ty);
             if (strcmp(ty, "i32"))
                 cg_error(e->line,
                          "enum '%s' can only be cast to i32 (its backing "
@@ -1437,23 +1473,32 @@ const char *infer_type(CG *cg, Expr *e) {
         int total = 0;
         for (int i = 0; i < e->as.switch_expr.ncases; i++)
             total += e->as.switch_expr.cases[i].nvals;
+        int nc = e->as.switch_expr.ncases;
         Expr ***groups = total
-                              ? (Expr ***)xmalloc(sizeof(Expr **) *
-                                                  (size_t)(e->as.switch_expr
-                                                               .ncases))
+                              ? (Expr ***)xmalloc(sizeof(Expr **) * (size_t)nc)
                               : NULL;
-        int *counts = total
-                          ? (int *)xmalloc(sizeof(int) *
-                                           (size_t)(e->as.switch_expr.ncases))
-                          : NULL;
-        for (int i = 0; i < e->as.switch_expr.ncases; i++) {
-            groups[i] = e->as.switch_expr.cases[i].vals;
-            counts[i] = e->as.switch_expr.cases[i].nvals;
+        int *counts = total ? (int *)xmalloc(sizeof(int) * (size_t)nc) : NULL;
+        char ***binds = nc ? (char ***)xmalloc(sizeof(char **) * (size_t)nc) : NULL;
+        int *nbinds = nc ? (int *)xmalloc(sizeof(int) * (size_t)nc) : NULL;
+        int *hparens = nc ? (int *)xmalloc(sizeof(int) * (size_t)nc) : NULL;
+        for (int i = 0; i < nc; i++) {
+            if (groups) {
+                groups[i] = e->as.switch_expr.cases[i].vals;
+                counts[i] = e->as.switch_expr.cases[i].nvals;
+            }
+            if (binds) {
+                binds[i] = e->as.switch_expr.cases[i].bindings;
+                nbinds[i] = e->as.switch_expr.cases[i].nbindings;
+                hparens[i] = e->as.switch_expr.cases[i].has_parens;
+            }
         }
-        switch_validate(cg, st, groups, counts, e->as.switch_expr.ncases,
+        switch_validate(cg, st, groups, counts, binds, nbinds, hparens, nc,
                         e->as.switch_expr.def != NULL, e->line);
         free(groups);
         free(counts);
+        free(binds);
+        free(nbinds);
+        free(hparens);
         /* A value switch must produce a value on every path: without
          * `default`, only an exhaustive enum (checked above) qualifies.
          * A statement switch without `default` simply does nothing
@@ -1462,18 +1507,45 @@ const char *infer_type(CG *cg, Expr *e) {
             cg_error(e->line,
                      "switch expression without 'default' needs an enum "
                      "scrutinee covering every variant");
+        EnumDef *ed = is_tagged_enum(cg, st) ? enum_find_canon(cg, st) : NULL;
         const char *t0 = NULL;
         if (e->as.switch_expr.ncases > 0) {
-            const char *saved = expect_push(cg, ctx);
-            t0 = infer_type(cg, e->as.switch_expr.cases[0].value);
-            cg->expect = saved;
+            {
+                SwitchExprCase *c0 = &e->as.switch_expr.cases[0];
+                int pushed = 0;
+                if (ed && c0->nbindings > 0) {
+                    var_scope_push(cg);
+                    pushed = 1;
+                    int vidx = (int)c0->vals[0]->as.int_lit.value;
+                    for (int k = 0; k < c0->nbindings; k++) {
+                        if (!strcmp(c0->bindings[k], "_")) continue;
+                        var_redecl_check(cg, c0->bindings[k], c0->line);
+                        var_push(cg, c0->bindings[k], ed->v_types[vidx][k]);
+                    }
+                }
+                const char *saved = expect_push(cg, ctx);
+                t0 = infer_type(cg, c0->value);
+                cg->expect = saved;
+                if (pushed) var_scope_pop(cg);
+            }
             for (int i = 1; i < e->as.switch_expr.ncases; i++) {
+                SwitchExprCase *ci = &e->as.switch_expr.cases[i];
+                int pushed = 0;
+                if (ed && ci->nbindings > 0) {
+                    var_scope_push(cg);
+                    pushed = 1;
+                    int vidx = (int)ci->vals[0]->as.int_lit.value;
+                    for (int k = 0; k < ci->nbindings; k++) {
+                        if (!strcmp(ci->bindings[k], "_")) continue;
+                        var_redecl_check(cg, ci->bindings[k], ci->line);
+                        var_push(cg, ci->bindings[k], ed->v_types[vidx][k]);
+                    }
+                }
                 const char *saved2 = expect_push(cg, t0);
-                const char *ti = infer_type(
-                    cg, e->as.switch_expr.cases[i].value);
+                const char *ti = infer_type(cg, ci->value);
                 cg->expect = saved2;
-                if (!value_assignable(t0, e->as.switch_expr.cases[i].value,
-                                      ti))
+                if (pushed) var_scope_pop(cg);
+                if (!value_assignable(t0, ci->value, ti))
                     cg_error(e->line,
                              "switch arms must share a common type: cannot "
                              "use %s where %s was established by the first "

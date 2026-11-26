@@ -89,7 +89,7 @@ char *panic_at(CG *cg, int line) {
 int str_convertible(CG *cg, const char *t) {
     return is_str(t) || is_int(t) || is_flt(t) || !strcmp(t, "bool") ||
            is_bytes(t) || is_wire(t) || is_fault(t) || is_peer(t) ||
-           is_enum(cg, t);
+           (is_enum(cg, t) && !is_tagged_enum(cg, t));
 }
 
 /* Convert any scalar/bytes value to a slang str (C string). */
@@ -1082,6 +1082,41 @@ char *gen_call(CG *cg, Expr *e) {
     if (!strcmp(name, "some") || !strcmp(name, "ok") ||
         !strcmp(name, "err"))
         return gen_ctor(cg, e);
+
+    if (!strcmp(name, "__enum_ctor")) {
+        EnumDef *ed = enum_find_canon(cg, e->as.call.enum_ty);
+        int v = e->as.call.enum_variant;
+        char *m = mangle_enum(ed->canonical);
+        int nargs = e->as.call.nargs;
+        char **names = (char **)xmalloc(sizeof(char *) * (size_t)(nargs ? nargs : 1));
+        StrBuf prelude;
+        sb_init(&prelude);
+        int seq_id = nargs > 1 ? cg->tmp_id++ : -1;
+        int ambient_mark = cg->ambient_count;
+        for (int i = 0; i < nargs; i++) {
+            const char *pt = ed->v_types[v][i];
+            const char *saved = expect_push(cg, pt);
+            const char *at = infer_type(cg, e->as.call.args[i]);
+            char *a = gen_expr(cg, e->as.call.args[i]);
+            cg->expect = saved;
+            char *casted = maybe_cast(cg, pt, at, a);
+            names[i] = sequence_one(cg, seq_id, i, ctype_of(cg, pt), pt,
+                                    casted, e->as.call.args[i], &prelude);
+            move_consume(cg, e->as.call.args[i]);
+        }
+        cg->ambient_count = ambient_mark;
+        StrBuf call;
+        sb_init(&call);
+        sb_append(&call, xasprintf("%s_mk_v%d(", m, v));
+        for (int i = 0; i < nargs; i++) {
+            if (i) sb_append(&call, ", ");
+            sb_append(&call, names[i]);
+        }
+        sb_putc(&call, ')');
+        if (prelude.len > 0)
+            return xasprintf("({ %s%s; })", prelude.data, call.data);
+        return call.data;
+    }
 
     int handled = 0;
     if (is_builtin_name(name)) {
@@ -2202,7 +2237,9 @@ char *gen_expr(CG *cg, Expr *e) {
             !strcmp(op, "<=") || !strcmp(op, ">") || !strcmp(op, ">="))
             return gen_comparison(cg, e, lt, rt);
         if (!strcmp(op, "+") && (is_str(lt) || is_str(rt) || is_fault(lt) ||
-                                 is_fault(rt) || is_enum(cg, lt) || is_enum(cg, rt)))
+                                 is_fault(rt) ||
+                                 (is_enum(cg, lt) && !is_tagged_enum(cg, lt)) ||
+                                 (is_enum(cg, rt) && !is_tagged_enum(cg, rt))))
             return gen_string_concat(cg, e, lt, rt);
         /* bytes and list concatenation sequence their operands for the
          * same two reasons gen_string_concat above does, and skipping it
@@ -2379,29 +2416,56 @@ char *gen_expr(CG *cg, Expr *e) {
         sb_append(&b, xasprintf("({ %s %s = %s; %s %s = {0}; ",
                                 ctype_of(cg, st), svname, sv,
                                 ctype_of(cg, t), tname));
+        int tagged = is_tagged_enum(cg, st);
+        EnumDef *ed = tagged ? enum_find_canon(cg, st) : NULL;
         for (int i = 0; i < e->as.switch_expr.ncases; i++) {
+            SwitchExprCase *sc = &e->as.switch_expr.cases[i];
             sb_append(&b, i ? "else " : "");
             sb_append(&b, "if (");
-            for (int j = 0; j < e->as.switch_expr.cases[i].nvals; j++) {
-                Expr *lb = e->as.switch_expr.cases[i].vals[j];
+            for (int j = 0; j < sc->nvals; j++) {
+                Expr *lb = sc->vals[j];
                 if (j)
                     sb_append(&b, " || ");
                 if (kind == 3)
                     sb_append(&b, xasprintf(
                                       "!strcmp(%s, %s)", svname,
                                       c_string_literal(lb->as.str_lit.value)));
+                else if (tagged)
+                    sb_append(&b, xasprintf("%s.tag == %s", svname,
+                                            switch_label_c_const(lb)));
                 else
                     sb_append(&b, xasprintf("%s == %s", svname,
                                             switch_label_c_const(lb)));
             }
+            StrBuf arm_decls;
+            sb_init(&arm_decls);
+            int push_scope = tagged && sc->nbindings > 0;
+            if (push_scope) {
+                var_scope_push(cg);
+                int vidx = (int)sc->vals[0]->as.int_lit.value;
+                for (int k = 0; k < sc->nbindings; k++) {
+                    const char *bn = sc->bindings[k];
+                    if (!strcmp(bn, "_"))
+                        continue;
+                    const char *bt = ed->v_types[vidx][k];
+                    var_redecl_check(cg, bn, sc->line);
+                    var_push(cg, bn, bt);
+                    sb_append(&arm_decls,
+                              xasprintf("%s %s = %s.u.v%d._%d; ",
+                                        ctype_of(cg, bt), sanitize_ident(bn),
+                                        svname, vidx, k));
+                }
+            }
             const char *saved = expect_push(cg, t);
-            const char *vt = infer_type(
-                cg, e->as.switch_expr.cases[i].value);
-            char *v = gen_expr(cg, e->as.switch_expr.cases[i].value);
+            const char *vt = infer_type(cg, sc->value);
+            char *v = gen_expr(cg, sc->value);
             cg->expect = saved;
             v = maybe_cast(cg, t, vt, v);
-            move_consume(cg, e->as.switch_expr.cases[i].value);
-            sb_append(&b, xasprintf(") { %s = %s; } ", tname, v));
+            move_consume(cg, sc->value);
+            if (push_scope)
+                var_scope_pop(cg);
+            sb_append(&b, xasprintf(") { %s%s = %s; } ", arm_decls.data,
+                                    tname, v));
         }
         if (e->as.switch_expr.def) {
             const char *saved = expect_push(cg, t);
@@ -2466,8 +2530,13 @@ void gen_print_val(CG *cg, const char *t, const char *v, int newline,
                   "(unsigned)_sl_p.port); });",
                   v, newline ? "\\n" : "");
     } else if (is_enum(cg, t)) {
-        char *m = mangle_enum(t);
         EnumDef *ed = enum_find_canon(cg, t);
+        if (ed->has_payload)
+            cg_error(line,
+                     "cannot print tagged enum %s directly; use inspect() or "
+                     "'switch'",
+                     ed->name);
+        char *m = mangle_enum(t);
         if (newline)
             emit_line(cg, "puts(sl_enum_name((int32_t)(%s), %s_names, "
                           "%s_values, %d));",

@@ -283,6 +283,17 @@ static int is_bare_ident(Expr *e) {
  * for -- if that changes, extend this the same way). */
 static const char **call_arg_expects(CG *cg, Expr *e) {
     const char *name = e->as.call.name;
+    if (!strcmp(name, "__enum_ctor")) {
+        EnumDef *ed = enum_find_canon(cg, e->as.call.enum_ty);
+        int v = e->as.call.enum_variant;
+        int nf = ed->v_ntypes[v];
+        if (nf == 0)
+            return NULL;
+        const char **ex = (const char **)xmalloc(sizeof(char *) * (size_t)nf);
+        for (int i = 0; i < nf; i++)
+            ex[i] = ed->v_types[v][i];
+        return ex;
+    }
     if (!strcmp(name, "some") || !strcmp(name, "ok") || !strcmp(name, "err")) {
         /* The argument is expected to be the wrapped type, as ctor_infer
          * pushes it: ok([]) with result[[int], str] expected. */
@@ -656,10 +667,31 @@ static LiveSet *live_expr(CG *cg, Expr *e, LiveSet *live_out) {
          * any arm. The switch itself emits no safepoint of its own
          * (arm calls carry their own brackets), so no live_set is
          * recorded here. */
+        const char *st = infer_type(cg, e->as.switch_expr.scrut);
+        EnumDef *ed = is_tagged_enum(cg, st) ? enum_find_canon(cg, st) : NULL;
         LiveSet *joined = ls_clone(live_out);
         for (int i = 0; i < e->as.switch_expr.ncases; i++) {
-            LiveSet *arm = live_expr(cg, e->as.switch_expr.cases[i].value,
-                                     live_out);
+            SwitchExprCase *sc = &e->as.switch_expr.cases[i];
+            int nb = (ed && sc->nbindings > 0) ? sc->nbindings : 0;
+            LiveVar **bvs = nb ? (LiveVar **)xmalloc(sizeof(LiveVar *) * (size_t)nb)
+                               : NULL;
+            if (nb) {
+                var_scope_push(cg);
+                int vidx = (int)sc->vals[0]->as.int_lit.value;
+                for (int k = 0; k < nb; k++) {
+                    bvs[k] = strcmp(sc->bindings[k], "_")
+                                 ? declare_var(cg, sc->bindings[k],
+                                               ed->v_types[vidx][k])
+                                 : NULL;
+                }
+            }
+            LiveSet *arm = live_expr(cg, sc->value, live_out);
+            if (nb) {
+                for (int k = 0; k < nb; k++)
+                    ls_remove_named(arm, bvs[k]);
+                var_scope_pop(cg);
+                free(bvs);
+            }
             ls_union_named_into(joined, arm);
         }
         if (e->as.switch_expr.def) {
@@ -1155,12 +1187,22 @@ static void live_scan_stmt(CG *cg, Stmt *s, int in_loop, int *defer_id,
             origins->count = omark;
         }
         return;
-    case ST_SWITCH:
+    case ST_SWITCH: {
+        const char *st = infer_type(cg, s->as.switch_stmt.scrut);
+        EnumDef *ed = is_tagged_enum(cg, st) ? enum_find_canon(cg, st) : NULL;
         for (int i = 0; i < s->as.switch_stmt.ncases; i++) {
+            SwitchCase *sc = &s->as.switch_stmt.cases[i];
             int omark = origins->count;
             var_scope_push(cg);
-            live_scan_block(cg, s->as.switch_stmt.cases[i].body, in_loop,
-                            defer_id, origins, in_branch + 1);
+            if (ed && sc->nbindings > 0) {
+                int vidx = (int)sc->vals[0]->as.int_lit.value;
+                for (int k = 0; k < sc->nbindings; k++) {
+                    if (strcmp(sc->bindings[k], "_"))
+                        declare_var(cg, sc->bindings[k], ed->v_types[vidx][k]);
+                }
+            }
+            live_scan_block(cg, sc->body, in_loop, defer_id, origins,
+                            in_branch + 1);
             var_scope_pop(cg);
             origins->count = omark;
         }
@@ -1173,6 +1215,7 @@ static void live_scan_stmt(CG *cg, Stmt *s, int in_loop, int *defer_id,
             origins->count = omark;
         }
         return;
+    }
     case ST_UNSAFE: {
         int omark = origins->count;
         var_scope_push(cg);
@@ -1415,6 +1458,8 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
          * walked with cur_break_live_set pointing at this switch's
          * own live_out (save/restored, composing across nesting);
          * `continue` still targets the enclosing loop, untouched. */
+        const char *st = infer_type(cg, s->as.switch_stmt.scrut);
+        EnumDef *ed = is_tagged_enum(cg, st) ? enum_find_canon(cg, st) : NULL;
         void *saved_break = cg->cur_break_live_set;
         cg->cur_break_live_set = live_out;
         LiveSet *joined = s->as.switch_stmt.def
@@ -1422,8 +1467,27 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
                                            live_out)
                               : ls_clone(live_out);
         for (int i = 0; i < s->as.switch_stmt.ncases; i++) {
-            LiveSet *arm =
-                live_block(cg, s->as.switch_stmt.cases[i].body, live_out);
+            SwitchCase *sc = &s->as.switch_stmt.cases[i];
+            int nb = (ed && sc->nbindings > 0) ? sc->nbindings : 0;
+            LiveVar **bvs = nb ? (LiveVar **)xmalloc(sizeof(LiveVar *) * (size_t)nb)
+                               : NULL;
+            if (nb) {
+                var_scope_push(cg);
+                int vidx = (int)sc->vals[0]->as.int_lit.value;
+                for (int k = 0; k < nb; k++) {
+                    bvs[k] = strcmp(sc->bindings[k], "_")
+                                 ? declare_var(cg, sc->bindings[k],
+                                               ed->v_types[vidx][k])
+                                 : NULL;
+                }
+            }
+            LiveSet *arm = live_block(cg, sc->body, live_out);
+            if (nb) {
+                for (int k = 0; k < nb; k++)
+                    ls_remove_named(arm, bvs[k]);
+                var_scope_pop(cg);
+                free(bvs);
+            }
             ls_union_named_into(joined, arm);
         }
         cg->cur_break_live_set = saved_break;

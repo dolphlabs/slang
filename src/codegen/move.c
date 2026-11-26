@@ -217,10 +217,27 @@ static void check_rvalue(CG *cg, Expr *e) {
             for (int j = 0; j < e->as.switch_expr.cases[i].nvals; j++)
                 check_rvalue(cg, e->as.switch_expr.cases[i].vals[j]);
         }
+        const char *st = infer_type(cg, e->as.switch_expr.scrut);
+        EnumDef *ed = is_tagged_enum(cg, st) ? enum_find_canon(cg, st) : NULL;
         for (int i = 0; i < e->as.switch_expr.ncases; i++) {
+            SwitchExprCase *sc = &e->as.switch_expr.cases[i];
             int *arm;
             restore_moved(cg, before, n);
-            check_rvalue(cg, e->as.switch_expr.cases[i].value);
+            int pushed = 0;
+            if (ed && sc->nbindings > 0) {
+                var_scope_push(cg);
+                pushed = 1;
+                int vidx = (int)sc->vals[0]->as.int_lit.value;
+                for (int k = 0; k < sc->nbindings; k++) {
+                    if (!strcmp(sc->bindings[k], "_"))
+                        continue;
+                    var_redecl_check(cg, sc->bindings[k], sc->line);
+                    var_push(cg, sc->bindings[k], ed->v_types[vidx][k]);
+                }
+            }
+            check_rvalue(cg, sc->value);
+            if (pushed)
+                var_scope_pop(cg);
             arm = snap_moved(cg, n);
             if (!acc) {
                 acc = arm;
@@ -534,10 +551,22 @@ static void check_stmt(CG *cg, Stmt *s) {
         sw.broken = 0;
         sw.up = mv_switch;
         mv_switch = &sw;
+        const char *st = infer_type(cg, s->as.switch_stmt.scrut);
+        EnumDef *ed = is_tagged_enum(cg, st) ? enum_find_canon(cg, st) : NULL;
         for (int i = 0; i < s->as.switch_stmt.ncases; i++) {
+            SwitchCase *sc = &s->as.switch_stmt.cases[i];
             restore_moved(cg, before, n);
             var_scope_push(cg);
-            check_block(cg, s->as.switch_stmt.cases[i].body);
+            if (ed && sc->nbindings > 0) {
+                int vidx = (int)sc->vals[0]->as.int_lit.value;
+                for (int k = 0; k < sc->nbindings; k++) {
+                    if (!strcmp(sc->bindings[k], "_"))
+                        continue;
+                    var_redecl_check(cg, sc->bindings[k], sc->line);
+                    var_push(cg, sc->bindings[k], ed->v_types[vidx][k]);
+                }
+            }
+            check_block(cg, sc->body);
             var_scope_pop(cg);
             arms_add(cg, &arms, n);
         }

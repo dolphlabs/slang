@@ -114,6 +114,12 @@ gc struct Account {                      // heap object: shared by reference
 
 enum Status { Pending, Paid, Shipped }
 
+enum Shape {
+    Point,
+    Circle(float),
+    Rect(float, float),
+}
+
 struct Box[T] { v: T }
 
 fn first[T](xs: [T]) -> T { return xs[0]; }   // T is inferred at the call
@@ -134,12 +140,20 @@ switch s {
     case Status.Pending { println("wait"); }
     case Status.Paid, Status.Shipped { println("done"); }
 }
+let sh = Shape.Rect(3.0, 4.0);
+let area = switch sh {
+    case Shape.Point { 0.0 }
+    case Shape.Circle(r) { 3.14 * r * r }
+    case Shape.Rect(w, h) { w * h }
+};
+println(area);
 println(Box { v: 41 }.v + 1);
 println(first(["a", "b"]));
 ```
 
 `pub` exports a function, type, method or constant from its package. A
-`switch` on an enum must cover every variant or have `default`.
+`switch` on an enum must cover every variant (binding payloads with
+`Variant(x, _)`) or have `default`.
 
 ## Errors: opt, result, guard let, ??
 

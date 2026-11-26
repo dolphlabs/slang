@@ -345,6 +345,10 @@ const char *json_dec_fn(CG *cg, const char *t, int line) {
                      "must be str (got map[%s]...)",
                      k, v, k);
         json_dec_fn(cg, v, line);
+    } else if (is_tagged_enum(cg, t)) {
+        cg_error(line,
+                 "cannot json.decode tagged enum '%s': convert via 'switch'",
+                 enum_find_canon(cg, t)->name);
     } else if (is_enum(cg, t) || is_json_time(t) || is_json_decimal(t)) {
         /* leaf scalar: no element/field types to recurse into */
     } else {
@@ -395,6 +399,10 @@ const char *json_enc_fn(CG *cg, const char *t, int line) {
                      "be str (got map[%s]...)",
                      k, v, k);
         json_enc_fn(cg, v, line);
+    } else if (is_tagged_enum(cg, t)) {
+        cg_error(line,
+                 "cannot json.encode tagged enum '%s': convert via 'switch'",
+                 enum_find_canon(cg, t)->name);
     } else if (is_enum(cg, t) || is_json_time(t) || is_json_decimal(t)) {
         /* leaf scalar: no element/field types to recurse into */
     } else {

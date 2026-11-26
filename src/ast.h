@@ -70,6 +70,9 @@ typedef struct {
 typedef struct {
     Expr **vals;
     int nvals;
+    char **bindings; /* payload variable names (or "_"), NULL when none */
+    int nbindings;
+    int has_parens;  /* 1 if pattern wrote Variant(...), 0 otherwise */
     Block *body;
     int line;
 } SwitchCase;
@@ -79,6 +82,9 @@ typedef struct {
 typedef struct {
     Expr **vals;
     int nvals;
+    char **bindings;
+    int nbindings;
+    int has_parens;
     Expr *value;
     int line;
 } SwitchExprCase;
@@ -153,6 +159,7 @@ struct Expr {
             Expr **args;
             int nargs;
             char *enum_ty;
+            int enum_variant; /* variant index when name is "__enum_ctor" */
             /* A generic function call's resolved instance, cached the
              * first time it is asked for -- so a LATER pass, which may
              * revisit this node without the same cg->expect context the
@@ -349,6 +356,9 @@ struct Stmt {
             char *name;
             int is_pub;
             char **variants;     /* variant names, in declared order */
+            char ***v_types;     /* payload type names per variant, or NULL */
+            int *v_ntypes;       /* payload count per variant (0 for unit) */
+            int has_payload;     /* 1 if any variant carries a payload */
             int *has_explicit;   /* 1 if this variant wrote '= N' itself */
             long long *values;   /* resolved ordinal per variant */
             int nvariants;

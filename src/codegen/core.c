@@ -243,7 +243,7 @@ static const char *const BUILTIN_NAMES[] = {
     "fault_timeout", "fault_reset", "fault_closed", "fault_io",
     "fault_refused", "fault_kind", "fault_code", "fault_op", "peer_v4",
     "peer_port", "trip_new", "link_listen", "link_dial", "__enum_from_int",
-    "__enum_from_str", "__pg_rows_as",
+    "__enum_from_str", "__enum_ctor", "__pg_rows_as",
 };
 #define N_BUILTINS ((int)(sizeof(BUILTIN_NAMES) / sizeof(BUILTIN_NAMES[0])))
 
@@ -766,7 +766,8 @@ void map_kv(const char *t, char **k, char **v) {
  * key path (sl_map_new's kstr=0 case) handles it with no further
  * changes. */
 int is_map_key(CG *cg, const char *t) {
-    return is_int(t) || is_str(t) || !strcmp(t, "bool") || is_enum(cg, t);
+    return is_int(t) || is_str(t) || !strcmp(t, "bool") ||
+           (is_enum(cg, t) && !is_tagged_enum(cg, t));
 }
 
 int is_opt(const char *t) { return !strncmp(t, "opt[", 4); }
@@ -1070,16 +1071,37 @@ StructDef *struct_of_type(CG *cg, const char *t) {
     return struct_find_canon(cg, t);
 }
 
-int type_has_gc_roots(CG *cg, const char *t) {
+static int type_has_gc_roots_rec(CG *cg, const char *t, const void **visiting,
+                                 int nvisiting) {
     if (type_is_gc_ptr(cg, t))
         return 1;
     if (is_result(t)) {
         char *tv, *te;
         result_te(t, &tv, &te);
-        return type_has_gc_roots(cg, tv) || type_has_gc_roots(cg, te);
+        return type_has_gc_roots_rec(cg, tv, visiting, nvisiting) ||
+               type_has_gc_roots_rec(cg, te, visiting, nvisiting);
     }
     if (is_opt(t))
-        return type_has_gc_roots(cg, opt_inner(t));
+        return type_has_gc_roots_rec(cg, opt_inner(t), visiting, nvisiting);
+    EnumDef *ed = enum_find_canon(cg, t);
+    if (ed) {
+        if (!ed->has_payload)
+            return 0;
+        for (int i = 0; i < nvisiting; i++)
+            if (visiting[i] == ed)
+                return 0;
+        if (nvisiting == 64)
+            return 1;
+        visiting[nvisiting++] = ed;
+        for (int v = 0; v < ed->nvariants; v++) {
+            for (int f = 0; f < ed->v_ntypes[v]; f++) {
+                if (type_has_gc_roots_rec(cg, ed->v_types[v][f], visiting,
+                                          nvisiting))
+                    return 1;
+            }
+        }
+        return 0;
+    }
     char *inner = NULL;
     /* An `own` box is malloc'd, but what it HOLDS may be live heap
      * (a str, a list in an `own Rec`): without this, an own-typed
@@ -1093,24 +1115,68 @@ int type_has_gc_roots(CG *cg, const char *t) {
     StructDef *sd = struct_find_canon(cg, t);
     if (!sd || sd->is_gc)
         return 0;
-    return struct_has_gc_fields(cg, sd);
+    for (int i = 0; i < nvisiting; i++)
+        if (visiting[i] == sd)
+            return 0;
+    if (nvisiting == 64)
+        return 1;
+    visiting[nvisiting++] = sd;
+    for (int j = 0; j < sd->nfields; j++)
+        if (type_has_gc_roots_rec(cg, sd->ftypes[j], visiting, nvisiting))
+            return 1;
+    return 0;
+}
+
+int type_has_gc_roots(CG *cg, const char *t) {
+    const void *visiting[64];
+    return type_has_gc_roots_rec(cg, t, visiting, 0);
 }
 
 /* Can a value of this type hold no GC pointer, by construction? Numbers,
- * bool, enums (an int32 ordinal) and value structs made only of those.
+ * bool, unit enums (an int32 ordinal), tagged enums whose payloads are all
+ * pointer-free, and value structs made only of those.
  * A positive list on purpose: anything not named here, including types
  * type_has_gc_roots answers 0 for without proving it (a result of a value
  * struct, a runtime handle), keeps the word-by-word scan. */
-int type_is_pointer_free(CG *cg, const char *t) {
-    if (is_num(t) || !strcmp(t, "bool") || is_enum(cg, t))
+static int type_is_pointer_free_rec(CG *cg, const char *t,
+                                    const void **visiting, int nvisiting) {
+    if (is_num(t) || !strcmp(t, "bool"))
         return 1;
+    EnumDef *ed = enum_find_canon(cg, t);
+    if (ed) {
+        if (!ed->has_payload)
+            return 1;
+        for (int i = 0; i < nvisiting; i++)
+            if (visiting[i] == ed)
+                return 0;
+        if (nvisiting == 64)
+            return 0;
+        visiting[nvisiting++] = ed;
+        for (int v = 0; v < ed->nvariants; v++)
+            for (int f = 0; f < ed->v_ntypes[v]; f++)
+                if (!type_is_pointer_free_rec(cg, ed->v_types[v][f], visiting,
+                                              nvisiting))
+                    return 0;
+        return 1;
+    }
     StructDef *sd = struct_find_canon(cg, t);
     if (!sd || sd->is_gc)
         return 0;
+    for (int i = 0; i < nvisiting; i++)
+        if (visiting[i] == sd)
+            return 0;
+    if (nvisiting == 64)
+        return 0;
+    visiting[nvisiting++] = sd;
     for (int j = 0; j < sd->nfields; j++)
-        if (!type_is_pointer_free(cg, sd->ftypes[j]))
+        if (!type_is_pointer_free_rec(cg, sd->ftypes[j], visiting, nvisiting))
             return 0;
     return 1;
+}
+
+int type_is_pointer_free(CG *cg, const char *t) {
+    const void *visiting[64];
+    return type_is_pointer_free_rec(cg, t, visiting, 0);
 }
 
 /* The flag a list, map, chan or join is built with for its elements
@@ -1153,7 +1219,7 @@ static void append_gc_root_expr_guarded_rec(CG *cg, StrBuf *sb,
                                             const char *guard,
                                             const char *c_expr,
                                             const char *slang_t, int *wrote,
-                                            StructDef **visiting,
+                                            const void **visiting,
                                             int nvisiting) {
     if (type_is_gc_ptr(cg, slang_t)) {
         if ((*wrote)++)
@@ -1184,6 +1250,33 @@ static void append_gc_root_expr_guarded_rec(CG *cg, StrBuf *sb,
                                         xasprintf("%s.v", c_expr),
                                         opt_inner(slang_t), wrote, visiting,
                                         nvisiting);
+        return;
+    }
+    EnumDef *ed = enum_find_canon(cg, slang_t);
+    if (ed) {
+        if (!ed->has_payload)
+            return;
+        for (int i = 0; i < nvisiting; i++)
+            if (visiting[i] == ed)
+                return;
+        if (nvisiting == 64)
+            return;
+        visiting[nvisiting++] = ed;
+        for (int v = 0; v < ed->nvariants; v++) {
+            for (int f = 0; f < ed->v_ntypes[v]; f++) {
+                const char *ft = ed->v_types[v][f];
+                if (!type_has_gc_roots(cg, ft))
+                    continue;
+                char *vg = guard
+                               ? xasprintf("(%s) && ((%s).tag == %d)", guard,
+                                           c_expr, (int)ed->values[v])
+                               : xasprintf("((%s).tag == %d)", c_expr,
+                                           (int)ed->values[v]);
+                char *fe = xasprintf("((%s).u.v%d._%d)", c_expr, v, f);
+                append_gc_root_expr_guarded_rec(cg, sb, vg, fe, ft, wrote,
+                                                visiting, nvisiting);
+            }
+        }
         return;
     }
     char *inner = NULL;
@@ -1232,7 +1325,7 @@ static void append_gc_root_expr_guarded_rec(CG *cg, StrBuf *sb,
 static void append_gc_root_expr_guarded(CG *cg, StrBuf *sb, const char *guard,
                                         const char *c_expr,
                                         const char *slang_t, int *wrote) {
-    StructDef *visiting[64];
+    const void *visiting[64];
     append_gc_root_expr_guarded_rec(cg, sb, guard, c_expr, slang_t, wrote,
                                     visiting, 0);
 }
@@ -1252,7 +1345,7 @@ void append_gc_roots_of(CG *cg, StrBuf *sb, const char *c_expr,
 }
 
 static int count_gc_root_exprs_rec(CG *cg, const char *slang_t,
-                                   StructDef **visiting, int nvisiting) {
+                                   const void **visiting, int nvisiting) {
     if (type_is_gc_ptr(cg, slang_t))
         return 1;
     if (is_result(slang_t)) {
@@ -1264,6 +1357,26 @@ static int count_gc_root_exprs_rec(CG *cg, const char *slang_t,
     if (is_opt(slang_t))
         return count_gc_root_exprs_rec(cg, opt_inner(slang_t), visiting,
                                        nvisiting);
+    EnumDef *ed = enum_find_canon(cg, slang_t);
+    if (ed) {
+        if (!ed->has_payload)
+            return 0;
+        for (int i = 0; i < nvisiting; i++)
+            if (visiting[i] == ed)
+                return 0;
+        if (nvisiting == 64)
+            return 0;
+        visiting[nvisiting++] = ed;
+        int n = 0;
+        for (int v = 0; v < ed->nvariants; v++) {
+            for (int f = 0; f < ed->v_ntypes[v]; f++) {
+                if (type_has_gc_roots(cg, ed->v_types[v][f]))
+                    n += count_gc_root_exprs_rec(cg, ed->v_types[v][f],
+                                                 visiting, nvisiting);
+            }
+        }
+        return n;
+    }
     char *inner = NULL;
     if (type_wrap(slang_t, &inner) == TW_OWN) {
         StructDef *sd = struct_find_canon(cg, inner);
@@ -1303,7 +1416,7 @@ static int count_gc_root_exprs_rec(CG *cg, const char *slang_t,
 }
 
 int count_gc_root_exprs(CG *cg, const char *slang_t) {
-    StructDef *visiting[64];
+    const void *visiting[64];
     return count_gc_root_exprs_rec(cg, slang_t, visiting, 0);
 }
 
@@ -2036,6 +2149,24 @@ void ambient_push_guarded_value_roots(CG *cg, const char *guard,
                                          opt_inner(t));
         return;
     }
+    if (is_tagged_enum(cg, t)) {
+        EnumDef *ed = enum_find_canon(cg, t);
+        for (int v = 0; v < ed->nvariants; v++) {
+            for (int f = 0; f < ed->v_ntypes[v]; f++) {
+                const char *ft = ed->v_types[v][f];
+                if (!type_has_gc_roots(cg, ft))
+                    continue;
+                char *vg = guard
+                               ? xasprintf("(%s) && ((%s).tag == %d)", guard,
+                                           expr, (int)ed->values[v])
+                               : xasprintf("((%s).tag == %d)", expr,
+                                           (int)ed->values[v]);
+                char *fe = xasprintf("((%s).u.v%d._%d)", expr, v, f);
+                ambient_push_guarded_value_roots(cg, vg, fe, ft);
+            }
+        }
+        return;
+    }
     StructDef *sd = struct_find_canon(cg, t);
     if (!sd || sd->is_gc)
         return;
@@ -2687,7 +2818,7 @@ const char *ctype_of(CG *cg, const char *t) {
     if (m)
         return m;
     if (is_enum(cg, t))
-        return "int32_t";
+        return is_tagged_enum(cg, t) ? mangle_enum(t) : "int32_t";
     if (is_map(t))
         return "sl_map *";
     if (is_chan(t))
@@ -3111,8 +3242,9 @@ static int switch_check_labels(int kind, const char *scrut_t,
  * cover every variant. label_groups[i] holds arm i's labels;
  * group_counts[i] its count. Returns the scrutinee kind (1/2/3/4). */
 int switch_validate(CG *cg, const char *scrut_t, Expr ***label_groups,
-                    int *group_counts, int ngroups, int has_default,
-                    int line) {
+                    int *group_counts, char ***bindings_arr,
+                    int *nbindings_arr, int *has_parens_arr,
+                    int ngroups, int has_default, int line) {
     int kind = switch_kind(cg, scrut_t);
     if (!kind)
         cg_error(line,
@@ -3135,6 +3267,71 @@ int switch_validate(CG *cg, const char *scrut_t, Expr ***label_groups,
     for (int i = 0; i < ngroups; i++)
         switch_check_labels(kind, scrut_t, ed, label_groups[i],
                             group_counts[i], seen_ints, seen_strs, &nseen);
+    for (int i = 0; i < ngroups; i++) {
+        int hp = has_parens_arr ? has_parens_arr[i] : 0;
+        int nb = nbindings_arr ? nbindings_arr[i] : 0;
+        char **bs = bindings_arr ? bindings_arr[i] : NULL;
+        int arm_line = group_counts[i] > 0 ? label_groups[i][0]->line : line;
+        if (!ed || !ed->has_payload) {
+            if (hp || nb > 0)
+                cg_error(arm_line,
+                         "pattern bindings are only allowed when switching on "
+                         "a tagged enum");
+            continue;
+        }
+        if (hp && group_counts[i] > 1)
+            cg_error(arm_line,
+                     "switch case with payload bindings cannot be combined "
+                     "with multiple labels");
+        for (int j = 0; j < group_counts[i]; j++) {
+            long long vval = label_groups[i][j]->as.int_lit.value;
+            int vidx = -1;
+            for (int k = 0; k < ed->nvariants; k++) {
+                if (ed->values[k] == vval) {
+                    vidx = k;
+                    break;
+                }
+            }
+            if (vidx < 0)
+                continue;
+            int nf = ed->v_ntypes[vidx];
+            if (nf > 0 && group_counts[i] > 1)
+                cg_error(label_groups[i][j]->line,
+                         "payload variant '%s.%s' cannot be combined with "
+                         "other labels in one 'case'",
+                         ed->name, ed->variants[vidx]);
+            if (nf > 0 && !hp)
+                cg_error(label_groups[i][j]->line,
+                         "variant '%s.%s' has %d payload field(s); bind or "
+                         "ignore with '%s.%s(...)'",
+                         ed->name, ed->variants[vidx], nf, ed->name,
+                         ed->variants[vidx]);
+            if (nf == 0 && hp)
+                cg_error(arm_line,
+                         "unit variant '%s.%s' takes no pattern parentheses; "
+                         "write '%s.%s'",
+                         ed->name, ed->variants[vidx], ed->name,
+                         ed->variants[vidx]);
+            if (hp && nb != nf)
+                cg_error(arm_line,
+                         "variant '%s.%s' has %d payload field(s), but pattern "
+                         "binds %d",
+                         ed->name, ed->variants[vidx], nf, nb);
+            if (hp) {
+                for (int a = 0; a < nb; a++) {
+                    if (!strcmp(bs[a], "_"))
+                        continue;
+                    for (int b = 0; b < a; b++) {
+                        if (!strcmp(bs[a], bs[b]))
+                            cg_error(arm_line,
+                                     "duplicate binding name '%s' in switch "
+                                     "pattern",
+                                     bs[a]);
+                    }
+                }
+            }
+        }
+    }
     if (kind == 4 && !has_default) {
         for (int v = 0; v < ed->nvariants; v++) {
             int found = 0;

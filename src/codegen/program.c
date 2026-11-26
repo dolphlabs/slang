@@ -373,6 +373,8 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
         }
     }
 
+    canon_enum_payloads(cg);
+
     /* pass 3: methods from impl blocks */
     for (i = 0; i < npkgs; i++) {
         Package *p = &pkgs[i];
@@ -681,6 +683,11 @@ static void emit_struct_body(CG *cg, StructDef *sd, unsigned char *state) {
          * declaration above; anything else is not a type that can
          * appear here by value. */
         if (!dep) {
+            EnumDef *ed = enum_find_canon(cg, sd->ftypes[j]);
+            if (ed && ed->has_payload) {
+                emit_enum_body(cg, ed, state, sd->line);
+                continue;
+            }
             ResInst *ri = res_find(cg, sd->ftypes[j]);
             if (ri && res_inst_is_value(cg, ri))
                 emit_res_value_body(cg, ri, state, sd->line);
@@ -728,6 +735,8 @@ void emit_struct_and_value_res_types(CG *cg) {
         cg->res.items[i].body_state = 0;
     for (int i = 0; i < cg->opts.count; i++)
         cg->opts.items[i].body_state = 0;
+    for (int i = 0; i < cg->enums.count; i++)
+        cg->enums.items[i].body_state = 0;
     unsigned char *sstate = NULL;
     if (cg->structs.count) {
         sstate = (unsigned char *)xmalloc((size_t)cg->structs.count);
@@ -743,6 +752,11 @@ void emit_struct_and_value_res_types(CG *cg) {
     for (int i = 0; i < cg->opts.count; i++)
         if (cg->opts.items[i].body_state != 2)
             emit_opt_value_body(cg, &cg->opts.items[i], sstate, 0);
+    for (int i = 0; i < cg->enums.count; i++) {
+        EnumDef *ed = &cg->enums.items[i];
+        if (ed->has_payload && ed->body_state != 2)
+            emit_enum_body(cg, ed, sstate, ed->line);
+    }
     free(sstate);
 }
 
@@ -799,6 +813,36 @@ static void emit_value_marks(CG *cg, const char *path, const char *t) {
     }
     if (is_opt(t)) {
         emit_value_marks(cg, xasprintf("%s.v", path), opt_inner(t));
+        return;
+    }
+    if (is_tagged_enum(cg, t) && type_has_gc_roots(cg, t)) {
+        EnumDef *ed = enum_find_canon(cg, t);
+        emit_line(cg, "switch (o->%s.tag) {", path);
+        cg->indent++;
+        for (int v = 0; v < ed->nvariants; v++) {
+            int any = 0;
+            for (int f = 0; f < ed->v_ntypes[v]; f++) {
+                if (type_has_gc_roots(cg, ed->v_types[v][f])) {
+                    any = 1;
+                    break;
+                }
+            }
+            if (!any)
+                continue;
+            emit_line(cg, "case %d: {", (int)ed->values[v]);
+            cg->indent++;
+            for (int f = 0; f < ed->v_ntypes[v]; f++) {
+                if (type_has_gc_roots(cg, ed->v_types[v][f]))
+                    emit_value_marks(cg, xasprintf("%s.u.v%d._%d", path, v, f),
+                                     ed->v_types[v][f]);
+            }
+            emit_line(cg, "break;");
+            cg->indent--;
+            emit_line(cg, "}");
+        }
+        emit_line(cg, "default: break;");
+        cg->indent--;
+        emit_line(cg, "}");
         return;
     }
     StructDef *sub = struct_find_canon(cg, t);
@@ -929,12 +973,21 @@ static void emit_res_value_dep(CG *cg, const char *t, unsigned char *sstate,
             emit_struct_body(cg, sd, sstate);
         return;
     }
+    EnumDef *ed = enum_find_canon(cg, t);
+    if (ed && ed->has_payload) {
+        emit_enum_body(cg, ed, sstate, line);
+        return;
+    }
     ResInst *inner = res_find(cg, t);
     if (inner && res_inst_is_value(cg, inner))
         emit_res_value_body(cg, inner, sstate, line);
     OptInst *oi = opt_find(cg, t);
     if (oi)
         emit_opt_value_body(cg, oi, sstate, line);
+}
+
+void emit_value_dep(CG *cg, const char *t, unsigned char *sstate, int line) {
+    emit_res_value_dep(cg, t, sstate, line);
 }
 
 /* An opt is held by value ({ has, v }), so its payload's body comes
@@ -1076,7 +1129,8 @@ void emit_opt_res_types(CG *cg) {
  * that needs one always gets one: a value struct holding a str used to
  * get NULL, and the str was freed under the opt or result holding it. */
 static void emit_payload_marks(CG *cg, const char *field, const char *t) {
-    if (type_is_gc_ptr(cg, t) || is_result(t) || is_opt(t)) {
+    if (type_is_gc_ptr(cg, t) || is_result(t) || is_opt(t) ||
+        is_tagged_enum(cg, t)) {
         emit_value_marks(cg, field, t);
         return;
     }
@@ -1818,6 +1872,7 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
     force_native_result_types(cg);
     emit_opt_res_forward_decls(cg);
     emit_struct_fwd_decls(cg);
+    emit_enum_fwd_decls(cg);
     emit_fn_types(cg); /* between the struct names and the struct bodies */
     emit_struct_and_value_res_types(cg);
     emit_struct_tracers(cg);
