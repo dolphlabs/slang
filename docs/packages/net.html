@@ -120,8 +120,7 @@ net.<span class="f">close</span>(cfd);</code></pre></div>
 <span class="k">import</span> <span class="s">&quot;time&quot;</span>;
 
 <span class="k">let</span> deadline = <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">5000000000</span>);   <span class="c">// 5s from now</span>
-<span class="k">let</span> rr = net.<span class="f">recv_until</span>(cfd, <span class="n">4096</span>, deadline);
-<span class="k">guard</span> <span class="k">let</span> data = rr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(rr) {
+<span class="k">guard</span> <span class="k">let</span> data = net.<span class="f">recv_until</span>(cfd, <span class="n">4096</span>, deadline) <span class="k">else</span> |e| {
     <span class="k">if</span> e == <span class="s">&quot;timeout&quot;</span> { net.<span class="f">close</span>(cfd); <span class="k">return</span>; }    <span class="c">// peer went quiet</span>
     log.<span class="f">error</span>(<span class="s">&quot;recv: &quot;</span> + e);                         <span class="c">// peer broke</span>
     <span class="k">return</span>;
@@ -140,12 +139,10 @@ net.<span class="f">close</span>(cfd);</code></pre></div>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;net&quot;</span>;
 <span class="k">import</span> <span class="s">&quot;time&quot;</span>;
 <span class="k">let</span> deadline = <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">5000000000</span>);
-<span class="k">let</span> seeds = net.<span class="f">lookup_srv_until</span>(<span class="s">&quot;_mongodb._tcp.cluster.example&quot;</span>, deadline);
-<span class="k">guard</span> <span class="k">let</span> records = seeds <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(seeds) { <span class="b">println</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }
+<span class="k">guard</span> <span class="k">let</span> records = net.<span class="f">lookup_srv_until</span>(<span class="s">&quot;_mongodb._tcp.cluster.example&quot;</span>, deadline) <span class="k">else</span> |e| { <span class="b">println</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }
 <span class="c">// Each SRV item is &quot;priority:weight:port:target&quot;.</span>
 
-<span class="k">let</span> defaults = net.<span class="f">lookup_txt_until</span>(<span class="s">&quot;cluster.example&quot;</span>, deadline);
-<span class="k">guard</span> <span class="k">let</span> options = defaults <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(defaults) { <span class="b">println</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }
+<span class="k">guard</span> <span class="k">let</span> options = net.<span class="f">lookup_txt_until</span>(<span class="s">&quot;cluster.example&quot;</span>, deadline) <span class="k">else</span> |e| { <span class="b">println</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }
 <span class="c">// Each TXT item is one record with its DNS character-strings concatenated.</span></code></pre></div>
 <p>An empty TXT list means the domain has no TXT defaults. SRV targets retain priority and weight so a client can apply its own ordering policy. The resolver checks the response question and each returned record owner, rejects malformed names and oversized or truncated answers, and returns <code>&quot;timeout&quot;</code> when the deadline expires. At most 64 SRV/TXT lookups may be outstanding per process, bounding their answer buffers to about 4 MiB; excess calls return <code>&quot;DNS resolver request limit reached&quot;</code>. The C resolver library is linked only by programs that call either record lookup; ordinary <code>net</code> programs keep their existing link dependencies.</p>
 <h6 id="unix-domain-sockets">Unix-domain sockets<a class="anchor" href="#unix-domain-sockets" aria-label="Link to this section">#</a></h6>
@@ -168,8 +165,7 @@ fs.<span class="f">close</span>(file);</code></pre></div>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;net&quot;</span>;
 <span class="k">import</span> <span class="s">&quot;time&quot;</span>;
 
-<span class="k">let</span> br = net.<span class="f">udp_bind</span>(<span class="s">&quot;0.0.0.0&quot;</span>, <span class="n">5353</span>);     <span class="c">// &quot;&quot; also means any IPv4 address</span>
-<span class="k">guard</span> <span class="k">let</span> fd = br <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(br) { <span class="b">println</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }
+<span class="k">guard</span> <span class="k">let</span> fd = net.<span class="f">udp_bind</span>(<span class="s">&quot;0.0.0.0&quot;</span>, <span class="n">5353</span>) <span class="k">else</span> |e| { <span class="b">println</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }   <span class="c">// &quot;&quot; also means any IPv4 address</span>
 <span class="k">while</span> <span class="k">true</span> {
     <span class="k">let</span> rr = net.<span class="f">recv_from</span>(fd, <span class="n">0</span>);            <span class="c">// 0 = up to 65535 bytes</span>
     <span class="k">guard</span> <span class="k">let</span> dgram = rr <span class="k">else</span> { <span class="k">break</span>; }
@@ -210,8 +206,7 @@ net.<span class="f">tls_close</span>(cconn);</code></pre></div>
 <p><strong>STARTTLS</strong>: <code>tls_upgrade(fd, host, ctx)</code> runs a client handshake on a socket from <code>net.dial</code> that has already spoken cleartext — how Postgres, SMTP and IMAP switch to TLS. Verification is exactly <code>tls_dial</code>&#x27;s, hostname included, which is why the host is an argument: an fd does not remember what was dialled. On failure the fd is left open for the caller to close; on success it belongs to the returned handle and <code>tls_close</code> closes it. Read no further than the server&#x27;s go-ahead before upgrading: anything a man in the middle queued behind it would otherwise be trusted as if it had arrived encrypted (libpq&#x27;s CVE-2021-23222). <code>tls_upgrade_until(fd, host, ctx, deadline)</code> bounds the handshake; a server that stops answering part way through gives <code>&quot;timeout&quot;</code>. <code>tls_dial_until(host, port, ctx, deadline)</code> is <code>tls_dial</code> with one deadline over the lookup, the connect and the handshake: an unreachable host gives <code>&quot;timeout&quot;</code> at the deadline instead of after the OS connect timeout, which is over a minute on macOS. Like <code>dial</code>, both try every address the name resolves to.</p>
 <p><strong>TLS on a <code>link</code></strong>: <code>c.tls_accept(ctx, deadline)</code> runs the server handshake on a link you already accepted, and from then on the link&#x27;s <code>send</code>/<code>recv</code> go through the session. Everything written against a link -- <code>http.read_frame</code>, <code>http.write</code>, a whole server loop -- serves HTTPS without a second code path, and a plain link pays one pointer test per call. Run it in the connection&#x27;s own task, not the accept loop, so one slow handshake holds up nobody else:</p>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">fn</span> <span class="f">serve</span>(c: <span class="k">link</span>, ctx: <span class="t">rawptr</span>) {
-    <span class="k">let</span> hr = c.<span class="f">tls_accept</span>(ctx, <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">10000000000</span>));
-    <span class="k">guard</span> <span class="k">let</span> _h = hr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(hr) {
+    <span class="k">guard</span> <span class="k">let</span> _h = c.<span class="f">tls_accept</span>(ctx, <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">10000000000</span>)) <span class="k">else</span> |e| {
         <span class="k">return</span>;                  <span class="c">// a scanner, a plaintext client, a timeout</span>
     }
     <span class="c">// read_frame / write on c exactly as over plain TCP</span>

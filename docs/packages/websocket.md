@@ -18,13 +18,11 @@ o.protocols = ["v2.chat"];                       // offered; Conn.protocol is th
 o.headers = ["Authorization: Bearer " + token];
 o.ping_every = 20000000000;                      // keepalive: a ping every 20 s
 o.compress = true;                               // permessage-deflate
-let r = websocket.dial_with("wss://example.com/live", o, deadline);
-guard let ws = r else let e = err_of(r) { panic(e); }
+guard let ws = websocket.dial_with("wss://example.com/live", o, deadline) else |e| { panic(e); }
 
 websocket.send_text(ws, "{\"subscribe\":\"prices\"}", deadline);
 websocket.send_binary(ws, frame, deadline);
-let mr = websocket.recv(ws, deadline);           // result[opt[Message], str]; none: the deadline passed
-guard let got = mr else let e = err_of(mr) { panic(e); }
+guard let got = websocket.recv(ws, deadline) else |e| { panic(e); }   // result[opt[Message], str]; none: the deadline passed
 guard let m = got else { return; }
 if m.kind == websocket.Kind.Text { handle(websocket.text(m)); }
 websocket.close(ws, 1000, "bye", deadline);      // the close handshake

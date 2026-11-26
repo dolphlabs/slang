@@ -20,12 +20,10 @@ let due = t.date().add_months(1);                  // Jan 31 + 1 month = Feb 28/
 let ttl = timez.parse_duration("1h30m") ?? 0;      // nanoseconds; "7d" works too
 println(timez.relative(t.add(-3 * timez.MINUTE), t));  // 3 minutes ago
 
-let zr = timez.load_zone("Europe/Berlin");         // the system's tz database
-guard let berlin = zr else let e = err_of(zr) { println(e); exit(1); }
+guard let berlin = timez.load_zone("Europe/Berlin") else |e| { println(e); exit(1); }   // the system's tz database
 println(t.in_zone(berlin).format("%H:%M %Z"));     // 11:30 CEST
 
-let cr = timez.parse_cron("*/15 9-17 * * MON-FRI");
-guard let cron = cr else let e = err_of(cr) { println(e); exit(1); }
+guard let cron = timez.parse_cron("*/15 9-17 * * MON-FRI") else |e| { println(e); exit(1); }
 let next = cron.next_after(t, berlin);             // opt[Time], DST-aware
 ```
 

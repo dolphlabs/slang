@@ -102,7 +102,7 @@ try { var t = localStorage.getItem("slang-theme");
 <span class="k">struct</span> Config { name: <span class="t">str</span>, db: Db }
 
 <span class="k">let</span> r: <span class="t">result</span>[Config, <span class="t">str</span>] = toml.<span class="f">decode</span>(text);
-<span class="k">guard</span> <span class="k">let</span> cfg = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }   <span class="c">// &quot;toml: line 4: ...&quot;</span>
+<span class="k">guard</span> <span class="k">let</span> cfg = r <span class="k">else</span> |e| { <span class="f">panic</span>(e); }   <span class="c">// &quot;toml: line 4: ...&quot;</span>
 
 toml.<span class="f">to_json</span>(text);                                      <span class="c">// result[str, str]</span></code></pre></div>
 <p><code>decode</code> is <code>to_json</code> then <code>json.decode</code>, so a document decodes into whatever JSON does: structs, <code>gc struct</code>s, lists, maps, <code>opt</code> (a missing key is <code>none</code>) and enums, and an offset date-time into a <code>timez.Time</code>. Tables keep their keys in document order.</p>

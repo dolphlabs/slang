@@ -9,11 +9,9 @@ reconnection with resubscription. It covers core NATS, not JetStream.
 ```slang
 import "nats";
 
-let r = nats.connect("nats://127.0.0.1:4222", deadline);
-guard let nc = r else let e = err_of(r) { panic(e); }
+guard let nc = nats.connect("nats://127.0.0.1:4222", deadline) else |e| { panic(e); }
 
-let sr = nats.subscribe(nc, "orders.*");                  // or queue_subscribe(nc, subj, "workers")
-guard let sub = sr else let e = err_of(sr) { panic(e); }
+guard let sub = nats.subscribe(nc, "orders.*") else |e| { panic(e); }   // or queue_subscribe(nc, subj, "workers")
 nats.publish(nc, "orders.new", b"{\"id\":1}");
 let m = nats.next_msg(sub, deadline);                     // result[opt[Msg], str]: none at the deadline
 

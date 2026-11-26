@@ -102,7 +102,7 @@ try { var t = localStorage.getItem("slang-theme");
 <span class="k">let</span> ips = dns.<span class="f">lookup_ip</span>(r, <span class="s">&quot;api.example.com&quot;</span>, deadline);   <span class="c">// IPv4 first, then IPv6</span>
 <span class="k">let</span> mx = dns.<span class="f">lookup_mx</span>(r, <span class="s">&quot;example.com&quot;</span>, deadline);        <span class="c">// by preference</span>
 <span class="k">let</span> srv = dns.<span class="f">lookup_srv</span>(r, <span class="s">&quot;_imap._tcp.example.com&quot;</span>, deadline);
-<span class="k">guard</span> <span class="k">let</span> found = ips <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(ips) {
+<span class="k">guard</span> <span class="k">let</span> found = ips <span class="k">else</span> |e| {
     <span class="k">if</span> e == <span class="s">&quot;no such host&quot;</span> { /* NXDOMAIN, after every search domain */ }
     <span class="k">return</span>;
 }</code></pre></div>

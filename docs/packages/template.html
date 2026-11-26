@@ -107,7 +107,7 @@ try { var t = localStorage.getItem("slang-theme");
     <span class="s">&quot;&lt;li&gt;&lt;a href=\&quot;{{ $it.url }}\&quot; title=\&quot;{{ $it.name }}\&quot;&gt;{{ add $i 1 }}. {{ $it.name }}&lt;/a&gt;&lt;/li&gt;&quot;</span> +
     <span class="s">&quot;{{ else }}&lt;li&gt;nothing yet&lt;/li&gt;{{ end }}&lt;/ul&gt;&quot;</span> +
     <span class="s">&quot;&lt;script&gt;const user = {{ .user }};&lt;/script&gt;&quot;</span>);
-<span class="k">guard</span> <span class="k">let</span> t = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }      <span class="c">// syntax and context errors, with line numbers</span>
+<span class="k">guard</span> <span class="k">let</span> t = r <span class="k">else</span> |e| { <span class="f">panic</span>(e); }      <span class="c">// syntax and context errors, with line numbers</span>
 <span class="k">let</span> html = template.<span class="f">render</span>(t, page);                       <span class="c">// result[str, str]</span>
 
 template.<span class="f">add</span>(t, <span class="s">&quot;layout&quot;</span>, <span class="s">&quot;&lt;html&gt;&lt;body&gt;{{ template \&quot;page\&quot; . }}&lt;/body&gt;&lt;/html&gt;&quot;</span>);

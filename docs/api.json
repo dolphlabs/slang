@@ -2142,7 +2142,7 @@
           "sig": "gc struct Options",
           "doc": "",
           "file": "stdlib/csv/csv.sl",
-          "line": 36
+          "line": 34
         },
         {
           "name": "options",
@@ -2150,7 +2150,7 @@
           "sig": "fn options() -> Options",
           "doc": "Comma-separated, double-quoted, strict quotes, empty lines skipped, every record as wide as the first; a field up to 1 MiB, a record up to 16 MiB and 4096 fields.",
           "file": "stdlib/csv/csv.sl",
-          "line": 60
+          "line": 58
         },
         {
           "name": "Reader",
@@ -2158,7 +2158,7 @@
           "sig": "gc struct Reader",
           "doc": "",
           "file": "stdlib/csv/csv.sl",
-          "line": 65
+          "line": 63
         },
         {
           "name": "parse",
@@ -2166,7 +2166,7 @@
           "sig": "fn parse(text: str) -> result[[[str]], str]",
           "doc": "The whole input with the default options.",
           "file": "stdlib/csv/csv.sl",
-          "line": 84
+          "line": 82
         },
         {
           "name": "parse_with",
@@ -2174,7 +2174,7 @@
           "sig": "fn parse_with(text: str, o: Options) -> result[[[str]], str]",
           "doc": "",
           "file": "stdlib/csv/csv.sl",
-          "line": 88
+          "line": 86
         },
         {
           "name": "parse_bytes",
@@ -2182,7 +2182,7 @@
           "sig": "fn parse_bytes(data: bytes, o: Options) -> result[[[str]], str]",
           "doc": "",
           "file": "stdlib/csv/csv.sl",
-          "line": 92
+          "line": 90
         },
         {
           "name": "new_reader",
@@ -2190,7 +2190,7 @@
           "sig": "fn new_reader(o: Options) -> Reader",
           "doc": "A reader to feed: records come out of next as they become whole.",
           "file": "stdlib/csv/csv.sl",
-          "line": 130
+          "line": 128
         },
         {
           "name": "feed",
@@ -2198,7 +2198,7 @@
           "sig": "fn feed(r: Reader, chunk: bytes)",
           "doc": "More input. Nothing is copied until a record needs it.",
           "file": "stdlib/csv/csv.sl",
-          "line": 138
+          "line": 136
         },
         {
           "name": "end",
@@ -2206,7 +2206,7 @@
           "sig": "fn end(r: Reader)",
           "doc": "The input is over: next returns what remains, the last record without its line ending included.",
           "file": "stdlib/csv/csv.sl",
-          "line": 147
+          "line": 145
         },
         {
           "name": "finished",
@@ -2214,7 +2214,7 @@
           "sig": "fn finished(r: Reader) -> bool",
           "doc": "Every record has been returned and the input has ended.",
           "file": "stdlib/csv/csv.sl",
-          "line": 152
+          "line": 150
         },
         {
           "name": "line",
@@ -2222,7 +2222,7 @@
           "sig": "fn line(r: Reader) -> int",
           "doc": "The line the next record starts on (for messages of the caller's own).",
           "file": "stdlib/csv/csv.sl",
-          "line": 157
+          "line": 155
         },
         {
           "name": "next",
@@ -2230,7 +2230,7 @@
           "sig": "fn next(r: Reader) -> result[opt[[str]], str]",
           "doc": "The next whole record; none when it needs more input (feed, or end) or when the input is finished.",
           "file": "stdlib/csv/csv.sl",
-          "line": 205
+          "line": 203
         },
         {
           "name": "to_maps",
@@ -2238,7 +2238,7 @@
           "sig": "fn to_maps(rows: [[str]]) -> result[[map[str]str], str]",
           "doc": "The first row as the header, each later row as a map from it. A duplicate or empty header name is an error, as is a row of another width.",
           "file": "stdlib/csv/csv.sl",
-          "line": 319
+          "line": 317
         },
         {
           "name": "WriteOptions",
@@ -2246,7 +2246,7 @@
           "sig": "gc struct WriteOptions",
           "doc": "",
           "file": "stdlib/csv/csv.sl",
-          "line": 352
+          "line": 350
         },
         {
           "name": "write_options",
@@ -2254,7 +2254,7 @@
           "sig": "fn write_options() -> WriteOptions",
           "doc": "",
           "file": "stdlib/csv/csv.sl",
-          "line": 366
+          "line": 364
         },
         {
           "name": "format",
@@ -2262,7 +2262,7 @@
           "sig": "fn format(rows: [[str]]) -> str",
           "doc": "Every row as CSV, with the default write options.",
           "file": "stdlib/csv/csv.sl",
-          "line": 371
+          "line": 369
         },
         {
           "name": "format_with",
@@ -2270,7 +2270,7 @@
           "sig": "fn format_with(rows: [[str]], o: WriteOptions) -> str",
           "doc": "",
           "file": "stdlib/csv/csv.sl",
-          "line": 375
+          "line": 373
         },
         {
           "name": "write_row",
@@ -2278,7 +2278,7 @@
           "sig": "fn write_row(out: builder.Str, row: [str], o: WriteOptions)",
           "doc": "Appends one record to out: for output built a row at a time.",
           "file": "stdlib/csv/csv.sl",
-          "line": 384
+          "line": 382
         }
       ]
     },
@@ -2292,7 +2292,7 @@
           "sig": "let MAX_DIGITS = 38;",
           "doc": "The most significant digits a Decimal holds, and the largest scale.",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 40
+          "line": 39
         },
         {
           "name": "MAX_SCALE",
@@ -2300,7 +2300,7 @@
           "sig": "let MAX_SCALE = 38;",
           "doc": "",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 41
+          "line": 40
         },
         {
           "name": "Decimal",
@@ -2308,7 +2308,7 @@
           "sig": "struct Decimal",
           "doc": "A decimal number. Its fields are the representation, not an API: make one with parse, from_int, from_units or from_float.",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 45
+          "line": 44
         },
         {
           "name": "zero",
@@ -2316,7 +2316,7 @@
           "sig": "fn zero() -> Decimal",
           "doc": "0, at scale 0.",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 72
+          "line": 71
         },
         {
           "name": "from_int",
@@ -2324,7 +2324,7 @@
           "sig": "fn from_int(n: int) -> Decimal",
           "doc": "n, at scale 0. Every int fits.",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 77
+          "line": 76
         },
         {
           "name": "from_units",
@@ -2332,7 +2332,7 @@
           "sig": "fn from_units(units: int, scale: int) -> opt[Decimal]",
           "doc": "units * 10^-scale: from_units(1999, 2) is 19.99. none if scale is outside 0 to 38.",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 83
+          "line": 82
         },
         {
           "name": "parse",
@@ -2340,7 +2340,7 @@
           "sig": "fn parse(s: str) -> result[Decimal, str]",
           "doc": "The decimal written in s: an optional sign, digits, an optional fraction after a point, and an optional exponent (\"1.5e3\", \"2E-4\"). Strict, like to_int: no spaces, no thousands separators, no leading or trailing point, no NaN or infinity. The scale is the number of fraction digits less the exponent (\"1.50\" has scale 2, \"1.5e3\" scale 0); trailing zeros past scale 38 are dropped when they are exact.",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 108
+          "line": 107
         },
         {
           "name": "parse_bytes",
@@ -2348,7 +2348,7 @@
           "sig": "fn parse_bytes(b: bytes, lo: int, hi: int) -> result[Decimal, str]",
           "doc": "parse over b[lo..hi], with no str made: for a number inside a request body or a wire buffer.",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 114
+          "line": 113
         },
         {
           "name": "from_float",
@@ -2356,7 +2356,7 @@
           "sig": "fn from_float(f: float, scale: int, mode: Rounding) -> opt[Decimal]",
           "doc": "The decimal nearest to f, rounded to `scale` digits by `mode`; none for NaN, an infinity, a scale outside 0 to 38, or a value past 38 digits. f is read through its shortest round-trip text, so 0.1 gives exactly 0.1, not the binary fraction nearest it.",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 214
+          "line": 213
         },
         {
           "name": "scale_of",
@@ -2364,7 +2364,7 @@
           "sig": "fn scale_of(d: Decimal) -> int",
           "doc": "The digits after the point.",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 228
+          "line": 227
         },
         {
           "name": "precision",
@@ -2372,7 +2372,7 @@
           "sig": "fn precision(d: Decimal) -> int",
           "doc": "How many significant digits the coefficient has (0 has 1).",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 233
+          "line": 232
         },
         {
           "name": "is_zero",
@@ -2380,7 +2380,7 @@
           "sig": "fn is_zero(d: Decimal) -> bool",
           "doc": "",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 237
+          "line": 236
         },
         {
           "name": "is_neg",
@@ -2388,7 +2388,7 @@
           "sig": "fn is_neg(d: Decimal) -> bool",
           "doc": "",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 241
+          "line": 240
         },
         {
           "name": "sign",
@@ -2396,7 +2396,7 @@
           "sig": "fn sign(d: Decimal) -> int",
           "doc": "-1, 0 or 1.",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 246
+          "line": 245
         },
         {
           "name": "format",
@@ -2404,7 +2404,7 @@
           "sig": "fn format(d: Decimal) -> str",
           "doc": "Plain notation, every digit of the scale kept: \"-19.90\", \"0.005\", \"42\".",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 257
+          "line": 256
         },
         {
           "name": "to_units",
@@ -2412,7 +2412,7 @@
           "sig": "fn to_units(d: Decimal, scale: int, mode: Rounding) -> opt[int]",
           "doc": "d in units of 10^-scale, rounded by mode: to_units(19.999, 2, HalfUp) is 2000. none if scale is outside 0 to 38 or the units do not fit an int.",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 302
+          "line": 301
         },
         {
           "name": "int_of",
@@ -2420,7 +2420,7 @@
           "sig": "fn int_of(d: Decimal, mode: Rounding) -> opt[int]",
           "doc": "d rounded to a whole number by mode, as an int; none past an int.",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 323
+          "line": 322
         },
         {
           "name": "float_of",
@@ -2428,7 +2428,7 @@
           "sig": "fn float_of(d: Decimal) -> float",
           "doc": "The float nearest to d. Floats cannot hold most decimals exactly: use this for display or statistics, never to compute money.",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 329
+          "line": 328
         },
         {
           "name": "cmp",
@@ -2436,7 +2436,7 @@
           "sig": "fn cmp(a: Decimal, b: Decimal) -> int",
           "doc": "-1, 0 or 1 as a is less than, equal to or greater than b, by value: cmp(1.5, 1.50) is 0.",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 337
+          "line": 336
         },
         {
           "name": "eq",
@@ -2444,7 +2444,7 @@
           "sig": "fn eq(a: Decimal, b: Decimal) -> bool",
           "doc": "a and b are the same number, whatever their scales.",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 357
+          "line": 356
         },
         {
           "name": "lt",
@@ -2452,7 +2452,7 @@
           "sig": "fn lt(a: Decimal, b: Decimal) -> bool",
           "doc": "",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 361
+          "line": 360
         },
         {
           "name": "le",
@@ -2460,7 +2460,7 @@
           "sig": "fn le(a: Decimal, b: Decimal) -> bool",
           "doc": "",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 365
+          "line": 364
         },
         {
           "name": "gt",
@@ -2468,7 +2468,7 @@
           "sig": "fn gt(a: Decimal, b: Decimal) -> bool",
           "doc": "",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 369
+          "line": 368
         },
         {
           "name": "ge",
@@ -2476,7 +2476,7 @@
           "sig": "fn ge(a: Decimal, b: Decimal) -> bool",
           "doc": "",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 373
+          "line": 372
         },
         {
           "name": "min",
@@ -2484,7 +2484,7 @@
           "sig": "fn min(a: Decimal, b: Decimal) -> Decimal",
           "doc": "",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 377
+          "line": 376
         },
         {
           "name": "max",
@@ -2492,7 +2492,7 @@
           "sig": "fn max(a: Decimal, b: Decimal) -> Decimal",
           "doc": "",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 384
+          "line": 383
         },
         {
           "name": "neg",
@@ -2500,7 +2500,7 @@
           "sig": "fn neg(d: Decimal) -> Decimal",
           "doc": "",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 393
+          "line": 392
         },
         {
           "name": "abs",
@@ -2508,7 +2508,7 @@
           "sig": "fn abs(d: Decimal) -> Decimal",
           "doc": "",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 399
+          "line": 398
         },
         {
           "name": "add",
@@ -2516,7 +2516,7 @@
           "sig": "fn add(a: Decimal, b: Decimal) -> opt[Decimal]",
           "doc": "a + b, exactly, at the larger of the two scales; none past 38 digits.",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 406
+          "line": 405
         },
         {
           "name": "sub",
@@ -2524,7 +2524,7 @@
           "sig": "fn sub(a: Decimal, b: Decimal) -> opt[Decimal]",
           "doc": "a - b, exactly, at the larger of the two scales; none past 38 digits.",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 422
+          "line": 421
         },
         {
           "name": "mul",
@@ -2532,7 +2532,7 @@
           "sig": "fn mul(a: Decimal, b: Decimal) -> opt[Decimal]",
           "doc": "a * b, exactly, at the sum of the scales; none if the product needs more than 38 digits or a scale past 38 (use mul_round for those).",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 438
+          "line": 437
         },
         {
           "name": "mul_round",
@@ -2540,7 +2540,7 @@
           "sig": "fn mul_round(a: Decimal, b: Decimal, scale: int, mode: Rounding) -> opt[Decimal]",
           "doc": "a * b rounded to `scale` digits by mode; none if scale is outside 0 to 38 or the rounded product needs more than 38 digits.",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 452
+          "line": 451
         },
         {
           "name": "div",
@@ -2548,7 +2548,7 @@
           "sig": "fn div(a: Decimal, b: Decimal, scale: int, mode: Rounding) -> result[Decimal, str]",
           "doc": "a / b rounded to `scale` digits by mode. An error for division by zero, a scale outside 0 to 38, or a quotient past 38 digits.",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 474
+          "line": 473
         },
         {
           "name": "round",
@@ -2556,7 +2556,7 @@
           "sig": "fn round(d: Decimal, scale: int, mode: Rounding) -> opt[Decimal]",
           "doc": "d with exactly `scale` digits after the point: rounded by mode when that is fewer than it has, padded with zeros when more. none if scale is outside 0 to 38 or the result needs more than 38 digits.",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 516
+          "line": 515
         },
         {
           "name": "normalize",
@@ -2564,7 +2564,7 @@
           "sig": "fn normalize(d: Decimal) -> Decimal",
           "doc": "d with trailing fraction zeros removed: 1.500 becomes 1.5, 2.00 becomes 2. Use it before a Decimal becomes a map key.",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 537
+          "line": 536
         },
         {
           "name": "split",
@@ -2572,7 +2572,7 @@
           "sig": "fn split(d: Decimal, n: int) -> [Decimal]",
           "doc": "d in n parts at d's scale that add up to d exactly, as equal as they can be: the first ones take the leftover smallest units. split(100.00, 3) is [33.34, 33.33, 33.33]. Empty when n is not positive.",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 555
+          "line": 554
         },
         {
           "name": "allocate",
@@ -2580,7 +2580,7 @@
           "sig": "fn allocate(d: Decimal, weights: [int]) -> result[[Decimal], str]",
           "doc": "d divided in proportion to weights, at d's scale, adding up to d exactly: each part is rounded down and the leftover smallest units go to the parts with the largest remainders (earlier ones first on a tie). allocate(10.00, [1, 2]) is [3.33, 6.67]. An error for an empty list, a negative weight or weights summing to zero.",
           "file": "stdlib/decimal/decimal.sl",
-          "line": 568
+          "line": 567
         }
       ]
     },
@@ -10727,7 +10727,7 @@
           "sig": "gc struct Client",
           "doc": "",
           "file": "stdlib/memcache/memcache.sl",
-          "line": 23
+          "line": 22
         },
         {
           "name": "new",
@@ -10735,7 +10735,7 @@
           "sig": "fn new(servers: [str]) -> Client",
           "doc": "",
           "file": "stdlib/memcache/memcache.sl",
-          "line": 32
+          "line": 31
         },
         {
           "name": "Item",
@@ -10743,7 +10743,7 @@
           "sig": "struct Item",
           "doc": "",
           "file": "stdlib/memcache/memcache.sl",
-          "line": 38
+          "line": 37
         },
         {
           "name": "get",
@@ -10751,7 +10751,7 @@
           "sig": "fn get(c: Client, key: str, deadline: until) -> result[opt[bytes], str]",
           "doc": "The value for key, or none on a miss.",
           "file": "stdlib/memcache/memcache.sl",
-          "line": 45
+          "line": 44
         },
         {
           "name": "gets",
@@ -10759,7 +10759,7 @@
           "sig": "fn gets(c: Client, key: str, deadline: until) -> result[opt[Item], str]",
           "doc": "The item for key with its cas token, or none on a miss.",
           "file": "stdlib/memcache/memcache.sl",
-          "line": 53
+          "line": 52
         },
         {
           "name": "get_multi",
@@ -10767,7 +10767,7 @@
           "sig": "fn get_multi(c: Client, keys: [str], deadline: until) -> result[map[str]bytes, str]",
           "doc": "The values of every key found, one request per server.",
           "file": "stdlib/memcache/memcache.sl",
-          "line": 70
+          "line": 69
         },
         {
           "name": "set",
@@ -10775,7 +10775,7 @@
           "sig": "fn set(c: Client, key: str, value: bytes, ttl: int, deadline: until) -> result[bool, str]",
           "doc": "Stores value for ttl seconds (0: no expiry; over 30 days is read by memcached as a unix time).",
           "file": "stdlib/memcache/memcache.sl",
-          "line": 96
+          "line": 95
         },
         {
           "name": "add",
@@ -10783,7 +10783,7 @@
           "sig": "fn add(c: Client, key: str, value: bytes, ttl: int, deadline: until) -> result[bool, str]",
           "doc": "Stores only if the key is absent: false if it was there.",
           "file": "stdlib/memcache/memcache.sl",
-          "line": 101
+          "line": 100
         },
         {
           "name": "replace",
@@ -10791,7 +10791,7 @@
           "sig": "fn replace(c: Client, key: str, value: bytes, ttl: int, deadline: until) -> result[bool, str]",
           "doc": "Stores only if the key is present: false if it was not.",
           "file": "stdlib/memcache/memcache.sl",
-          "line": 106
+          "line": 105
         },
         {
           "name": "cas",
@@ -10799,7 +10799,7 @@
           "sig": "fn cas(c: Client, key: str, value: bytes, ttl: int, cas_token: int, deadline: until) -> result[bool, str]",
           "doc": "Stores only if the item is unchanged since gets returned cas: false if another writer got there first (or the key is gone).",
           "file": "stdlib/memcache/memcache.sl",
-          "line": 112
+          "line": 111
         },
         {
           "name": "delete",
@@ -10807,7 +10807,7 @@
           "sig": "fn delete(c: Client, key: str, deadline: until) -> result[bool, str]",
           "doc": "Deletes key: false if it was not there.",
           "file": "stdlib/memcache/memcache.sl",
-          "line": 118
+          "line": 117
         },
         {
           "name": "incr",
@@ -10815,7 +10815,7 @@
           "sig": "fn incr(c: Client, key: str, delta: int, deadline: until) -> result[opt[int], str]",
           "doc": "Adds delta to a numeric value: the new value, or none if the key is absent.",
           "file": "stdlib/memcache/memcache.sl",
-          "line": 128
+          "line": 127
         },
         {
           "name": "decr",
@@ -10823,7 +10823,7 @@
           "sig": "fn decr(c: Client, key: str, delta: int, deadline: until) -> result[opt[int], str]",
           "doc": "Subtracts delta, stopping at 0 as memcached does.",
           "file": "stdlib/memcache/memcache.sl",
-          "line": 133
+          "line": 132
         },
         {
           "name": "touch",
@@ -10831,7 +10831,7 @@
           "sig": "fn touch(c: Client, key: str, ttl: int, deadline: until) -> result[bool, str]",
           "doc": "Gives key a new ttl: false if it was not there.",
           "file": "stdlib/memcache/memcache.sl",
-          "line": 138
+          "line": 137
         },
         {
           "name": "close",
@@ -10839,7 +10839,7 @@
           "sig": "fn close(c: Client)",
           "doc": "Closes every idle connection.",
           "file": "stdlib/memcache/memcache.sl",
-          "line": 147
+          "line": 146
         }
       ]
     },
@@ -11655,7 +11655,7 @@
           "sig": "gc struct Config",
           "doc": "",
           "file": "stdlib/mysql/mysql.sl",
-          "line": 68
+          "line": 67
         },
         {
           "name": "parse_url",
@@ -11663,7 +11663,7 @@
           "sig": "fn parse_url(url: str) -> result[Config, str]",
           "doc": "mysql://user:password@host:port/database?sslmode=require  Parameters: sslmode (disable, require; verify-full is require), sslrootcert (a CA bundle), server_public_key (a PEM file), allow_public_key_retrieval (true), time_zone (e.g. +00:00), statement_cache (0 to 65536). Any other parameter is an error: a misspelt sslmode silently dropped would connect in the clear.  TLS is required by default, except to a loopback host or over a Unix socket (host=/path/to/mysqld.sock, or the path percent-encoded as the host), where it is off.",
           "file": "stdlib/mysql/mysql.sl",
-          "line": 106
+          "line": 105
         },
         {
           "name": "Conn",
@@ -11671,7 +11671,7 @@
           "sig": "gc struct Conn",
           "doc": "",
           "file": "stdlib/mysql/mysql.sl",
-          "line": 266
+          "line": 265
         },
         {
           "name": "connect",
@@ -11679,7 +11679,7 @@
           "sig": "fn connect(url: str, deadline: until) -> result[Conn, str]",
           "doc": "",
           "file": "stdlib/mysql/mysql.sl",
-          "line": 301
+          "line": 300
         },
         {
           "name": "connect_config",
@@ -11687,7 +11687,7 @@
           "sig": "fn connect_config(cfg: Config, deadline: until) -> result[Conn, str]",
           "doc": "The deadline covers the whole connection: the lookup, the TCP connect, TLS, authentication and any time_zone setting.",
           "file": "stdlib/mysql/mysql.sl",
-          "line": 309
+          "line": 308
         },
         {
           "name": "close",
@@ -11695,7 +11695,7 @@
           "sig": "fn close(c: Conn)",
           "doc": "Ends the session politely (COM_QUIT) and closes the socket.",
           "file": "stdlib/mysql/mysql.sl",
-          "line": 348
+          "line": 347
         },
         {
           "name": "usable",
@@ -11703,7 +11703,7 @@
           "sig": "fn usable(c: Conn) -> bool",
           "doc": "Is the connection still usable? False once closed or broken.",
           "file": "stdlib/mysql/mysql.sl",
-          "line": 360
+          "line": 359
         },
         {
           "name": "in_transaction",
@@ -11711,7 +11711,7 @@
           "sig": "fn in_transaction(c: Conn) -> bool",
           "doc": "Inside a transaction (as the server last reported)?",
           "file": "stdlib/mysql/mysql.sl",
-          "line": 365
+          "line": 364
         },
         {
           "name": "server_version",
@@ -11719,7 +11719,7 @@
           "sig": "fn server_version(c: Conn) -> str",
           "doc": "The server's version string (\"8.4.3\", \"11.4.4-MariaDB-...\").",
           "file": "stdlib/mysql/mysql.sl",
-          "line": 370
+          "line": 369
         },
         {
           "name": "connection_id",
@@ -11727,7 +11727,7 @@
           "sig": "fn connection_id(c: Conn) -> int",
           "doc": "The server's id for this connection (what KILL takes).",
           "file": "stdlib/mysql/mysql.sl",
-          "line": 375
+          "line": 374
         },
         {
           "name": "last_insert_id",
@@ -11735,7 +11735,7 @@
           "sig": "fn last_insert_id(c: Conn) -> int",
           "doc": "The AUTO_INCREMENT value the last statement generated, and the rows it changed, as the server reported them.",
           "file": "stdlib/mysql/mysql.sl",
-          "line": 381
+          "line": 380
         },
         {
           "name": "affected_rows",
@@ -11743,7 +11743,7 @@
           "sig": "fn affected_rows(c: Conn) -> int",
           "doc": "",
           "file": "stdlib/mysql/mysql.sl",
-          "line": 385
+          "line": 384
         },
         {
           "name": "ping",
@@ -11751,7 +11751,7 @@
           "sig": "fn ping(c: Conn, deadline: until) -> result[bool, str]",
           "doc": "Asks the server whether it is there (COM_PING).",
           "file": "stdlib/mysql/mysql.sl",
-          "line": 390
+          "line": 389
         },
         {
           "name": "sqlstate",
@@ -11759,7 +11759,7 @@
           "sig": "fn sqlstate(e: str) -> str",
           "doc": "The SQLSTATE of an error from this package (\"23000\"), or \"\" when the error did not come from the server.",
           "file": "stdlib/mysql/mysql.sl",
-          "line": 782
+          "line": 781
         },
         {
           "name": "error_code",
@@ -11767,7 +11767,7 @@
           "sig": "fn error_code(e: str) -> int",
           "doc": "The server's error number (1062 for a duplicate key), or 0.",
           "file": "stdlib/mysql/mysql.sl",
-          "line": 791
+          "line": 790
         },
         {
           "name": "native_password_scramble",
@@ -11775,7 +11775,7 @@
           "sig": "fn native_password_scramble(password: str, nonce: bytes) -> bytes",
           "doc": "mysql_native_password: SHA1(pw) XOR SHA1(nonce + SHA1(SHA1(pw))).",
           "file": "stdlib/mysql/mysql.sl",
-          "line": 933
+          "line": 932
         },
         {
           "name": "sha2_password_scramble",
@@ -11783,7 +11783,7 @@
           "sig": "fn sha2_password_scramble(password: str, nonce: bytes) -> bytes",
           "doc": "caching_sha2_password: SHA256(pw) XOR SHA256(SHA256(SHA256(pw)) + nonce).",
           "file": "stdlib/mysql/mysql.sl",
-          "line": 943
+          "line": 942
         },
         {
           "name": "Pool",
@@ -12053,7 +12053,7 @@
           "sig": "gc struct Options",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 36
+          "line": 34
         },
         {
           "name": "options",
@@ -12061,7 +12061,7 @@
           "sig": "fn options(url: str) -> Options",
           "doc": "Defaults for one server URL: nats://host:port, tls://host:port (TLS from the first byte) or nats://user:pass@host:port / nats://token@host.",
           "file": "stdlib/nats/nats.sl",
-          "line": 60
+          "line": 58
         },
         {
           "name": "with_creds",
@@ -12069,7 +12069,7 @@
           "sig": "fn with_creds(o: Options, creds_text: str) -> result[Options, str]",
           "doc": "Options with the user JWT and nkey seed of a .creds file.",
           "file": "stdlib/nats/nats.sl",
-          "line": 83
+          "line": 81
         },
         {
           "name": "Msg",
@@ -12077,7 +12077,7 @@
           "sig": "gc struct Msg",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 102
+          "line": 100
         },
         {
           "name": "Sub",
@@ -12085,7 +12085,7 @@
           "sig": "gc struct Sub",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 111
+          "line": 109
         },
         {
           "name": "Conn",
@@ -12093,7 +12093,7 @@
           "sig": "gc struct Conn",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 138
+          "line": 136
         },
         {
           "name": "connect",
@@ -12101,7 +12101,7 @@
           "sig": "fn connect(url: str, deadline: until) -> result[Conn, str]",
           "doc": "Connect to url (see options).",
           "file": "stdlib/nats/nats.sl",
-          "line": 182
+          "line": 180
         },
         {
           "name": "connect_with",
@@ -12109,7 +12109,7 @@
           "sig": "fn connect_with(o: Options, deadline: until) -> result[Conn, str]",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 186
+          "line": 184
         },
         {
           "name": "publish",
@@ -12117,7 +12117,7 @@
           "sig": "fn publish(nc: Conn, subject: str, data: bytes) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1095
+          "line": 1093
         },
         {
           "name": "publish_reply",
@@ -12125,7 +12125,7 @@
           "sig": "fn publish_reply(nc: Conn, subject: str, reply: str, data: bytes) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1099
+          "line": 1097
         },
         {
           "name": "publish_headers",
@@ -12133,7 +12133,7 @@
           "sig": "fn publish_headers(nc: Conn, subject: str, headers: map[str][str], data: bytes) -> result[bool, str]",
           "doc": "Publish with headers (each key may carry several values).",
           "file": "stdlib/nats/nats.sl",
-          "line": 1104
+          "line": 1102
         },
         {
           "name": "publish_full",
@@ -12141,7 +12141,7 @@
           "sig": "fn publish_full(nc: Conn, subject: str, reply: str, headers: map[str][str], data: bytes) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1109
+          "line": 1107
         },
         {
           "name": "subscribe",
@@ -12149,7 +12149,7 @@
           "sig": "fn subscribe(nc: Conn, subject: str) -> result[Sub, str]",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1221
+          "line": 1219
         },
         {
           "name": "queue_subscribe",
@@ -12157,7 +12157,7 @@
           "sig": "fn queue_subscribe(nc: Conn, subject: str, queue: str) -> result[Sub, str]",
           "doc": "Members of one queue group share the messages: each goes to one of them.",
           "file": "stdlib/nats/nats.sl",
-          "line": 1226
+          "line": 1224
         },
         {
           "name": "next_msg",
@@ -12165,7 +12165,7 @@
           "sig": "fn next_msg(sub: Sub, deadline: until) -> result[opt[Msg], str]",
           "doc": "The next message, waiting until deadline: none when the deadline passes or the subscription has ended (unsubscribed, max reached, connection closed).",
           "file": "stdlib/nats/nats.sl",
-          "line": 1257
+          "line": 1255
         },
         {
           "name": "unsubscribe",
@@ -12173,7 +12173,7 @@
           "sig": "fn unsubscribe(sub: Sub) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1280
+          "line": 1278
         },
         {
           "name": "auto_unsubscribe",
@@ -12181,7 +12181,7 @@
           "sig": "fn auto_unsubscribe(sub: Sub, max: int) -> result[bool, str]",
           "doc": "End the subscription by itself after max more messages.",
           "file": "stdlib/nats/nats.sl",
-          "line": 1291
+          "line": 1289
         },
         {
           "name": "request",
@@ -12189,7 +12189,7 @@
           "sig": "fn request(nc: Conn, subject: str, data: bytes, deadline: until) -> result[Msg, str]",
           "doc": "Publish data to subject with a fresh reply subject and wait for the first reply. \"no responders\" (status 503, when nothing listens) is an error at once instead of a timeout.",
           "file": "stdlib/nats/nats.sl",
-          "line": 1304
+          "line": 1302
         },
         {
           "name": "request_headers",
@@ -12197,7 +12197,7 @@
           "sig": "fn request_headers(nc: Conn, subject: str, headers: map[str][str], data: bytes, deadline: until) -> result[Msg, str]",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1308
+          "line": 1306
         },
         {
           "name": "respond",
@@ -12205,7 +12205,7 @@
           "sig": "fn respond(nc: Conn, req: Msg, data: bytes) -> result[bool, str]",
           "doc": "Reply to a request message.",
           "file": "stdlib/nats/nats.sl",
-          "line": 1354
+          "line": 1352
         },
         {
           "name": "flush",
@@ -12213,7 +12213,7 @@
           "sig": "fn flush(nc: Conn, deadline: until) -> result[bool, str]",
           "doc": "Wait until the server has processed everything sent so far (a PING round trip).",
           "file": "stdlib/nats/nats.sl",
-          "line": 1365
+          "line": 1363
         },
         {
           "name": "drain",
@@ -12221,7 +12221,7 @@
           "sig": "fn drain(nc: Conn, deadline: until) -> result[bool, str]",
           "doc": "Unsubscribe everything, let what is in flight arrive, then close.",
           "file": "stdlib/nats/nats.sl",
-          "line": 1388
+          "line": 1386
         },
         {
           "name": "close",
@@ -12229,7 +12229,7 @@
           "sig": "fn close(nc: Conn)",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1411
+          "line": 1409
         },
         {
           "name": "last_error",
@@ -12237,7 +12237,7 @@
           "sig": "fn last_error(nc: Conn) -> str",
           "doc": "Why the connection is closed or last broke (\"\" while healthy).",
           "file": "stdlib/nats/nats.sl",
-          "line": 1458
+          "line": 1456
         },
         {
           "name": "is_connected",
@@ -12245,7 +12245,7 @@
           "sig": "fn is_connected(nc: Conn) -> bool",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1462
+          "line": 1460
         },
         {
           "name": "reconnects",
@@ -12253,7 +12253,7 @@
           "sig": "fn reconnects(nc: Conn) -> int",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1466
+          "line": 1464
         },
         {
           "name": "nkey_seed_raw",
@@ -13501,7 +13501,7 @@
           "sig": "fn stream(c: Conn, sql: str, args: [Arg], deadline: until) -> result[Rows, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 1981
+          "line": 1979
         },
         {
           "name": "next_row",
@@ -13509,7 +13509,7 @@
           "sig": "fn next_row(c: Conn, rows: Rows, deadline: until) -> result[bool, str]",
           "doc": "Reads the next row of a stream into `rows` (at index 0). Returns false once there are no more; rows.affected and rows.tag are set then.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2033
+          "line": 2031
         },
         {
           "name": "stream_close",
@@ -13517,7 +13517,7 @@
           "sig": "fn stream_close(c: Conn, rows: Rows, deadline: until) -> result[bool, str]",
           "doc": "Ends a stream early. The server is asked to cancel the query first -- and that request is seen through before the rest is drained, so it can never land on a LATER query on this connection -- then whatever it had already sent is read and dropped. The connection is then free.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2068
+          "line": 2066
         },
         {
           "name": "copy_in_start",
@@ -13525,7 +13525,7 @@
           "sig": "fn copy_in_start(c: Conn, sql: str, deadline: until) -> result[bool, str]",
           "doc": "Starts COPY ... FROM STDIN. Send data with copy_in_send, then finish with copy_in_end -- or copy_in_abort, which rolls the COPY back.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2170
+          "line": 2168
         },
         {
           "name": "copy_in_send",
@@ -13533,7 +13533,7 @@
           "sig": "fn copy_in_send(c: Conn, data: bytes, deadline: until) -> result[bool, str]",
           "doc": "Sends COPY data. It need not end on a row boundary; the server reassembles it. An error in the data is reported by copy_in_end.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2176
+          "line": 2174
         },
         {
           "name": "copy_in_end",
@@ -13541,7 +13541,7 @@
           "sig": "fn copy_in_end(c: Conn, deadline: until) -> result[int, str]",
           "doc": "Ends the COPY. Returns the number of rows loaded, or the server's error about the data -- in which case nothing was loaded.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2226
+          "line": 2224
         },
         {
           "name": "copy_in_abort",
@@ -13549,7 +13549,7 @@
           "sig": "fn copy_in_abort(c: Conn, reason: str, deadline: until) -> result[bool, str]",
           "doc": "Abandons the COPY: the server discards everything sent. Ok once the server has confirmed; its \"COPY from stdin failed\" is the expected answer, not an error.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2233
+          "line": 2231
         },
         {
           "name": "copy_from",
@@ -13557,7 +13557,7 @@
           "sig": "fn copy_from(c: Conn, sql: str, data: bytes, deadline: until) -> result[int, str]",
           "doc": "COPY ... FROM STDIN in one call. Returns the rows loaded.  pg.copy_from(c, \"COPY users (id, email) FROM STDIN (FORMAT csv)\", to_bytes(\"1,a@example.com\\n2,b@example.com\\n\"), dl)",
           "file": "stdlib/pg/pg.sl",
-          "line": 2248
+          "line": 2246
         },
         {
           "name": "copy_out_start",
@@ -13565,7 +13565,7 @@
           "sig": "fn copy_out_start(c: Conn, sql: str, deadline: until) -> result[bool, str]",
           "doc": "Starts COPY ... TO STDOUT. Read it with copy_out_next.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2262
+          "line": 2260
         },
         {
           "name": "copy_out_next",
@@ -13573,7 +13573,7 @@
           "sig": "fn copy_out_next(c: Conn, deadline: until) -> result[opt[bytes], str]",
           "doc": "The next piece of COPY output -- in text and CSV formats, one row -- or none when it is complete.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2268
+          "line": 2266
         },
         {
           "name": "copy_to",
@@ -13581,7 +13581,7 @@
           "sig": "fn copy_to(c: Conn, sql: str, deadline: until) -> result[bytes, str]",
           "doc": "COPY ... TO STDOUT in one call, buffered (up to the 256 MiB result limit; stream a larger one with copy_out_start / copy_out_next).",
           "file": "stdlib/pg/pg.sl",
-          "line": 2302
+          "line": 2300
         },
         {
           "name": "listen",
@@ -13589,7 +13589,7 @@
           "sig": "fn listen(c: Conn, channel: str, deadline: until) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 2343
+          "line": 2341
         },
         {
           "name": "unlisten",
@@ -13597,7 +13597,7 @@
           "sig": "fn unlisten(c: Conn, channel: str, deadline: until) -> result[bool, str]",
           "doc": "\"*\" stops listening on every channel.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2352
+          "line": 2350
         },
         {
           "name": "notify",
@@ -13605,7 +13605,7 @@
           "sig": "fn notify(c: Conn, channel: str, payload: str, deadline: until) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 2364
+          "line": 2362
         },
         {
           "name": "wait_notification",
@@ -13613,7 +13613,7 @@
           "sig": "fn wait_notification(c: Conn, deadline: until) -> result[opt[Notification], str]",
           "doc": "The oldest queued notification, or waits for one until the deadline: none then. Unlike every other call, reaching the deadline here is not an error and does not break the connection -- waiting is the point.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2377
+          "line": 2375
         },
         {
           "name": "col",
@@ -13621,7 +13621,7 @@
           "sig": "fn col(rows: Rows, name: str) -> int",
           "doc": "The index of the column called `name`. Panics if there is none: the query and the code reading it disagree, which is a bug, not a condition to handle.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2466
+          "line": 2464
         },
         {
           "name": "is_null",
@@ -13629,7 +13629,7 @@
           "sig": "fn is_null(rows: Rows, r: int, c: int) -> bool",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 2491
+          "line": 2489
         },
         {
           "name": "get_text",
@@ -13637,7 +13637,7 @@
           "sig": "fn get_text(rows: Rows, r: int, c: int) -> str",
           "doc": "Any column, in Postgres's text form: numbers, dates, uuid and json all arrive this way.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2536
+          "line": 2534
         },
         {
           "name": "timestamp_rfc3339",
@@ -13645,7 +13645,7 @@
           "sig": "fn timestamp_rfc3339(cell: str, has_tz: bool) -> opt[str]",
           "doc": "int2, int4, int8 and oid. A timestamptz or timestamp cell as RFC 3339 text: Postgres writes \"2026-10-13 09:30:15.123456+00\" (a space, and an hour-only offset when the minutes are zero); this is \"2026-10-13T09:30:15.123456+00:00\". A timestamp without a time zone names no instant and is read as UTC, as Go's drivers read it. none for infinity, -infinity and BC dates, which a timez.Time cannot hold, and for text that is not a Postgres timestamp.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2617
+          "line": 2615
         },
         {
           "name": "get_time",
@@ -13653,7 +13653,7 @@
           "sig": "fn get_time(rows: Rows, r: int, c: int) -> result[timez.Time, str]",
           "doc": "The instant in a timestamptz (or timestamp, read as UTC) cell. err for another column type, infinity, a BC date, or a seconds-level offset.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2655
+          "line": 2653
         },
         {
           "name": "get_decimal",
@@ -13661,7 +13661,7 @@
           "sig": "fn get_decimal(rows: Rows, r: int, c: int) -> result[decimal.Decimal, str]",
           "doc": "The exact value of a numeric or integer cell (int2, int4, int8, numeric), at the scale Postgres reports: numeric(12, 2) gives \"19.90\", not 19.9. err for another column type, NaN or an infinity, or a value past decimal's 38 digits.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2672
+          "line": 2670
         },
         {
           "name": "get_int",
@@ -13669,7 +13669,7 @@
           "sig": "fn get_int(rows: Rows, r: int, c: int) -> int",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 2685
+          "line": 2683
         },
         {
           "name": "get_float",
@@ -13677,7 +13677,7 @@
           "sig": "fn get_float(rows: Rows, r: int, c: int) -> float",
           "doc": "float4, float8, numeric, and the integer types. A numeric too precise for a double is rounded; read it with get_text to keep every digit.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2712
+          "line": 2710
         },
         {
           "name": "get_bool",
@@ -13685,7 +13685,7 @@
           "sig": "fn get_bool(rows: Rows, r: int, c: int) -> bool",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 2734
+          "line": 2732
         },
         {
           "name": "get_bytes",
@@ -13693,7 +13693,7 @@
           "sig": "fn get_bytes(rows: Rows, r: int, c: int) -> bytes",
           "doc": "bytea, decoded from the server's hex output format.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2746
+          "line": 2744
         },
         {
           "name": "Pool",
@@ -13701,7 +13701,7 @@
           "sig": "gc struct Pool",
           "doc": "A bounded set of connections to one database, shared by any number of tasks.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2783
+          "line": 2781
         },
         {
           "name": "new_pool",
@@ -13709,7 +13709,7 @@
           "sig": "fn new_pool(url: str, max_open: int) -> result[Pool, str]",
           "doc": "Parses the url; connects nothing until the first acquire.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2820
+          "line": 2818
         },
         {
           "name": "acquire",
@@ -13717,7 +13717,7 @@
           "sig": "fn acquire(p: Pool, deadline: until) -> result[Conn, str]",
           "doc": "A connection for the caller's exclusive use, until release(). Prefer pool_query / pool_exec, which cannot forget to release; acquire is for a transaction, which needs several statements on one connection.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2968
+          "line": 2966
         },
         {
           "name": "release",
@@ -13725,7 +13725,7 @@
           "sig": "fn release(p: Pool, c: Conn)",
           "doc": "Returns a connection to the pool: to the oldest waiting task if there is one, else to the idle list. One that is broken, closed, or still inside a transaction is closed instead, and its slot passed on: handing an open transaction to the next caller would run its statements inside someone else's uncommitted work.",
           "file": "stdlib/pg/pg.sl",
-          "line": 3052
+          "line": 3050
         },
         {
           "name": "pool_query",
@@ -13733,7 +13733,7 @@
           "sig": "fn pool_query(p: Pool, sql: str, args: [Arg], deadline: until) -> result[Rows, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 3087
+          "line": 3085
         },
         {
           "name": "pool_exec",
@@ -13741,7 +13741,7 @@
           "sig": "fn pool_exec(p: Pool, sql: str, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 3098
+          "line": 3096
         },
         {
           "name": "pool_close",
@@ -13749,7 +13749,7 @@
           "sig": "fn pool_close(p: Pool)",
           "doc": "Closes every idle connection and fails every waiting acquire. Connections in use are closed as they are released; acquire fails from now on.",
           "file": "stdlib/pg/pg.sl",
-          "line": 3111
+          "line": 3109
         }
       ]
     },
@@ -13763,7 +13763,7 @@
           "sig": "struct Options",
           "doc": "",
           "file": "stdlib/pool/pool.sl",
-          "line": 28
+          "line": 27
         },
         {
           "name": "options",
@@ -13771,7 +13771,7 @@
           "sig": "fn options(max_open: int) -> Options",
           "doc": "Options with the defaults above for a pool of max_open connections.",
           "file": "stdlib/pool/pool.sl",
-          "line": 46
+          "line": 45
         },
         {
           "name": "Lease",
@@ -13779,7 +13779,7 @@
           "sig": "gc struct Lease[T]",
           "doc": "One connection, on loan from acquire until release or discard.",
           "file": "stdlib/pool/pool.sl",
-          "line": 53
+          "line": 52
         },
         {
           "name": "Stats",
@@ -13787,7 +13787,7 @@
           "sig": "struct Stats",
           "doc": "",
           "file": "stdlib/pool/pool.sl",
-          "line": 60
+          "line": 59
         },
         {
           "name": "Pool",
@@ -13795,7 +13795,7 @@
           "sig": "gc struct Pool[T]",
           "doc": "",
           "file": "stdlib/pool/pool.sl",
-          "line": 80
+          "line": 79
         },
         {
           "name": "new",
@@ -13803,7 +13803,7 @@
           "sig": "fn new[T](o: Options, dial: fn(until) -> result[T, str], close: fn(T), probe: fn(T) -> bool) -> Pool[T]",
           "doc": "A pool that opens nothing until the first acquire. dial makes a connection by a deadline, close ends one, probe says whether an idle one still works (one cheap check, such as net.idle_alive).",
           "file": "stdlib/pool/pool.sl",
-          "line": 102
+          "line": 101
         },
         {
           "name": "acquire",
@@ -13811,7 +13811,7 @@
           "sig": "fn acquire[T](p: Pool[T], deadline: until) -> result[Lease[T], str]",
           "doc": "A connection for the caller's use until release or discard: an idle one, a new one if fewer than max_open are open, or else the next one released, in arrival order. \"timeout\" if deadline passes first, \"pool is closed\" after close.",
           "file": "stdlib/pool/pool.sl",
-          "line": 123
+          "line": 122
         },
         {
           "name": "release",
@@ -13819,7 +13819,7 @@
           "sig": "fn release[T](p: Pool[T], l: Lease[T])",
           "doc": "Gives a connection back: to the task that has waited longest, else to the idle list. Closed instead once past max_lifetime, beyond max_idle, or after close. Releasing a lease twice panics: two tasks would then share one connection.",
           "file": "stdlib/pool/pool.sl",
-          "line": 200
+          "line": 199
         },
         {
           "name": "discard",
@@ -13827,7 +13827,7 @@
           "sig": "fn discard[T](p: Pool[T], l: Lease[T])",
           "doc": "Closes a connection the caller found broken, freeing its slot for the next waiter to dial.",
           "file": "stdlib/pool/pool.sl",
-          "line": 234
+          "line": 233
         },
         {
           "name": "close",
@@ -13835,7 +13835,7 @@
           "sig": "fn close[T](p: Pool[T])",
           "doc": "Closes every idle connection and fails every waiting acquire; connections in use are closed as they come back. acquire fails from now on.",
           "file": "stdlib/pool/pool.sl",
-          "line": 251
+          "line": 250
         },
         {
           "name": "stats",
@@ -13843,7 +13843,7 @@
           "sig": "fn stats[T](p: Pool[T]) -> Stats",
           "doc": "A snapshot of the counters.",
           "file": "stdlib/pool/pool.sl",
-          "line": 268
+          "line": 267
         }
       ]
     },
@@ -14294,7 +14294,7 @@
           "sig": "struct Tlv",
           "doc": "One v2 type-length-value field: ALPN (0x01), authority (0x02, the TLS SNI name), unique id (0x05), SSL details (0x20), AWS VPC endpoint id (0xEA), and so on.",
           "file": "stdlib/proxyproto/proxyproto.sl",
-          "line": 28
+          "line": 27
         },
         {
           "name": "Header",
@@ -14302,7 +14302,7 @@
           "sig": "struct Header",
           "doc": "",
           "file": "stdlib/proxyproto/proxyproto.sl",
-          "line": 33
+          "line": 32
         },
         {
           "name": "parse",
@@ -14310,7 +14310,7 @@
           "sig": "fn parse(b: bytes) -> result[opt[Header], str]",
           "doc": "The header at the start of b; none if b is a prefix of one and more bytes are needed; an error if b does not start with a PROXY header.",
           "file": "stdlib/proxyproto/proxyproto.sl",
-          "line": 53
+          "line": 52
         },
         {
           "name": "read_until",
@@ -14318,7 +14318,7 @@
           "sig": "fn read_until(fd: i32, deadline: until) -> result[Header, str]",
           "doc": "Reads a header from fd, then stops: whatever arrived after it is in rest. Bounded by deadline as a whole.",
           "file": "stdlib/proxyproto/proxyproto.sl",
-          "line": 68
+          "line": 67
         },
         {
           "name": "encode_v1",
@@ -14326,7 +14326,7 @@
           "sig": "fn encode_v1(h: Header) -> bytes",
           "doc": "The v1 (text) header for h: \"PROXY TCP4 1.2.3.4 5.6.7.8 1111 443\\r\\n\". Families other than tcp4 and tcp6 are sent as UNKNOWN.",
           "file": "stdlib/proxyproto/proxyproto.sl",
-          "line": 92
+          "line": 91
         },
         {
           "name": "encode_v2",
@@ -14334,7 +14334,7 @@
           "sig": "fn encode_v2(h: Header) -> result[bytes, str]",
           "doc": "The v2 (binary) header for h, TLVs included. An error for an address that does not match h.family.",
           "file": "stdlib/proxyproto/proxyproto.sl",
-          "line": 103
+          "line": 102
         }
       ]
     },
@@ -17239,7 +17239,7 @@
           "sig": "gc struct Entry",
           "doc": "",
           "file": "stdlib/tar/tar.sl",
-          "line": 35
+          "line": 34
         },
         {
           "name": "Limits",
@@ -17247,7 +17247,7 @@
           "sig": "struct Limits",
           "doc": "",
           "file": "stdlib/tar/tar.sl",
-          "line": 53
+          "line": 52
         },
         {
           "name": "default_limits",
@@ -17255,7 +17255,7 @@
           "sig": "fn default_limits() -> Limits",
           "doc": "",
           "file": "stdlib/tar/tar.sl",
-          "line": 58
+          "line": 57
         },
         {
           "name": "parse",
@@ -17263,7 +17263,7 @@
           "sig": "fn parse(data: bytes) -> result[[Entry], str]",
           "doc": "",
           "file": "stdlib/tar/tar.sl",
-          "line": 64
+          "line": 63
         },
         {
           "name": "parse_with",
@@ -17271,7 +17271,7 @@
           "sig": "fn parse_with(data: bytes, lim: Limits) -> result[[Entry], str]",
           "doc": "",
           "file": "stdlib/tar/tar.sl",
-          "line": 70
+          "line": 69
         },
         {
           "name": "safe_path",
@@ -17279,7 +17279,7 @@
           "sig": "fn safe_path(name: str) -> result[str, str]",
           "doc": "A name made safe to join under an extraction directory: relative, with no \"..\", no drive letter or backslash, no NUL. A trailing \"/\" is kept. Check a symlink's target the same way before creating it.",
           "file": "stdlib/tar/tar.sl",
-          "line": 358
+          "line": 357
         },
         {
           "name": "Writer",
@@ -17287,7 +17287,7 @@
           "sig": "gc struct Writer",
           "doc": "",
           "file": "stdlib/tar/tar.sl",
-          "line": 398
+          "line": 397
         },
         {
           "name": "new_writer",
@@ -17295,7 +17295,7 @@
           "sig": "fn new_writer() -> Writer",
           "doc": "",
           "file": "stdlib/tar/tar.sl",
-          "line": 404
+          "line": 403
         },
         {
           "name": "Writer.add_file",
@@ -17303,7 +17303,7 @@
           "sig": "fn add_file(self: Writer, name: str, data: bytes, mode: int, modified: int) -> Writer",
           "doc": "",
           "file": "stdlib/tar/tar.sl",
-          "line": 437
+          "line": 436
         },
         {
           "name": "Writer.add_dir",
@@ -17311,7 +17311,7 @@
           "sig": "fn add_dir(self: Writer, name: str, mode: int, modified: int) -> Writer",
           "doc": "",
           "file": "stdlib/tar/tar.sl",
-          "line": 441
+          "line": 440
         },
         {
           "name": "Writer.add_symlink",
@@ -17319,7 +17319,7 @@
           "sig": "fn add_symlink(self: Writer, name: str, target: str, modified: int) -> Writer",
           "doc": "",
           "file": "stdlib/tar/tar.sl",
-          "line": 449
+          "line": 448
         },
         {
           "name": "Writer.finish",
@@ -17327,7 +17327,7 @@
           "sig": "fn finish(self: Writer) -> result[bytes, str]",
           "doc": "The archive, closed with two zero blocks, or the first problem an add ran into.",
           "file": "stdlib/tar/tar.sl",
-          "line": 549
+          "line": 548
         }
       ]
     },
@@ -18385,7 +18385,7 @@
           "sig": "gc struct Zone",
           "doc": "",
           "file": "stdlib/timez/zone.sl",
-          "line": 66
+          "line": 65
         },
         {
           "name": "utc_zone",
@@ -18393,7 +18393,7 @@
           "sig": "fn utc_zone() -> Zone",
           "doc": "UTC, as a Zone.",
           "file": "stdlib/timez/zone.sl",
-          "line": 91
+          "line": 90
         },
         {
           "name": "fixed_zone",
@@ -18401,7 +18401,7 @@
           "sig": "fn fixed_zone(name: str, offset_seconds: int) -> Zone",
           "doc": "A zone at a fixed offset (seconds east of UTC) that never changes.",
           "file": "stdlib/timez/zone.sl",
-          "line": 96
+          "line": 95
         },
         {
           "name": "load_zone",
@@ -18409,7 +18409,7 @@
           "sig": "fn load_zone(name: str) -> result[Zone, str]",
           "doc": "\"UTC\" and fixed zones need no database; anything else is read from it.",
           "file": "stdlib/timez/zone.sl",
-          "line": 159
+          "line": 158
         },
         {
           "name": "parse_tzif",
@@ -18417,7 +18417,7 @@
           "sig": "fn parse_tzif(name: str, b: bytes) -> result[Zone, str]",
           "doc": "RFC 8536: version 2 or later, whose 64-bit block and footer this reads (the 32-bit block before them is skipped).",
           "file": "stdlib/timez/zone.sl",
-          "line": 203
+          "line": 202
         },
         {
           "name": "parse_posix_tz",
@@ -18425,7 +18425,7 @@
           "sig": "fn parse_posix_tz(s: str) -> result[TzRule, str]",
           "doc": "",
           "file": "stdlib/timez/zone.sl",
-          "line": 435
+          "line": 434
         },
         {
           "name": "Zone.offset_at",
@@ -18433,7 +18433,7 @@
           "sig": "fn offset_at(self: Zone, t: Time) -> int",
           "doc": "Seconds east of UTC at instant `t`.",
           "file": "stdlib/timez/zone.sl",
-          "line": 588
+          "line": 587
         },
         {
           "name": "Zone.is_dst_at",
@@ -18441,7 +18441,7 @@
           "sig": "fn is_dst_at(self: Zone, t: Time) -> bool",
           "doc": "",
           "file": "stdlib/timez/zone.sl",
-          "line": 592
+          "line": 591
         },
         {
           "name": "Zone.abbrev_at",
@@ -18449,7 +18449,7 @@
           "sig": "fn abbrev_at(self: Zone, t: Time) -> str",
           "doc": "\"CEST\", \"PST\", \"+0530\": the abbreviation in use at `t`.",
           "file": "stdlib/timez/zone.sl",
-          "line": 597
+          "line": 596
         },
         {
           "name": "ZonedTime",
@@ -18457,7 +18457,7 @@
           "sig": "struct ZonedTime",
           "doc": "An instant together with the zone it is read in: what a person in that zone sees on a clock.",
           "file": "stdlib/timez/zone.sl",
-          "line": 613
+          "line": 612
         },
         {
           "name": "Time.in_zone",
@@ -18465,7 +18465,7 @@
           "sig": "fn in_zone(self: Time, z: Zone) -> ZonedTime",
           "doc": "",
           "file": "stdlib/timez/zone.sl",
-          "line": 620
+          "line": 619
         },
         {
           "name": "zoned",
@@ -18473,7 +18473,7 @@
           "sig": "fn zoned(z: Zone, year: int, month: int, day: int, hour: int, minute: int, second: int, how: Disambiguation) -> result[Time, str]",
           "doc": "The instant for a wall time in `z`, by `how` when daylight saving makes it skipped or repeated.",
           "file": "stdlib/timez/zone.sl",
-          "line": 627
+          "line": 626
         },
         {
           "name": "ZonedTime.date",
@@ -18481,7 +18481,7 @@
           "sig": "fn date(self: ZonedTime) -> Date",
           "doc": "",
           "file": "stdlib/timez/zone.sl",
-          "line": 696
+          "line": 695
         },
         {
           "name": "ZonedTime.year",
@@ -18489,7 +18489,7 @@
           "sig": "fn year(self: ZonedTime) -> int",
           "doc": "",
           "file": "stdlib/timez/zone.sl",
-          "line": 700
+          "line": 699
         },
         {
           "name": "ZonedTime.month",
@@ -18497,7 +18497,7 @@
           "sig": "fn month(self: ZonedTime) -> int",
           "doc": "",
           "file": "stdlib/timez/zone.sl",
-          "line": 701
+          "line": 700
         },
         {
           "name": "ZonedTime.day",
@@ -18505,7 +18505,7 @@
           "sig": "fn day(self: ZonedTime) -> int",
           "doc": "",
           "file": "stdlib/timez/zone.sl",
-          "line": 702
+          "line": 701
         },
         {
           "name": "ZonedTime.hour",
@@ -18513,7 +18513,7 @@
           "sig": "fn hour(self: ZonedTime) -> int",
           "doc": "",
           "file": "stdlib/timez/zone.sl",
-          "line": 703
+          "line": 702
         },
         {
           "name": "ZonedTime.minute",
@@ -18521,7 +18521,7 @@
           "sig": "fn minute(self: ZonedTime) -> int",
           "doc": "",
           "file": "stdlib/timez/zone.sl",
-          "line": 704
+          "line": 703
         },
         {
           "name": "ZonedTime.second",
@@ -18529,7 +18529,7 @@
           "sig": "fn second(self: ZonedTime) -> int",
           "doc": "",
           "file": "stdlib/timez/zone.sl",
-          "line": 705
+          "line": 704
         },
         {
           "name": "ZonedTime.weekday",
@@ -18537,7 +18537,7 @@
           "sig": "fn weekday(self: ZonedTime) -> Weekday",
           "doc": "",
           "file": "stdlib/timez/zone.sl",
-          "line": 706
+          "line": 705
         },
         {
           "name": "ZonedTime.abbrev",
@@ -18545,7 +18545,7 @@
           "sig": "fn abbrev(self: ZonedTime) -> str",
           "doc": "",
           "file": "stdlib/timez/zone.sl",
-          "line": 708
+          "line": 707
         },
         {
           "name": "ZonedTime.is_dst",
@@ -18553,7 +18553,7 @@
           "sig": "fn is_dst(self: ZonedTime) -> bool",
           "doc": "",
           "file": "stdlib/timez/zone.sl",
-          "line": 712
+          "line": 711
         },
         {
           "name": "ZonedTime.rfc3339",
@@ -18561,7 +18561,7 @@
           "sig": "fn rfc3339(self: ZonedTime) -> str",
           "doc": "\"2026-10-13T11:30:15+02:00\".",
           "file": "stdlib/timez/zone.sl",
-          "line": 717
+          "line": 716
         },
         {
           "name": "ZonedTime.format",
@@ -18569,7 +18569,7 @@
           "sig": "fn format(self: ZonedTime, layout: str) -> str",
           "doc": "As Time.format, with %z the real offset (+0200) and %Z the zone's abbreviation (CEST).",
           "file": "stdlib/timez/zone.sl",
-          "line": 723
+          "line": 722
         },
         {
           "name": "ZonedTime.add_days",
@@ -18577,7 +18577,7 @@
           "sig": "fn add_days(self: ZonedTime, n: int) -> ZonedTime",
           "doc": "Calendar days later at the same wall time, across daylight-saving changes (a day is then 23 or 25 hours). A wall time that does not exist on the target day moves forward, as COMPATIBLE does.",
           "file": "stdlib/timez/zone.sl",
-          "line": 754
+          "line": 753
         },
         {
           "name": "ZonedTime.add_months",
@@ -18585,7 +18585,7 @@
           "sig": "fn add_months(self: ZonedTime, n: int) -> ZonedTime",
           "doc": "",
           "file": "stdlib/timez/zone.sl",
-          "line": 761
+          "line": 760
         },
         {
           "name": "ZonedTime.start_of_day",
@@ -18593,7 +18593,7 @@
           "sig": "fn start_of_day(self: ZonedTime) -> ZonedTime",
           "doc": "Local midnight: the first instant of this date in the zone (01:00 where midnight is skipped).",
           "file": "stdlib/timez/zone.sl",
-          "line": 770
+          "line": 769
         }
       ]
     },
@@ -18982,7 +18982,7 @@
           "sig": "let NIL = \"00000000-0000-0000-0000-000000000000\";",
           "doc": "The nil and max UUIDs (RFC 9562 sections 5.9 and 5.10).",
           "file": "stdlib/uuid/uuid.sl",
-          "line": 36
+          "line": 35
         },
         {
           "name": "MAX",
@@ -18990,7 +18990,7 @@
           "sig": "let MAX = \"ffffffff-ffff-ffff-ffff-ffffffffffff\";",
           "doc": "",
           "file": "stdlib/uuid/uuid.sl",
-          "line": 37
+          "line": 36
         },
         {
           "name": "v4",
@@ -18998,7 +18998,7 @@
           "sig": "fn v4() -> result[str, str]",
           "doc": "A random UUID, version 4: 122 random bits.",
           "file": "stdlib/uuid/uuid.sl",
-          "line": 44
+          "line": 43
         },
         {
           "name": "v7",
@@ -19006,7 +19006,7 @@
           "sig": "fn v7() -> result[str, str]",
           "doc": "A time-ordered UUID, version 7, stamped with the current wall-clock time: 48 bits of unix milliseconds, then 74 random bits.",
           "file": "stdlib/uuid/uuid.sl",
-          "line": 56
+          "line": 55
         },
         {
           "name": "v7_at",
@@ -19014,7 +19014,7 @@
           "sig": "fn v7_at(unix_ms: int) -> result[str, str]",
           "doc": "A version 7 UUID stamped with `unix_ms` instead of the clock: for tests, and for ids that must carry an event's own time. Errors if `unix_ms` is negative or does not fit in 48 bits.",
           "file": "stdlib/uuid/uuid.sl",
-          "line": 63
+          "line": 62
         },
         {
           "name": "is_valid",
@@ -19022,7 +19022,7 @@
           "sig": "fn is_valid(s: str) -> bool",
           "doc": "Is `s` a UUID in canonical form: 36 characters, lowercase hex digits, hyphens at 8, 13, 18 and 23? Any version and variant passes, so ids made elsewhere (Postgres's gen_random_uuid, another service) are accepted. Upper case, braces and urn:uuid: are not: run those through `parse`.",
           "file": "stdlib/uuid/uuid.sl",
-          "line": 87
+          "line": 86
         },
         {
           "name": "parse",
@@ -19030,7 +19030,7 @@
           "sig": "fn parse(s: str) -> result[str, str]",
           "doc": "The canonical form of a UUID written any common way: canonical, upper or mixed case, in braces ({...}), as a urn:uuid: URN, or as 32 hex digits without hyphens. The error names the position and what was expected there.",
           "file": "stdlib/uuid/uuid.sl",
-          "line": 109
+          "line": 108
         },
         {
           "name": "version",
@@ -19038,7 +19038,7 @@
           "sig": "fn version(s: str) -> opt[int]",
           "doc": "The version number of a canonical UUID (4 for v4, 7 for v7, 0 for NIL), or none if `s` is not canonical.",
           "file": "stdlib/uuid/uuid.sl",
-          "line": 119
+          "line": 118
         },
         {
           "name": "time_ms",
@@ -19046,7 +19046,7 @@
           "sig": "fn time_ms(s: str) -> opt[int]",
           "doc": "When a v7 UUID was made, in unix milliseconds. none if `s` is not a canonical version 7 UUID with the RFC 9562 variant: other versions keep no time, or keep it in another layout.",
           "file": "stdlib/uuid/uuid.sl",
-          "line": 129
+          "line": 128
         },
         {
           "name": "to_binary",
@@ -19054,7 +19054,7 @@
           "sig": "fn to_binary(s: str) -> result[bytes, str]",
           "doc": "The 16 bytes of a UUID, most significant first: the binary form databases store (Postgres `uuid` on the wire, a BINARY(16) column). Accepts every spelling `parse` does.",
           "file": "stdlib/uuid/uuid.sl",
-          "line": 151
+          "line": 150
         },
         {
           "name": "from_binary",
@@ -19062,7 +19062,7 @@
           "sig": "fn from_binary(b: bytes) -> result[str, str]",
           "doc": "The canonical form of 16 bytes, the reverse of `to_binary`.",
           "file": "stdlib/uuid/uuid.sl",
-          "line": 156
+          "line": 155
         }
       ]
     },
@@ -19084,7 +19084,7 @@
           "sig": "let ES256 = -7;",
           "doc": "COSE algorithm ids.",
           "file": "stdlib/webauthn/webauthn.sl",
-          "line": 41
+          "line": 39
         },
         {
           "name": "EDDSA",
@@ -19092,7 +19092,7 @@
           "sig": "let EDDSA = -8;",
           "doc": "",
           "file": "stdlib/webauthn/webauthn.sl",
-          "line": 42
+          "line": 40
         },
         {
           "name": "RS256",
@@ -19100,7 +19100,7 @@
           "sig": "let RS256 = -257;",
           "doc": "",
           "file": "stdlib/webauthn/webauthn.sl",
-          "line": 43
+          "line": 41
         },
         {
           "name": "RelyingParty",
@@ -19108,7 +19108,7 @@
           "sig": "gc struct RelyingParty",
           "doc": "",
           "file": "stdlib/webauthn/webauthn.sl",
-          "line": 52
+          "line": 50
         },
         {
           "name": "relying_party",
@@ -19116,7 +19116,7 @@
           "sig": "fn relying_party(id: str, name: str, origins: [str]) -> RelyingParty",
           "doc": "",
           "file": "stdlib/webauthn/webauthn.sl",
-          "line": 66
+          "line": 64
         },
         {
           "name": "User",
@@ -19124,7 +19124,7 @@
           "sig": "gc struct User",
           "doc": "The account a credential is made for. `id` is an opaque handle of at most 64 bytes, never an email or a name: authenticators show `name` and `display_name`, and may keep `id` where anyone holding the device can read it.",
           "file": "stdlib/webauthn/webauthn.sl",
-          "line": 75
+          "line": 73
         },
         {
           "name": "Challenge",
@@ -19132,7 +19132,7 @@
           "sig": "gc struct Challenge",
           "doc": "A challenge to keep (value) and the options to send (options: JSON for parseCreationOptionsFromJSON / parseRequestOptionsFromJSON).",
           "file": "stdlib/webauthn/webauthn.sl",
-          "line": 83
+          "line": 81
         },
         {
           "name": "Credential",
@@ -19140,7 +19140,7 @@
           "sig": "gc struct Credential",
           "doc": "A registered credential: what to store for the user. public_key is the COSE key as the authenticator sent it.",
           "file": "stdlib/webauthn/webauthn.sl",
-          "line": 90
+          "line": 88
         },
         {
           "name": "Login",
@@ -19148,7 +19148,7 @@
           "sig": "gc struct Login",
           "doc": "A login that checked out. user_handle is the User.id the authenticator keeps for a passkey (\"\" for a security key that does not): when it is not empty it must name the account the credential belongs to.",
           "file": "stdlib/webauthn/webauthn.sl",
-          "line": 108
+          "line": 106
         },
         {
           "name": "begin_registration",
@@ -19156,7 +19156,7 @@
           "sig": "fn begin_registration(rp: RelyingParty, user: User, exclude: [Credential]) -> result[Challenge, str]",
           "doc": "Options for navigator.credentials.create: ES256, EdDSA and RS256 keys, a discoverable credential (a passkey) preferred, no attestation, and `exclude` (the user's existing credentials) so one authenticator is not registered twice.",
           "file": "stdlib/webauthn/webauthn.sl",
-          "line": 153
+          "line": 151
         },
         {
           "name": "begin_login",
@@ -19164,7 +19164,7 @@
           "sig": "fn begin_login(rp: RelyingParty, allow: [Credential]) -> result[Challenge, str]",
           "doc": "Options for navigator.credentials.get. `allow` lists the credentials that may answer; empty lets the user pick any passkey for this site.",
           "file": "stdlib/webauthn/webauthn.sl",
-          "line": 181
+          "line": 179
         },
         {
           "name": "verify_registration",
@@ -19172,7 +19172,7 @@
           "sig": "fn verify_registration(rp: RelyingParty, challenge: bytes, client_data: bytes, attestation_object: bytes) -> result[Credential, str]",
           "doc": "Checks a registration from its parts: the client data JSON and the attestation object, both raw bytes (not base64url).",
           "file": "stdlib/webauthn/webauthn.sl",
-          "line": 531
+          "line": 529
         },
         {
           "name": "finish_registration",
@@ -19180,7 +19180,7 @@
           "sig": "fn finish_registration(rp: RelyingParty, challenge: bytes, response_json: str) -> result[Credential, str]",
           "doc": "Checks a registration as the browser posts it: JSON.stringify of the PublicKeyCredential (its toJSON()).",
           "file": "stdlib/webauthn/webauthn.sl",
-          "line": 645
+          "line": 643
         },
         {
           "name": "verify_login",
@@ -19188,7 +19188,7 @@
           "sig": "fn verify_login(rp: RelyingParty, challenge: bytes, cred: Credential, client_data: bytes, authenticator_data: bytes, signature: bytes) -> result[Login, str]",
           "doc": "Checks a login from its parts, all raw bytes: the client data JSON, the authenticator data and the signature over both. The caller looked up `cred` by the credential id the browser sent.",
           "file": "stdlib/webauthn/webauthn.sl",
-          "line": 673
+          "line": 671
         },
         {
           "name": "login_credential_id",
@@ -19196,7 +19196,7 @@
           "sig": "fn login_credential_id(response_json: str) -> result[bytes, str]",
           "doc": "The credential id a posted login names, to look the stored credential up by before finish_login.",
           "file": "stdlib/webauthn/webauthn.sl",
-          "line": 714
+          "line": 712
         },
         {
           "name": "finish_login",
@@ -19204,7 +19204,7 @@
           "sig": "fn finish_login(rp: RelyingParty, challenge: bytes, cred: Credential, response_json: str) -> result[Login, str]",
           "doc": "Checks a login as the browser posts it: JSON.stringify of the PublicKeyCredential.",
           "file": "stdlib/webauthn/webauthn.sl",
-          "line": 724
+          "line": 722
         }
       ]
     },
@@ -19218,7 +19218,7 @@
           "sig": "gc struct Message",
           "doc": "",
           "file": "stdlib/websocket/websocket.sl",
-          "line": 61
+          "line": 59
         },
         {
           "name": "Options",
@@ -19226,7 +19226,7 @@
           "sig": "gc struct Options",
           "doc": "",
           "file": "stdlib/websocket/websocket.sl",
-          "line": 70
+          "line": 68
         },
         {
           "name": "options",
@@ -19234,7 +19234,7 @@
           "sig": "fn options() -> Options",
           "doc": "The defaults: no extra headers or subprotocols, 32 MiB messages, no compression, no keepalive pings.",
           "file": "stdlib/websocket/websocket.sl",
-          "line": 91
+          "line": 89
         },
         {
           "name": "Conn",
@@ -19242,7 +19242,7 @@
           "sig": "gc struct Conn",
           "doc": "",
           "file": "stdlib/websocket/websocket.sl",
-          "line": 96
+          "line": 94
         },
         {
           "name": "dial",
@@ -19250,7 +19250,7 @@
           "sig": "fn dial(url: str, deadline: until) -> result[Conn, str]",
           "doc": "Connect to url (ws:// or wss://) with the default options.",
           "file": "stdlib/websocket/websocket.sl",
-          "line": 131
+          "line": 129
         },
         {
           "name": "dial_with",
@@ -19258,7 +19258,7 @@
           "sig": "fn dial_with(url: str, o: Options, deadline: until) -> result[Conn, str]",
           "doc": "Connect, send the opening handshake, and check the server's answer.",
           "file": "stdlib/websocket/websocket.sl",
-          "line": 136
+          "line": 134
         },
         {
           "name": "send_text",
@@ -19266,7 +19266,7 @@
           "sig": "fn send_text(c: Conn, text: str, deadline: until) -> result[bool, str]",
           "doc": "Send a text message.",
           "file": "stdlib/websocket/websocket.sl",
-          "line": 649
+          "line": 647
         },
         {
           "name": "send_text_bytes",
@@ -19274,7 +19274,7 @@
           "sig": "fn send_text_bytes(c: Conn, data: bytes, deadline: until) -> result[bool, str]",
           "doc": "Send a text message given as bytes, checked to be UTF-8 first: for text holding U+0000, which a str cannot (to_str writes it as U+FFFD), and for text already in a byte buffer.",
           "file": "stdlib/websocket/websocket.sl",
-          "line": 656
+          "line": 654
         },
         {
           "name": "send_binary",
@@ -19282,7 +19282,7 @@
           "sig": "fn send_binary(c: Conn, data: bytes, deadline: until) -> result[bool, str]",
           "doc": "Send a binary message.",
           "file": "stdlib/websocket/websocket.sl",
-          "line": 664
+          "line": 662
         },
         {
           "name": "ping",
@@ -19290,7 +19290,7 @@
           "sig": "fn ping(c: Conn, payload: bytes, deadline: until) -> result[bool, str]",
           "doc": "Send a ping (payload up to 125 bytes); the server's pong is consumed by recv. options().ping_every sends them on a schedule instead.",
           "file": "stdlib/websocket/websocket.sl",
-          "line": 670
+          "line": 668
         },
         {
           "name": "recv",
@@ -19298,7 +19298,7 @@
           "sig": "fn recv(c: Conn, deadline: until) -> result[opt[Message], str]",
           "doc": "The next message, or none when the deadline passes first (nothing is lost: a later call carries on). Pings are answered and pongs consumed on the way. A Close message means the server ended the connection; the handshake is answered and the next call is an error.",
           "file": "stdlib/websocket/websocket.sl",
-          "line": 692
+          "line": 690
         },
         {
           "name": "text",
@@ -19306,7 +19306,7 @@
           "sig": "fn text(m: Message) -> str",
           "doc": "The text of a text message. A str cannot hold a zero byte, so each U+0000 comes back as U+FFFD: m.data has every byte.",
           "file": "stdlib/websocket/websocket.sl",
-          "line": 714
+          "line": 712
         },
         {
           "name": "close",
@@ -19314,7 +19314,7 @@
           "sig": "fn close(c: Conn, code: int, reason: str, deadline: until) -> result[bool, str]",
           "doc": "The close handshake: send a close frame with code (1000 normal, or 3000-4999 for applications) and a reason of at most 123 bytes, then wait for the server's close (until deadline) and close the socket. If another task is in recv, that task sees the server's answer as a Close message and this call returns once the frame is sent.",
           "file": "stdlib/websocket/websocket.sl",
-          "line": 1103
+          "line": 1101
         },
         {
           "name": "close_now",
@@ -19322,7 +19322,7 @@
           "sig": "fn close_now(c: Conn)",
           "doc": "Close the socket now, with no close handshake: for a connection that is already broken or must stop at once.",
           "file": "stdlib/websocket/websocket.sl",
-          "line": 1168
+          "line": 1166
         },
         {
           "name": "is_open",
@@ -19330,7 +19330,7 @@
           "sig": "fn is_open(c: Conn) -> bool",
           "doc": "Whether the connection is open (not closing or closed).",
           "file": "stdlib/websocket/websocket.sl",
-          "line": 1173
+          "line": 1171
         },
         {
           "name": "reason",
@@ -19338,7 +19338,7 @@
           "sig": "fn reason(c: Conn) -> str",
           "doc": "Why the connection ended, or \"\" while it is open.",
           "file": "stdlib/websocket/websocket.sl",
-          "line": 1181
+          "line": 1179
         }
       ]
     },
@@ -19352,7 +19352,7 @@
           "sig": "gc struct Cert",
           "doc": "One certificate, as parsed. `der` is exactly the bytes it came from, so a chain can be passed back to verify or stored without re-encoding.",
           "file": "stdlib/x509/x509.sl",
-          "line": 38
+          "line": 37
         },
         {
           "name": "Verify",
@@ -19360,7 +19360,7 @@
           "sig": "struct Verify",
           "doc": "What verify checks besides the signatures and the chain to a root.",
           "file": "stdlib/x509/x509.sl",
-          "line": 62
+          "line": 61
         },
         {
           "name": "Request",
@@ -19368,7 +19368,7 @@
           "sig": "struct Request",
           "doc": "The names a CSR or self-signed certificate is for.",
           "file": "stdlib/x509/x509.sl",
-          "line": 70
+          "line": 69
         },
         {
           "name": "parse_pem",
@@ -19376,7 +19376,7 @@
           "sig": "fn parse_pem(pem: str) -> result[[Cert], str]",
           "doc": "Every CERTIFICATE block of a PEM text, in order. Other blocks and text between them are skipped; a block that does not decode is an error.",
           "file": "stdlib/x509/x509.sl",
-          "line": 82
+          "line": 81
         },
         {
           "name": "parse_der",
@@ -19384,7 +19384,7 @@
           "sig": "fn parse_der(der: bytes) -> result[[Cert], str]",
           "doc": "One DER certificate, or several concatenated (as a TLS chain and net.tls_peer_certs give them).",
           "file": "stdlib/x509/x509.sl",
-          "line": 92
+          "line": 91
         },
         {
           "name": "matches_host",
@@ -19392,7 +19392,7 @@
           "sig": "fn matches_host(c: Cert, host: str) -> bool",
           "doc": "Does the certificate name `host`? RFC 6125: subjectAltName entries only, never the subject CN; a wildcard only as the whole left-most label, for exactly one label (\"*.example.com\" matches \"a.example.com\", not \"example.com\" or \"a.b.example.com\"). An IP literal matches IP entries.",
           "file": "stdlib/x509/x509.sl",
-          "line": 165
+          "line": 164
         },
         {
           "name": "valid_at",
@@ -19400,7 +19400,7 @@
           "sig": "fn valid_at(c: Cert, unix: int) -> bool",
           "doc": "Is `unix` (seconds) inside the certificate's validity period?",
           "file": "stdlib/x509/x509.sl",
-          "line": 170
+          "line": 169
         },
         {
           "name": "expires_in",
@@ -19408,7 +19408,7 @@
           "sig": "fn expires_in(c: Cert) -> int",
           "doc": "Seconds until the certificate expires; negative once it has.",
           "file": "stdlib/x509/x509.sl",
-          "line": 175
+          "line": 174
         },
         {
           "name": "verify",
@@ -19416,7 +19416,7 @@
           "sig": "fn verify(chain: [Cert], v: Verify) -> result[bool, str]",
           "doc": "Checks `chain` (the leaf first, then any intermediates) up to one of the roots: every signature, validity at `v.at`, and the host and purpose when set. ok(true), or why not, in words that do not change with the OpenSSL version: \"x509: certificate has expired\", \"x509: certificate is not yet valid\", \"x509: hostname mismatch\", \"x509: IP address mismatch\", \"x509: certificate is not for this purpose\", \"x509: certificate signed by unknown authority\", \"x509: self-signed certificate not in the roots\", \"x509: certificate signature does not verify\", \"x509: issuer is not a CA\", \"x509: path length constraint exceeded\"; rarer failures carry OpenSSL's own reason.",
           "file": "stdlib/x509/x509.sl",
-          "line": 189
+          "line": 188
         },
         {
           "name": "csr",
@@ -19424,7 +19424,7 @@
           "sig": "fn csr(key_pem: str, r: Request) -> result[str, str]",
           "doc": "A certificate signing request (PKCS#10, PEM) for `r`'s names, signed with `key_pem` (an RSA, EC or Ed25519 private key in PEM). It is what an ACME server, or any CA, is sent: it carries the names and the public key, and proves the sender holds the private key.",
           "file": "stdlib/x509/x509.sl",
-          "line": 216
+          "line": 215
         },
         {
           "name": "self_signed",
@@ -19432,7 +19432,7 @@
           "sig": "fn self_signed(key_pem: str, r: Request, days: int) -> result[str, str]",
           "doc": "A certificate for `r`'s names, signed by its own key and valid from now for `days` (1 to 36500): for development TLS and tests. It is a leaf (not a CA) for server and client auth; to verify it, pass its own PEM as `roots_pem`.",
           "file": "stdlib/x509/x509.sl",
-          "line": 224
+          "line": 223
         }
       ]
     },
@@ -19446,7 +19446,7 @@
           "sig": "gc struct Attr",
           "doc": "",
           "file": "stdlib/xml/xml.sl",
-          "line": 46
+          "line": 45
         },
         {
           "name": "Node",
@@ -19454,7 +19454,7 @@
           "sig": "gc struct Node",
           "doc": "",
           "file": "stdlib/xml/xml.sl",
-          "line": 55
+          "line": 54
         },
         {
           "name": "Limits",
@@ -19462,7 +19462,7 @@
           "sig": "struct Limits",
           "doc": "",
           "file": "stdlib/xml/xml.sl",
-          "line": 69
+          "line": 68
         },
         {
           "name": "default_limits",
@@ -19470,7 +19470,7 @@
           "sig": "fn default_limits() -> Limits",
           "doc": "",
           "file": "stdlib/xml/xml.sl",
-          "line": 81
+          "line": 80
         },
         {
           "name": "parse",
@@ -19478,7 +19478,7 @@
           "sig": "fn parse(text: str) -> result[Node, str]",
           "doc": "The document's root element.",
           "file": "stdlib/xml/xml.sl",
-          "line": 143
+          "line": 142
         },
         {
           "name": "parse_with",
@@ -19486,7 +19486,7 @@
           "sig": "fn parse_with(text: str, lim: Limits) -> result[Node, str]",
           "doc": "",
           "file": "stdlib/xml/xml.sl",
-          "line": 147
+          "line": 146
         },
         {
           "name": "Node.attr",
@@ -19494,7 +19494,7 @@
           "sig": "fn attr(self: Node, name: str) -> opt[str]",
           "doc": "An attribute's value by its name as written (\"id\", \"xml:lang\").",
           "file": "stdlib/xml/xml.sl",
-          "line": 897
+          "line": 896
         },
         {
           "name": "Node.attr_ns",
@@ -19502,7 +19502,7 @@
           "sig": "fn attr_ns(self: Node, ns: str, local: str) -> opt[str]",
           "doc": "An attribute's value by namespace URI and local name.",
           "file": "stdlib/xml/xml.sl",
-          "line": 907
+          "line": 906
         },
         {
           "name": "Node.elements",
@@ -19510,7 +19510,7 @@
           "sig": "fn elements(self: Node) -> [Node]",
           "doc": "Child elements, in order, without text, comments or PIs.",
           "file": "stdlib/xml/xml.sl",
-          "line": 917
+          "line": 916
         },
         {
           "name": "Node.child",
@@ -19518,7 +19518,7 @@
           "sig": "fn child(self: Node, local: str) -> opt[Node]",
           "doc": "The first child element with this local name, in any namespace.",
           "file": "stdlib/xml/xml.sl",
-          "line": 928
+          "line": 927
         },
         {
           "name": "Node.child_ns",
@@ -19526,7 +19526,7 @@
           "sig": "fn child_ns(self: Node, ns: str, local: str) -> opt[Node]",
           "doc": "The first child element with this namespace and local name.",
           "file": "stdlib/xml/xml.sl",
-          "line": 938
+          "line": 937
         },
         {
           "name": "Node.children_named",
@@ -19534,7 +19534,7 @@
           "sig": "fn children_named(self: Node, local: str) -> [Node]",
           "doc": "Every child element with this local name.",
           "file": "stdlib/xml/xml.sl",
-          "line": 948
+          "line": 947
         },
         {
           "name": "Node.text_content",
@@ -19542,7 +19542,7 @@
           "sig": "fn text_content(self: Node) -> str",
           "doc": "The text of this node and everything under it, in document order.",
           "file": "stdlib/xml/xml.sl",
-          "line": 959
+          "line": 958
         },
         {
           "name": "Node.child_text",
@@ -19550,7 +19550,7 @@
           "sig": "fn child_text(self: Node, local: str) -> str",
           "doc": "The trimmed text of the first child element named `local`, or \"\".",
           "file": "stdlib/xml/xml.sl",
-          "line": 972
+          "line": 971
         },
         {
           "name": "Node.find",
@@ -19558,7 +19558,7 @@
           "sig": "fn find(self: Node, path: str) -> opt[Node]",
           "doc": "The first element at a path of local names below this one: \"channel/item/title\". none when any step is missing.",
           "file": "stdlib/xml/xml.sl",
-          "line": 979
+          "line": 978
         },
         {
           "name": "Node.find_all",
@@ -19566,7 +19566,7 @@
           "sig": "fn find_all(self: Node, path: str) -> [Node]",
           "doc": "Every element at a path of local names below this one, in document order.",
           "file": "stdlib/xml/xml.sl",
-          "line": 989
+          "line": 988
         },
         {
           "name": "element",
@@ -19574,7 +19574,7 @@
           "sig": "fn element(name: str) -> Node",
           "doc": "A new element named `name` (prefix included, if any). Declare its namespaces as attributes: set_attr(\"xmlns\", uri), set_attr(\"xmlns:p\", uri).",
           "file": "stdlib/xml/xml.sl",
-          "line": 1031
+          "line": 1030
         },
         {
           "name": "text_node",
@@ -19582,7 +19582,7 @@
           "sig": "fn text_node(s: str) -> Node",
           "doc": "",
           "file": "stdlib/xml/xml.sl",
-          "line": 1036
+          "line": 1035
         },
         {
           "name": "Node.set_attr",
@@ -19590,7 +19590,7 @@
           "sig": "fn set_attr(self: Node, name: str, value: str) -> Node",
           "doc": "Sets an attribute, replacing one of the same name. Returns the node.",
           "file": "stdlib/xml/xml.sl",
-          "line": 1050
+          "line": 1049
         },
         {
           "name": "Node.add",
@@ -19598,7 +19598,7 @@
           "sig": "fn add(self: Node, child: Node) -> Node",
           "doc": "Appends a child node. Returns this node, so calls chain.",
           "file": "stdlib/xml/xml.sl",
-          "line": 1062
+          "line": 1061
         },
         {
           "name": "Node.add_text",
@@ -19606,7 +19606,7 @@
           "sig": "fn add_text(self: Node, s: str) -> Node",
           "doc": "",
           "file": "stdlib/xml/xml.sl",
-          "line": 1067
+          "line": 1066
         },
         {
           "name": "escape_text",
@@ -19614,7 +19614,7 @@
           "sig": "fn escape_text(s: str) -> str",
           "doc": "Text for element content: & < > escaped (> too, so \"]]>\" never appears).",
           "file": "stdlib/xml/xml.sl",
-          "line": 1074
+          "line": 1073
         },
         {
           "name": "escape_attr",
@@ -19622,7 +19622,7 @@
           "sig": "fn escape_attr(s: str) -> str",
           "doc": "Text for a double-quoted attribute value. Tab, LF and CR are written as references, or a reader would turn them into spaces.",
           "file": "stdlib/xml/xml.sl",
-          "line": 1107
+          "line": 1106
         },
         {
           "name": "write",
@@ -19630,7 +19630,7 @@
           "sig": "fn write(n: Node) -> result[str, str]",
           "doc": "The element and everything under it, as compact XML. Names are written as given; text and attribute values are escaped. A comment containing \"--\" or a PI containing \"?>\" cannot be written and is an error, as is a name that is not an XML name or a control character in text.",
           "file": "stdlib/xml/xml.sl",
-          "line": 1135
+          "line": 1134
         },
         {
           "name": "write_document",
@@ -19638,7 +19638,7 @@
           "sig": "fn write_document(root: Node) -> result[str, str]",
           "doc": "write, after an XML declaration.",
           "file": "stdlib/xml/xml.sl",
-          "line": 1143
+          "line": 1142
         }
       ]
     },
@@ -19690,7 +19690,7 @@
           "sig": "gc struct Entry",
           "doc": "",
           "file": "stdlib/zip/zip.sl",
-          "line": 41
+          "line": 39
         },
         {
           "name": "Archive",
@@ -19698,7 +19698,7 @@
           "sig": "gc struct Archive",
           "doc": "",
           "file": "stdlib/zip/zip.sl",
-          "line": 59
+          "line": 57
         },
         {
           "name": "Limits",
@@ -19706,7 +19706,7 @@
           "sig": "struct Limits",
           "doc": "",
           "file": "stdlib/zip/zip.sl",
-          "line": 68
+          "line": 66
         },
         {
           "name": "default_limits",
@@ -19714,7 +19714,7 @@
           "sig": "fn default_limits() -> Limits",
           "doc": "",
           "file": "stdlib/zip/zip.sl",
-          "line": 74
+          "line": 72
         },
         {
           "name": "open",
@@ -19722,7 +19722,7 @@
           "sig": "fn open(data: bytes) -> result[Archive, str]",
           "doc": "",
           "file": "stdlib/zip/zip.sl",
-          "line": 102
+          "line": 100
         },
         {
           "name": "open_with",
@@ -19730,7 +19730,7 @@
           "sig": "fn open_with(data: bytes, lim: Limits) -> result[Archive, str]",
           "doc": "",
           "file": "stdlib/zip/zip.sl",
-          "line": 106
+          "line": 104
         },
         {
           "name": "read",
@@ -19738,7 +19738,7 @@
           "sig": "fn read(a: Archive, e: Entry) -> result[bytes, str]",
           "doc": "The entry's contents, inflated and checked against its size and CRC-32.",
           "file": "stdlib/zip/zip.sl",
-          "line": 337
+          "line": 335
         },
         {
           "name": "find",
@@ -19746,7 +19746,7 @@
           "sig": "fn find(a: Archive, name: str) -> opt[Entry]",
           "doc": "The entry named `name` exactly, if there is one.",
           "file": "stdlib/zip/zip.sl",
-          "line": 378
+          "line": 376
         },
         {
           "name": "safe_path",
@@ -19754,7 +19754,7 @@
           "sig": "fn safe_path(name: str) -> result[str, str]",
           "doc": "A name made safe to join under an extraction directory: relative, with no \"..\", no drive letter or backslash, no NUL. A trailing \"/\" is kept. err names what is wrong; extracting such a name is how an archive writes outside the directory (\"zip slip\").",
           "file": "stdlib/zip/zip.sl",
-          "line": 391
+          "line": 389
         },
         {
           "name": "Writer",
@@ -19762,7 +19762,7 @@
           "sig": "gc struct Writer",
           "doc": "",
           "file": "stdlib/zip/zip.sl",
-          "line": 496
+          "line": 494
         },
         {
           "name": "new_writer",
@@ -19770,7 +19770,7 @@
           "sig": "fn new_writer() -> Writer",
           "doc": "",
           "file": "stdlib/zip/zip.sl",
-          "line": 506
+          "line": 504
         },
         {
           "name": "Writer.add",
@@ -19778,7 +19778,7 @@
           "sig": "fn add(self: Writer, name: str, data: bytes, modified: int) -> Writer",
           "doc": "Adds a file, deflated (stored instead when deflating does not make it smaller). `modified` is Unix seconds.",
           "file": "stdlib/zip/zip.sl",
-          "line": 525
+          "line": 523
         },
         {
           "name": "Writer.add_stored",
@@ -19786,7 +19786,7 @@
           "sig": "fn add_stored(self: Writer, name: str, data: bytes, modified: int) -> Writer",
           "doc": "Adds a file as is: for data that is already compressed.",
           "file": "stdlib/zip/zip.sl",
-          "line": 530
+          "line": 528
         },
         {
           "name": "Writer.add_dir",
@@ -19794,7 +19794,7 @@
           "sig": "fn add_dir(self: Writer, name: str, modified: int) -> Writer",
           "doc": "Adds a directory; \"/\" is appended to the name when missing.",
           "file": "stdlib/zip/zip.sl",
-          "line": 535
+          "line": 533
         },
         {
           "name": "Writer.finish",
@@ -19802,7 +19802,7 @@
           "sig": "fn finish(self: Writer) -> result[bytes, str]",
           "doc": "The whole archive, or the first problem an add ran into.",
           "file": "stdlib/zip/zip.sl",
-          "line": 634
+          "line": 632
         }
       ]
     }

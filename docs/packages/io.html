@@ -101,8 +101,7 @@ try { var t = localStorage.getItem("slang-theme");
 <span class="k">import</span> <span class="s">&quot;log&quot;</span>;
 
 <span class="b">print</span>(<span class="s">&quot;name? &quot;</span>);                         <span class="c">// no io.flush() needed: reading flushes it</span>
-<span class="k">let</span> r = io.<span class="f">read_line</span>();
-<span class="k">guard</span> <span class="k">let</span> maybe = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) {
+<span class="k">guard</span> <span class="k">let</span> maybe = io.<span class="f">read_line</span>() <span class="k">else</span> |e| {
     io.<span class="f">eprintln</span>(<span class="s">&quot;cannot read input: &quot;</span> + e);
     <span class="b">exit</span>(<span class="n">1</span>);
 }
@@ -113,8 +112,7 @@ try { var t = localStorage.getItem("slang-theme");
 <p>A loop over every line is the same two guards inside <code>while true</code>:</p>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> total = <span class="n">0</span>;
 <span class="k">while</span> <span class="k">true</span> {
-    <span class="k">let</span> r = io.<span class="f">read_line</span>();
-    <span class="k">guard</span> <span class="k">let</span> maybe = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { io.<span class="f">eprintln</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }
+    <span class="k">guard</span> <span class="k">let</span> maybe = io.<span class="f">read_line</span>() <span class="k">else</span> |e| { io.<span class="f">eprintln</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }
     <span class="k">guard</span> <span class="k">let</span> line = maybe <span class="k">else</span> { <span class="k">break</span>; }         <span class="c">// end of input</span>
     total = total + <span class="b">len</span>(line);
 }</code></pre></div>
@@ -129,19 +127,16 @@ try { var t = localStorage.getItem("slang-theme");
 
 <span class="c">// a password: nothing is echoed while it is typed</span>
 <span class="b">print</span>(<span class="s">&quot;password: &quot;</span>);
-<span class="k">let</span> r = io.<span class="f">read_secret</span>();
-<span class="k">guard</span> <span class="k">let</span> maybe = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { io.<span class="f">eprintln</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }
+<span class="k">guard</span> <span class="k">let</span> maybe = io.<span class="f">read_secret</span>() <span class="k">else</span> |e| { io.<span class="f">eprintln</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }
 <span class="k">let</span> password = maybe ?? <span class="s">&quot;&quot;</span>;
 
 <span class="c">// wrap to the window; a pipe or a file has no width</span>
 <span class="k">let</span> width = io.<span class="f">term_width</span>() ?? <span class="n">80</span>;</code></pre></div>
 <p><code>read_secret</code> is <code>read_line</code> with the terminal&#x27;s echo off for the length of the read. The Enter is not echoed either, so it writes the newline for you. When stdin is not a terminal (a pipe, a file, a test) it is exactly <code>read_line</code>: nothing to turn off. <code>term_width</code> and <code>term_height</code> ask the terminal every time, so they follow a resized window — poll them, there is no resize event. They look at stdout, then stderr, then stdin, and are <code>none</code> when none of the three is a terminal.</p>
 <p><strong>Key by key.</strong> <code>raw_on</code> switches stdin from line-at-a-time to key-at-a-time: no line editing, no echo, and each key press is available as it happens. <code>read_key</code> names it:</p>
-<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> r = io.<span class="f">raw_on</span>();
-<span class="k">guard</span> <span class="k">let</span> <span class="b">ok</span> = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { io.<span class="f">eprintln</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }   <span class="c">// stdin is not a terminal</span>
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">guard</span> <span class="k">let</span> <span class="b">ok</span> = io.<span class="f">raw_on</span>() <span class="k">else</span> |e| { io.<span class="f">eprintln</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }   <span class="c">// stdin is not a terminal</span>
 <span class="k">while</span> <span class="k">true</span> {
-    <span class="k">let</span> k = io.<span class="f">read_key</span>();
-    <span class="k">guard</span> <span class="k">let</span> maybe = k <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(k) { <span class="k">break</span>; }
+    <span class="k">guard</span> <span class="k">let</span> maybe = io.<span class="f">read_key</span>() <span class="k">else</span> |e| { <span class="k">break</span>; }
     <span class="k">guard</span> <span class="k">let</span> key = maybe <span class="k">else</span> { <span class="k">break</span>; }                              <span class="c">// end of input</span>
     <span class="k">if</span> key == <span class="s">&quot;q&quot;</span> || key == <span class="s">&quot;esc&quot;</span> { <span class="k">break</span>; }
     <span class="k">if</span> key == <span class="s">&quot;up&quot;</span> { <span class="b">println</span>(<span class="s">&quot;up&quot;</span>); }

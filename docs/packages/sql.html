@@ -100,22 +100,19 @@ try { var t = localStorage.getItem("slang-theme");
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;sql&quot;</span>;
 <span class="k">import</span> <span class="s">&quot;log&quot;</span>;
 
-<span class="k">let</span> dr = sql.<span class="f">open</span>(<span class="s">&quot;app.db&quot;</span>);
-<span class="k">guard</span> <span class="k">let</span> db = dr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(dr) {
+<span class="k">guard</span> <span class="k">let</span> db = sql.<span class="f">open</span>(<span class="s">&quot;app.db&quot;</span>) <span class="k">else</span> |e| {
     log.<span class="f">error</span>(<span class="s">&quot;db open: &quot;</span> + e);
     <span class="b">exit</span>(<span class="n">1</span>);
 }
 sql.<span class="f">exec</span>(db, <span class="s">&quot;CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)&quot;</span>);
 
-<span class="k">let</span> pr = sql.<span class="f">prepare</span>(db, <span class="s">&quot;SELECT id, name FROM users WHERE id &gt; ?&quot;</span>);
-<span class="k">guard</span> <span class="k">let</span> st = pr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(pr) {
+<span class="k">guard</span> <span class="k">let</span> st = sql.<span class="f">prepare</span>(db, <span class="s">&quot;SELECT id, name FROM users WHERE id &gt; ?&quot;</span>) <span class="k">else</span> |e| {
     log.<span class="f">error</span>(<span class="s">&quot;prepare: &quot;</span> + e);          <span class="c">// e.g. &quot;no such table: users&quot;</span>
     <span class="b">exit</span>(<span class="n">1</span>);
 }
 sql.<span class="f">bind_int</span>(st, <span class="n">1</span>, <span class="n">0</span>);
 <span class="k">while</span> <span class="k">true</span> {
-    <span class="k">let</span> sr = sql.<span class="f">step</span>(st);
-    <span class="k">guard</span> <span class="k">let</span> more = sr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(sr) { log.<span class="f">error</span>(<span class="s">&quot;step: &quot;</span> + e); <span class="k">break</span>; }
+    <span class="k">guard</span> <span class="k">let</span> more = sql.<span class="f">step</span>(st) <span class="k">else</span> |e| { log.<span class="f">error</span>(<span class="s">&quot;step: &quot;</span> + e); <span class="k">break</span>; }
     <span class="k">if</span> !more { <span class="k">break</span>; }
     <span class="b">println</span>(<span class="b">to_str</span>(sql.<span class="f">col_int</span>(st, <span class="n">0</span>)) + <span class="s">&quot; &quot;</span> + sql.<span class="f">col_text</span>(st, <span class="n">1</span>));
 }
