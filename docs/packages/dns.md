@@ -13,7 +13,7 @@ let r = dns.system_resolver();                     // resolv.conf + hosts, read 
 let ips = dns.lookup_ip(r, "api.example.com", deadline);   // IPv4 first, then IPv6
 let mx = dns.lookup_mx(r, "example.com", deadline);        // by preference
 let srv = dns.lookup_srv(r, "_imap._tcp.example.com", deadline);
-guard let found = ips else let e = err_of(ips) {
+guard let found = ips else |e| {
     if e == "no such host" { /* NXDOMAIN, after every search domain */ }
     return;
 }

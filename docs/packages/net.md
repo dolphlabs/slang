@@ -49,8 +49,7 @@ import "net";
 import "time";
 
 let deadline = until_of(time.mono() + 5000000000);   // 5s from now
-let rr = net.recv_until(cfd, 4096, deadline);
-guard let data = rr else let e = err_of(rr) {
+guard let data = net.recv_until(cfd, 4096, deadline) else |e| {
     if e == "timeout" { net.close(cfd); return; }    // peer went quiet
     log.error("recv: " + e);                         // peer broke
     return;
@@ -110,12 +109,10 @@ worker; each lookup takes an absolute `until` deadline:
 import "net";
 import "time";
 let deadline = until_of(time.mono() + 5000000000);
-let seeds = net.lookup_srv_until("_mongodb._tcp.cluster.example", deadline);
-guard let records = seeds else let e = err_of(seeds) { println(e); exit(1); }
+guard let records = net.lookup_srv_until("_mongodb._tcp.cluster.example", deadline) else |e| { println(e); exit(1); }
 // Each SRV item is "priority:weight:port:target".
 
-let defaults = net.lookup_txt_until("cluster.example", deadline);
-guard let options = defaults else let e = err_of(defaults) { println(e); exit(1); }
+guard let options = net.lookup_txt_until("cluster.example", deadline) else |e| { println(e); exit(1); }
 // Each TXT item is one record with its DNS character-strings concatenated.
 ```
 
@@ -205,8 +202,7 @@ with `net.addr_str`.
 import "net";
 import "time";
 
-let br = net.udp_bind("0.0.0.0", 5353);     // "" also means any IPv4 address
-guard let fd = br else let e = err_of(br) { println(e); exit(1); }
+guard let fd = net.udp_bind("0.0.0.0", 5353) else |e| { println(e); exit(1); }   // "" also means any IPv4 address
 while true {
     let rr = net.recv_from(fd, 0);            // 0 = up to 65535 bytes
     guard let dgram = rr else { break; }
@@ -333,8 +329,7 @@ slow handshake holds up nobody else:
 
 ```slang
 fn serve(c: link, ctx: rawptr) {
-    let hr = c.tls_accept(ctx, until_of(time.mono() + 10000000000));
-    guard let _h = hr else let e = err_of(hr) {
+    guard let _h = c.tls_accept(ctx, until_of(time.mono() + 10000000000)) else |e| {
         return;                  // a scanner, a plaintext client, a timeout
     }
     // read_frame / write on c exactly as over plain TCP

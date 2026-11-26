@@ -26,8 +26,7 @@ import "time";
 import "log";
 
 let dl = until_of(time.mono() + 5000000000);
-let cr = redis.connect("redis://:secret@cache.internal:6380/2", dl);
-guard let c = cr else let e = err_of(cr) {
+guard let c = redis.connect("redis://:secret@cache.internal:6380/2", dl) else |e| {
     log.error("connect: " + e);
     exit(1);
 }

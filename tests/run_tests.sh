@@ -716,6 +716,14 @@ printf '%s\n' "$out" | grep -qx 'fn set_header(name: str, value: str) -> str' ||
 out=$(cd tests/doccmd && "$OLDPWD/slangc" doc docpkg.Req.header 2>&1)
 [ "$out" = "$(printf '%s\n' '// The value of one request header.' 'fn header(self: Req, name: str) -> str')" ] ||
     dc_fail "exact item still shown in full: $out"
+out=$(cd tests/doccmd && "$OLDPWD/slangc" doc docpkg.join_args 2>&1)
+[ "$out" = "$(printf '%s\n' '// Joins two arguments.' 'fn join_args(a: str, b: str) -> str')" ] ||
+    dc_fail "multi-line trailing comma signature: $out"
+out=$(cd tests/doccmd && "$OLDPWD/slangc" doc docpkg 2>&1)
+printf '%s\n' "$out" | grep -qx 'struct CallbackBox { id: int, cb: fn(int) -> str }' ||
+    dc_fail "struct one_line multi-line fn field: $out"
+printf '%s\n' "$out" | grep -qx 'let DEFAULT_FN: fn(int) -> int = plain;' ||
+    dc_fail "pub let trailing comma: $out"
 (cd tests/doccmd && "$OLDPWD/slangc" doc docpkg nothing_mentions_this >/dev/null 2>&1) &&
     dc_fail "search with no match must exit nonzero"
 out=$(./slangc doc builder.Str 2>&1)
@@ -839,11 +847,11 @@ fi
 echo "--- GC stress (SLANG_GC_THRESHOLD_KB=16) ---"
 gc_bad=0
 for name in gc_ctor_payload gc_map_put pg_rows_as postgres http_client_pool http2_flood h2_client h2_client_close chan_recv_promoted value_results value_opts encoding_f64 crypto \
-            spawn_isolation gc_stress maps json json_int_exact flags method_recv \
+            spawn_isolation gc_stress maps json json_int_exact json_tags tagged_enums select_timeout flags method_recv \
             method_recv_gc indirect_callee generics_structs generics_json generics_infer \
             generics_pkg gc_nested_literal generics_methods \
             generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry loop_leaf_poll loop_leaf_plus safepoint_task_once own_roots switch escape_roots \
-            http_read_wire bytes_empty_literal gc_minor_barriers net_dns_records map_delete map_key_shapes map_delete_gaps for_in_str str_nul_fffd if_let \
+            http_read_wire bytes_empty_literal gc_minor_barriers net_dns_records map_delete map_key_shapes map_delete_gaps for_in_str str_nul_fffd if_let if_let_else_bind guard_else_bind_loop defer_drops defer_gc defer_gc_remediation defer_methods defer_stdlib \
             literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions leaf_fn_native_args net_udp math_vec json_parity json_utf8 json_decode_budget \
             bytes json_deep_nesting gc_container_frontier gc_promotion_budget gc_chan_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks sort_test \
             json_wide; do
@@ -899,8 +907,8 @@ echo "--- nursery stress (SLANG_GC_NURSERY_KB=16) ---"
 nur_bad=0
 for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put value_results value_opts encoding_f64 crypto \
             gc_nested_literal gc_stress gc_stat spawn_isolation maps pg_rows_as json \
-            json_int_exact flags method_recv method_recv_gc indirect_callee \
-            http_read_wire bytes_empty_literal gc_minor_barriers net_dns_records map_delete map_key_shapes map_delete_gaps for_in_str str_nul_fffd if_let \
+            json_int_exact json_tags tagged_enums select_timeout flags method_recv method_recv_gc indirect_callee \
+            http_read_wire bytes_empty_literal gc_minor_barriers net_dns_records map_delete map_key_shapes map_delete_gaps for_in_str str_nul_fffd if_let if_let_else_bind guard_else_bind_loop defer_drops defer_gc defer_gc_remediation defer_methods defer_stdlib \
             literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions leaf_fn_native_args net_udp loop_leaf_plus safepoint_task_once json_parity json_utf8 json_decode_budget \
             bytes json_deep_nesting gc_container_frontier gc_promotion_budget gc_chan_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks sort_test; do
     out="/tmp/sl_nursery_${name}.out"
@@ -928,10 +936,10 @@ done
 # and task/channel/network tests. The count must be zero.
 echo "--- minor collections verified (SLANG_GC_VERIFY_MINOR, 16KB nursery) ---"
 vm_bad=0
-for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc_map_put encoding_f64 crypto if_let \
+for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc_map_put map_value_field_store encoding_f64 crypto if_let if_let_else_bind guard_else_bind_loop defer_drops defer_gc defer_gc_remediation defer_methods defer_stdlib \
             literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions leaf_functions_wide leaf_fn_native_args net_udp loop_leaf_plus safepoint_task_once \
             gc_nested_literal gc_nursery_barrier gc_nursery_promotion net_dns_records \
-            spawn_isolation select maps pg_rows_as json json_parity json_utf8 unicode json_decimal crypto_more nats_reconnect json_decode_budget \
+            spawn_isolation select select_timeout maps pg_rows_as json json_parity json_utf8 json_tags tagged_enums unicode json_decimal crypto_more nats_reconnect json_decode_budget \
             bytes json_deep_nesting redis http_read_wire http_client_pool http2_flood h2_client h2_client_close chan_recv_promoted value_results value_opts \
             gc_promotion_budget gc_chan_promotion_budget \
             value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks gc_skip_queued \
@@ -1885,8 +1893,8 @@ rm -f /tmp/sl_gw
 echo "--- frame guards (SLANG_FRAME_LIMIT=64) ---"
 fg_bad=0
 for name in fn_values spawn_isolation gc_stress maps json flags method_recv \
-            method_recv_own method_pub indirect_callee enum move own structs \
-            mutex select big_frame generics_structs generics_pkg \
+            method_recv_own method_pub indirect_callee enum tagged_enums move own structs \
+            mutex select select_timeout big_frame generics_structs generics_pkg \
             generics_methods json_wide pg_rows_as; do
     [ -f "tests/$name/main.sl" ] || continue
     out="/tmp/sl_fg_${name}.out"
@@ -1997,7 +2005,7 @@ rm -rf "$fc_dir"
 echo "--- development builds (--dev) ---"
 dv_bad=0
 for name in big_frame json_wide json_deep_nesting crypto sql spawn_isolation \
-            gc_stress select; do
+            gc_stress select select_timeout; do
     [ -f "tests/$name/main.sl" ] || continue
     out="/tmp/sl_dev_${name}.out"
     if ! ./slangc "tests/$name/main.sl" --dev --run >"$out" 2>/dev/null \

@@ -2,8 +2,7 @@
 //
 //     import "x509";
 //
-//     let r = x509.parse_pem(pem);              // result[[Cert], str]: every CERTIFICATE block
-//     guard let certs = r else let e = err_of(r) { panic(e); }
+//     guard let certs = x509.parse_pem(pem) else |e| { panic(e); }   // result[[Cert], str]: every CERTIFICATE block
 //     let c = certs[0];
 //     c.not_after                               // unix seconds: when it expires
 //     c.dns_names                               // ["api.example.com", "*.example.com"]

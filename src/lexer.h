@@ -42,6 +42,7 @@ typedef enum {
     T_KW_SWITCH,
     T_KW_CASE,
     T_KW_DEFAULT,
+    T_KW_DEFER,
 
     /* type names */
     T_TY_INT,
@@ -122,7 +123,8 @@ typedef enum {
     T_DOTDOT,
     T_DOTDOTEQ,
     T_ARROW,
-    T_LIFETIME
+    T_LIFETIME,
+    T_TAG
 } TokenType;
 
 typedef struct {

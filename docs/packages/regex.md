@@ -37,8 +37,7 @@ which is how you walk every match.
 ```slang
 import "regex";
 
-let cr = regex.compile("(\\d{4})-(\\d{2})-(\\d{2})");
-guard let re = cr else let e = err_of(cr) {
+guard let re = regex.compile("(\\d{4})-(\\d{2})-(\\d{2})") else |e| {
     log.error("bad pattern: " + e);   // e.g. "missing ) at offset 9"
     exit(1);
 }

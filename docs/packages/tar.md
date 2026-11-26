@@ -10,8 +10,7 @@ UTF-8 names) or a tar (ustar, pax, GNU long names; a `.tar.gz` is
 import "tar";
 import "zip";
 
-let r = zip.open(data);
-guard let arc = r else let e = err_of(r) { panic(e); }
+guard let arc = zip.open(data) else |e| { panic(e); }
 for e in arc.entries {
     let pr = zip.safe_path(e.name);          // refuses ../, /abs, C:\ (zip slip)
     guard let rel = pr else { continue; }

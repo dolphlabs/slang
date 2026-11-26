@@ -103,6 +103,175 @@ void sig_register_raw(CG *cg, Package *p, FuncDecl *f,
     f->sig_idx = cg->sigs.count;
 }
 
+/* Parse Go-style struct field tags (`json:"wire,omitempty"`, `json:"-"`,
+ * `json:"-,"`, plus ignored non-json key:"val" pairs) and reject
+ * malformed syntax, unknown options, or colliding wire names. */
+void parse_struct_field_tags(const char *sname, int line, char **fields,
+                             char **ftags, int nfields,
+                             char ***json_names_out, int **json_omit_out,
+                             int **json_skip_out) {
+    if (nfields <= 0) {
+        *json_names_out = NULL;
+        *json_omit_out = NULL;
+        *json_skip_out = NULL;
+        return;
+    }
+    char **jnames = (char **)xmalloc(sizeof(char *) * (size_t)nfields);
+    int *jomit = (int *)xmalloc(sizeof(int) * (size_t)nfields);
+    int *jskip = (int *)xmalloc(sizeof(int) * (size_t)nfields);
+    memset(jomit, 0, sizeof(int) * (size_t)nfields);
+    memset(jskip, 0, sizeof(int) * (size_t)nfields);
+
+    for (int i = 0; i < nfields; i++) {
+        jnames[i] = fields[i];
+        if (!ftags || !ftags[i])
+            continue;
+        const char *p = ftags[i];
+        int saw_json = 0;
+        while (*p) {
+            while (*p == ' ' || *p == '\t')
+                p++;
+            if (!*p)
+                break;
+            if (!isalpha((unsigned char)*p) && *p != '_')
+                cg_error(line,
+                         "invalid struct tag on field '%s.%s': expected "
+                         "key:\"value\" pair (e.g. `json:\"wire_name\"`)",
+                         sname, fields[i]);
+            const char *kstart = p;
+            while (isalnum((unsigned char)*p) || *p == '_' || *p == '-')
+                p++;
+            size_t klen = (size_t)(p - kstart);
+            char *key = (char *)xmalloc(klen + 1);
+            memcpy(key, kstart, klen);
+            key[klen] = '\0';
+            if (*p != ':')
+                cg_error(line,
+                         "invalid struct tag on field '%s.%s': expected ':' "
+                         "after key '%s' (e.g. `%s:\"value\"`)",
+                         sname, fields[i], key, key);
+            p++;
+            if (*p != '"')
+                cg_error(line,
+                         "invalid struct tag on field '%s.%s': expected '\"' "
+                         "after '%s:' (e.g. `%s:\"value\"`)",
+                         sname, fields[i], key, key);
+            p++;
+            char *val = (char *)xmalloc(strlen(p) + 1);
+            size_t vlen = 0;
+            while (*p && *p != '"') {
+                if ((unsigned char)*p < 0x20)
+                    cg_error(line,
+                             "invalid struct tag on field '%s.%s': control "
+                             "character inside tag value",
+                             sname, fields[i]);
+                if (*p == '\\') {
+                    p++;
+                    if (!*p)
+                        break;
+                }
+                val[vlen++] = *p++;
+            }
+            if (*p != '"')
+                cg_error(line,
+                         "invalid struct tag on field '%s.%s': unterminated "
+                         "quoted value in tag '%s'",
+                         sname, fields[i], key);
+            val[vlen] = '\0';
+            p++;
+            if (*p && *p != ' ' && *p != '\t')
+                cg_error(line,
+                         "invalid struct tag on field '%s.%s': expected space "
+                         "between tag pairs after '%s:\"...\"'",
+                         sname, fields[i], key);
+
+            if (!strcmp(key, "json")) {
+                if (saw_json)
+                    cg_error(line,
+                             "duplicate 'json' tag on field '%s.%s'",
+                             sname, fields[i]);
+                saw_json = 1;
+                if (!strcmp(val, "-")) {
+                    jskip[i] = 1;
+                    jnames[i] = NULL;
+                    jomit[i] = 0;
+                } else {
+                    const char *comma = strchr(val, ',');
+                    size_t nlen = comma ? (size_t)(comma - val) : strlen(val);
+                    if (nlen > 0) {
+                        for (size_t q = 0; q < nlen; q++) {
+                            unsigned char ch = (unsigned char)val[q];
+                            if (ch < 0x20 || ch == '"' || ch == '\\')
+                                cg_error(line,
+                                         "invalid json field name on '%s.%s': "
+                                         "contains unsupported character for "
+                                         "a JSON key",
+                                         sname, fields[i]);
+                        }
+                        char *wn = (char *)xmalloc(nlen + 1);
+                        memcpy(wn, val, nlen);
+                        wn[nlen] = '\0';
+                        jnames[i] = wn;
+                    }
+                    if (comma && comma[1] != '\0') {
+                        const char *op = comma + 1;
+                        for (;;) {
+                            const char *next = strchr(op, ',');
+                            size_t olen = next ? (size_t)(next - op) : strlen(op);
+                            char *opt = (char *)xmalloc(olen + 1);
+                            memcpy(opt, op, olen);
+                            opt[olen] = '\0';
+                            if (olen == 0) {
+                                cg_error(line,
+                                         "empty json tag option on field "
+                                         "'%s.%s' (supported: 'omitempty')",
+                                         sname, fields[i]);
+                            } else if (!strcmp(opt, "omitempty")) {
+                                if (jomit[i])
+                                    cg_error(line,
+                                             "duplicate 'omitempty' option in "
+                                             "json tag on field '%s.%s'",
+                                             sname, fields[i]);
+                                jomit[i] = 1;
+                            } else {
+                                cg_error(line,
+                                         "unknown json tag option '%s' on "
+                                         "field '%s.%s' (supported: "
+                                         "'omitempty', or use `json:\"-\"` "
+                                         "to skip)",
+                                         opt, sname, fields[i]);
+                            }
+                            free(opt);
+                            if (!next)
+                                break;
+                            op = next + 1;
+                        }
+                    }
+                }
+            }
+            free(key);
+            free(val);
+        }
+    }
+
+    for (int i = 0; i < nfields; i++) {
+        if (jskip[i])
+            continue;
+        for (int q = 0; q < i; q++) {
+            if (!jskip[q] && !strcmp(jnames[q], jnames[i]))
+                cg_error(line,
+                         "duplicate json field name '%s' in struct '%s' "
+                         "(used by fields '%s' and '%s'; rename one with "
+                         "`json:\"other\"`)",
+                         jnames[i], sname, fields[q], fields[i]);
+        }
+    }
+
+    *json_names_out = jnames;
+    *json_omit_out = jomit;
+    *json_skip_out = jskip;
+}
+
 /* Collect imports, structs, free functions, and methods from every
  * package, then canonicalize all stored type names. */
 void collect_decls(CG *cg, Package *pkgs, int npkgs) {
@@ -166,7 +335,11 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
             sd->is_gc = s->as.struct_decl.is_gc;
             sd->fields = s->as.struct_decl.fields;
             sd->ftypes = (const char **)s->as.struct_decl.ftypes;
+            sd->ftags = s->as.struct_decl.ftags;
             sd->nfields = s->as.struct_decl.nfields;
+            parse_struct_field_tags(sd->name, s->line, sd->fields, sd->ftags,
+                                    sd->nfields, &sd->json_names,
+                                    &sd->json_omit, &sd->json_skip);
             sd->lts = s->as.struct_decl.lts;
             sd->nlts = s->as.struct_decl.nlts;
             sd->line = s->line;
@@ -199,6 +372,8 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
             check_declared_lts(sd->lts, sd->nlts, sd->ftypes[j], sd->line);
         }
     }
+
+    canon_enum_payloads(cg);
 
     /* pass 3: methods from impl blocks */
     for (i = 0; i < npkgs; i++) {
@@ -508,6 +683,11 @@ static void emit_struct_body(CG *cg, StructDef *sd, unsigned char *state) {
          * declaration above; anything else is not a type that can
          * appear here by value. */
         if (!dep) {
+            EnumDef *ed = enum_find_canon(cg, sd->ftypes[j]);
+            if (ed && ed->has_payload) {
+                emit_enum_body(cg, ed, state, sd->line);
+                continue;
+            }
             ResInst *ri = res_find(cg, sd->ftypes[j]);
             if (ri && res_inst_is_value(cg, ri))
                 emit_res_value_body(cg, ri, state, sd->line);
@@ -555,6 +735,8 @@ void emit_struct_and_value_res_types(CG *cg) {
         cg->res.items[i].body_state = 0;
     for (int i = 0; i < cg->opts.count; i++)
         cg->opts.items[i].body_state = 0;
+    for (int i = 0; i < cg->enums.count; i++)
+        cg->enums.items[i].body_state = 0;
     unsigned char *sstate = NULL;
     if (cg->structs.count) {
         sstate = (unsigned char *)xmalloc((size_t)cg->structs.count);
@@ -570,6 +752,11 @@ void emit_struct_and_value_res_types(CG *cg) {
     for (int i = 0; i < cg->opts.count; i++)
         if (cg->opts.items[i].body_state != 2)
             emit_opt_value_body(cg, &cg->opts.items[i], sstate, 0);
+    for (int i = 0; i < cg->enums.count; i++) {
+        EnumDef *ed = &cg->enums.items[i];
+        if (ed->has_payload && ed->body_state != 2)
+            emit_enum_body(cg, ed, sstate, ed->line);
+    }
     free(sstate);
 }
 
@@ -626,6 +813,36 @@ static void emit_value_marks(CG *cg, const char *path, const char *t) {
     }
     if (is_opt(t)) {
         emit_value_marks(cg, xasprintf("%s.v", path), opt_inner(t));
+        return;
+    }
+    if (is_tagged_enum(cg, t) && type_has_gc_roots(cg, t)) {
+        EnumDef *ed = enum_find_canon(cg, t);
+        emit_line(cg, "switch (o->%s.tag) {", path);
+        cg->indent++;
+        for (int v = 0; v < ed->nvariants; v++) {
+            int any = 0;
+            for (int f = 0; f < ed->v_ntypes[v]; f++) {
+                if (type_has_gc_roots(cg, ed->v_types[v][f])) {
+                    any = 1;
+                    break;
+                }
+            }
+            if (!any)
+                continue;
+            emit_line(cg, "case %d: {", (int)ed->values[v]);
+            cg->indent++;
+            for (int f = 0; f < ed->v_ntypes[v]; f++) {
+                if (type_has_gc_roots(cg, ed->v_types[v][f]))
+                    emit_value_marks(cg, xasprintf("%s.u.v%d._%d", path, v, f),
+                                     ed->v_types[v][f]);
+            }
+            emit_line(cg, "break;");
+            cg->indent--;
+            emit_line(cg, "}");
+        }
+        emit_line(cg, "default: break;");
+        cg->indent--;
+        emit_line(cg, "}");
         return;
     }
     StructDef *sub = struct_find_canon(cg, t);
@@ -756,12 +973,21 @@ static void emit_res_value_dep(CG *cg, const char *t, unsigned char *sstate,
             emit_struct_body(cg, sd, sstate);
         return;
     }
+    EnumDef *ed = enum_find_canon(cg, t);
+    if (ed && ed->has_payload) {
+        emit_enum_body(cg, ed, sstate, line);
+        return;
+    }
     ResInst *inner = res_find(cg, t);
     if (inner && res_inst_is_value(cg, inner))
         emit_res_value_body(cg, inner, sstate, line);
     OptInst *oi = opt_find(cg, t);
     if (oi)
         emit_opt_value_body(cg, oi, sstate, line);
+}
+
+void emit_value_dep(CG *cg, const char *t, unsigned char *sstate, int line) {
+    emit_res_value_dep(cg, t, sstate, line);
 }
 
 /* An opt is held by value ({ has, v }), so its payload's body comes
@@ -903,7 +1129,8 @@ void emit_opt_res_types(CG *cg) {
  * that needs one always gets one: a value struct holding a str used to
  * get NULL, and the str was freed under the opt or result holding it. */
 static void emit_payload_marks(CG *cg, const char *field, const char *t) {
-    if (type_is_gc_ptr(cg, t) || is_result(t) || is_opt(t)) {
+    if (type_is_gc_ptr(cg, t) || is_result(t) || is_opt(t) ||
+        is_tagged_enum(cg, t)) {
         emit_value_marks(cg, field, t);
         return;
     }
@@ -1485,9 +1712,13 @@ void gen_function(CG *cg, Package *p, FuncDecl *f) {
     emit_line(cg, "    sl_task *_sl_self = NULL; (void)_sl_self;");
     for (int j = 0; j < f->nparams; j++)
         emit_drop_flag(cg, f->params[j]);
+    cg->fn_ndefers = 0;
+    cg->in_defer_cleanup = 0;
+    defer_collect_fn_defers(cg, f->body);
     size_t body_at = cg->out->len;
-    gen_block(cg, f->body);
+    gen_fn_body(cg, f->body);
     emit_scope_drops(cg, 0);
+    defer_emit_fn_decls_at(cg, body_at);
     /* A collection point in a leaf body runs while every caller's live
      * values sit unrooted: heap corruption far from here. Fail the
      * compile instead, whichever emitter put it there. */
@@ -1519,6 +1750,8 @@ void gen_function(CG *cg, Package *p, FuncDecl *f) {
     cg->in_leaf_fn = 0;
     cg->cur_ret = NULL;
     cg->cur_func = NULL;
+    cg->fn_ndefers = 0;
+    cg->in_defer_cleanup = 0;
 }
 
 /* Generate the complete translation unit into cg->out. */
@@ -1536,6 +1769,9 @@ static void cg_reset_after_error(CG *cg, int indent) {
     cg->switch_depth = 0;
     cg->cur_break_live_set = NULL;
     cg->cur_continue_live_set = NULL;
+    cg->fn_ndefers = 0;
+    cg->in_defer_cleanup = 0;
+    cg->ambient_count = 0;
     var_scope_reset(cg);
 }
 
@@ -1636,6 +1872,7 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
     force_native_result_types(cg);
     emit_opt_res_forward_decls(cg);
     emit_struct_fwd_decls(cg);
+    emit_enum_fwd_decls(cg);
     emit_fn_types(cg); /* between the struct names and the struct bodies */
     emit_struct_and_value_res_types(cg);
     emit_struct_tracers(cg);

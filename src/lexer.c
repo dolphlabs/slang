@@ -482,6 +482,7 @@ Token lexer_next(Lexer *lx) {
         KW("switch", T_KW_SWITCH)
         KW("case", T_KW_CASE)
         KW("default", T_KW_DEFAULT)
+        KW("defer", T_KW_DEFER)
         KW("int", T_TY_INT)
         KW("float", T_TY_FLOAT)
         KW("str", T_TY_STR)
@@ -533,6 +534,26 @@ Token lexer_next(Lexer *lx) {
         t.text = (char *)xmalloc(len + 1);
         memcpy(t.text, src + start, len);
         t.text[len] = '\0';
+        return t;
+    }
+
+    /* Go-style raw struct tag: `json:"wireName,omitempty"` */
+    if (c == '`') {
+        lx->pos++;
+        size_t start = lx->pos;
+        while (src[lx->pos] && src[lx->pos] != '`') {
+            if (src[lx->pos] == '\n')
+                lex_error(line, "unterminated struct tag (missing closing '`')");
+            lx->pos++;
+        }
+        if (src[lx->pos] != '`')
+            lex_error(line, "unterminated struct tag (missing closing '`')");
+        size_t len = lx->pos - start;
+        Token t = make_token(T_TAG, line);
+        t.text = (char *)xmalloc(len + 1);
+        memcpy(t.text, src + start, len);
+        t.text[len] = '\0';
+        lx->pos++;
         return t;
     }
 
@@ -671,6 +692,7 @@ const char *token_type_name(TokenType t) {
     case T_KW_SWITCH: return "'switch'";
     case T_KW_CASE:   return "'case'";
     case T_KW_DEFAULT: return "'default'";
+    case T_KW_DEFER:   return "'defer'";
     case T_TY_INT:   return "'int'";
     case T_TY_FLOAT: return "'float'";
     case T_TY_STR:   return "'str'";
@@ -730,6 +752,7 @@ const char *token_type_name(TokenType t) {
     case T_DOTDOTEQ: return "'..='";
     case T_ARROW:    return "'->'";
     case T_LIFETIME: return "lifetime";
+    case T_TAG:      return "struct tag";
     }
     return "?";
 }

@@ -9,23 +9,21 @@ moves between the two with little change.
 ```slang
 import "mysql";
 
-let cr = mysql.connect("mysql://app:secret@db.internal:3306/shop", deadline);
-guard let c = cr else let e = err_of(cr) { panic(e); }
+guard let c = mysql.connect("mysql://app:secret@db.internal:3306/shop", deadline) else |e| { panic(e); }
 
 let r = mysql.query(c, "SELECT id, name, price FROM items WHERE price < ?",
                     [mysql.arg_decimal(limit)], deadline);       // result[Rows, str]
-guard let rows = r else let e = err_of(r) { panic(e); }
+guard let rows = r else |e| { panic(e); }
 let items: result[[Item], str] = mysql.rows_as(rows);           // by column name
 mysql.get_text(rows, 0, mysql.col(rows, "name"));
 
 let ir = mysql.query(c, "INSERT INTO items (name) VALUES (?)", [mysql.arg_text("pen")], deadline);
-guard let ins = ir else let e = err_of(ir) { panic(e); }
+guard let ins = ir else |e| { panic(e); }
 ins.last_insert_id;                                              // the AUTO_INCREMENT value
 
 mysql.exec(c, "BEGIN; UPDATE stock SET n = n - 1 WHERE id = 7; COMMIT", deadline);   // several statements
 
-let pr = mysql.new_pool(url, 16);                                // shared by any number of tasks
-guard let p = pr else let e = err_of(pr) { panic(e); }
+guard let p = mysql.new_pool(url, 16) else |e| { panic(e); }   // shared by any number of tasks
 mysql.pool_query(p, "SELECT 1", [], deadline);
 ```
 

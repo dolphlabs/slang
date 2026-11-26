@@ -1,8 +1,7 @@
 // Time zones: fixed offsets and the IANA database, daylight saving
 // included.
 //
-//     let zr = timez.load_zone("Europe/Berlin");     // from the system's zoneinfo
-//     guard let berlin = zr else let e = err_of(zr) { ... }
+//     guard let berlin = timez.load_zone("Europe/Berlin") else |e| { ... }   // from the system's zoneinfo
 //     let local = timez.now().in_zone(berlin);       // a ZonedTime
 //     println(local.rfc3339());                      // 2026-10-13T11:30:15+02:00
 //     println(local.format("%H:%M %Z"));             // 11:30 CEST

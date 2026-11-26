@@ -8,8 +8,8 @@ handles, exactly like `net.tls_*`; free them with `sql.close` /
 `sql.finalize`. **Every fallible call returns `result[_, str]` whose
 error is SQLite's own message** — `no such table: users`, `near
 "SELCT": syntax error`, `UNIQUE constraint failed: users.id` — so a
-bad query stays as visible as a bad socket read (`guard let … else
-let e = err_of(r)`), never a silent `null`. The column getters are
+bad query stays as visible as a bad socket read (`guard let …
+else |e|`), never a silent `null`. The column getters are
 infallible (SQLite coerces types; an out-of-range index is a
 programming error, returning `0` / `""`), so they return bare values.
 
@@ -36,22 +36,19 @@ programming error, returning `0` / `""`), so they return bare values.
 import "sql";
 import "log";
 
-let dr = sql.open("app.db");
-guard let db = dr else let e = err_of(dr) {
+guard let db = sql.open("app.db") else |e| {
     log.error("db open: " + e);
     exit(1);
 }
 sql.exec(db, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)");
 
-let pr = sql.prepare(db, "SELECT id, name FROM users WHERE id > ?");
-guard let st = pr else let e = err_of(pr) {
+guard let st = sql.prepare(db, "SELECT id, name FROM users WHERE id > ?") else |e| {
     log.error("prepare: " + e);          // e.g. "no such table: users"
     exit(1);
 }
 sql.bind_int(st, 1, 0);
 while true {
-    let sr = sql.step(st);
-    guard let more = sr else let e = err_of(sr) { log.error("step: " + e); break; }
+    guard let more = sql.step(st) else |e| { log.error("step: " + e); break; }
     if !more { break; }
     println(to_str(sql.col_int(st, 0)) + " " + sql.col_text(st, 1));
 }

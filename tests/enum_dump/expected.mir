@@ -2,9 +2,11 @@ fn enum_dump.main
   local s: enum_dump.Status
   local _t0: bool
   local r: result[enum_dump.Status,str]
+  local e: str
   local v: enum_dump.Status
   local _t1: bool
   local r2: result[enum_dump.Status,str]
+  local e2: str
   local v2: enum_dump.Status
   local _t2: bool
   bb0:

@@ -5,8 +5,7 @@
 //
 //     let mc = memcache.new(["cache-1:11211", "cache-2:11211"]);
 //     memcache.set(mc, "user:42", to_bytes(json), 300, deadline);    // 5 min
-//     let gr = memcache.get(mc, "user:42", deadline);
-//     guard let found = gr else let e = err_of(gr) { ... }          // I/O error
+//     guard let found = memcache.get(mc, "user:42", deadline) else |e| { ... }          // I/O error
 //     if let v = found { ... } else { /* a miss */ }
 //
 // Keys spread over servers by rendezvous hashing, so adding or removing

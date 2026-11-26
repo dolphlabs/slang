@@ -2,8 +2,7 @@
 //
 //     import "csv";
 //
-//     let r = csv.parse("name,qty\n\"Smith, J\",3\n");    // result[[[str]], str]
-//     guard let rows = r else let e = err_of(r) { panic(e); }
+//     guard let rows = csv.parse("name,qty\n\"Smith, J\",3\n") else |e| { panic(e); }   // result[[[str]], str]
 //     let mr = csv.to_maps(rows);                        // header row -> [map[str]str]
 //
 //     // a large file, one record at a time, in bounded memory: feed it
@@ -13,8 +12,7 @@
 //         let chunk = read_some();                       // fs, a socket, a request body
 //         if len(chunk) == 0 { csv.end(rd); } else { csv.feed(rd, chunk); }
 //         while true {
-//             let nr = csv.next(rd);                     // result[opt[[str]], str]
-//             guard let got = nr else let e = err_of(nr) { panic(e); }
+//             guard let got = csv.next(rd) else |e| { panic(e); }   // result[opt[[str]], str]
 //             guard let rec = got else { break; }        // none: feed more (or the end)
 //             handle(rec);
 //         }

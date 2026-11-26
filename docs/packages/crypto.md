@@ -13,8 +13,7 @@ import "crypto";
 
 let h: bytes = crypto.sha256(b"abc");              // 32 bytes
 let m: bytes = crypto.hmac_sha256(key, msg);       // 32 bytes
-let r = crypto.rand(32);
-guard let b = r else let e = err_of(r) {
+guard let b = crypto.rand(32) else |e| {
     log.error("rand failed: " + e);
 }
 let k = crypto.pbkdf2_sha256(password, salt, 600000, 32);   // RFC 8018

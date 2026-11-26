@@ -5,8 +5,7 @@
 //
 //     import "proxyproto";
 //
-//     let hr = proxyproto.read_until(fd, deadline);
-//     guard let h = hr else let e = err_of(hr) { net.close(fd); return; }
+//     guard let h = proxyproto.read_until(fd, deadline) else |e| { net.close(fd); return; }
 //     println(h.src_addr + ":" + to_str(h.src_port));   // the real client
 //     // h.rest holds bytes that came after the header: the start of the
 //     // application's stream, to be handled before reading more.

@@ -89,7 +89,7 @@ char *panic_at(CG *cg, int line) {
 int str_convertible(CG *cg, const char *t) {
     return is_str(t) || is_int(t) || is_flt(t) || !strcmp(t, "bool") ||
            is_bytes(t) || is_wire(t) || is_fault(t) || is_peer(t) ||
-           is_enum(cg, t);
+           (is_enum(cg, t) && !is_tagged_enum(cg, t));
 }
 
 /* Convert any scalar/bytes value to a slang str (C string). */
@@ -1083,6 +1083,41 @@ char *gen_call(CG *cg, Expr *e) {
         !strcmp(name, "err"))
         return gen_ctor(cg, e);
 
+    if (!strcmp(name, "__enum_ctor")) {
+        EnumDef *ed = enum_find_canon(cg, e->as.call.enum_ty);
+        int v = e->as.call.enum_variant;
+        char *m = mangle_enum(ed->canonical);
+        int nargs = e->as.call.nargs;
+        char **names = (char **)xmalloc(sizeof(char *) * (size_t)(nargs ? nargs : 1));
+        StrBuf prelude;
+        sb_init(&prelude);
+        int seq_id = nargs > 1 ? cg->tmp_id++ : -1;
+        int ambient_mark = cg->ambient_count;
+        for (int i = 0; i < nargs; i++) {
+            const char *pt = ed->v_types[v][i];
+            const char *saved = expect_push(cg, pt);
+            const char *at = infer_type(cg, e->as.call.args[i]);
+            char *a = gen_expr(cg, e->as.call.args[i]);
+            cg->expect = saved;
+            char *casted = maybe_cast(cg, pt, at, a);
+            names[i] = sequence_one(cg, seq_id, i, ctype_of(cg, pt), pt,
+                                    casted, e->as.call.args[i], &prelude);
+            move_consume(cg, e->as.call.args[i]);
+        }
+        cg->ambient_count = ambient_mark;
+        StrBuf call;
+        sb_init(&call);
+        sb_append(&call, xasprintf("%s_mk_v%d(", m, v));
+        for (int i = 0; i < nargs; i++) {
+            if (i) sb_append(&call, ", ");
+            sb_append(&call, names[i]);
+        }
+        sb_putc(&call, ')');
+        if (prelude.len > 0)
+            return xasprintf("({ %s%s; })", prelude.data, call.data);
+        return call.data;
+    }
+
     int handled = 0;
     if (is_builtin_name(name)) {
         char *r = gen_builtin_call(cg, e, &handled);
@@ -1372,7 +1407,24 @@ have_sig:;
 
     int argi = 0;
     if (selfexpr) {
-        selfexpr = maybe_cast(cg, sig->param_slang[0], recv_t, selfexpr);
+        char *si = NULL, *ri = NULL;
+        TypeWrap sw = type_wrap(sig->param_slang[0], &si);
+        TypeWrap rw = type_wrap(recv_t, &ri);
+        if (sw == TW_REF || sw == TW_REFMUT) {
+            if (rw == TW_REF && sw == TW_REFMUT)
+                cg_error(e->line,
+                         "cannot call '&mut %s' method '%s' on a shared "
+                         "reference of type %s",
+                         si, sig->name, recv_t);
+            if (rw == TW_NONE)
+                selfexpr = xasprintf("(&(%s))", selfexpr);
+            else
+                selfexpr = maybe_cast(cg, sig->param_slang[0], recv_t, selfexpr);
+        } else {
+            selfexpr = maybe_cast(cg, sig->param_slang[0], recv_t, selfexpr);
+        }
+        free(si);
+        free(ri);
         argi = 1;
     }
     /* Explicit arguments would otherwise be embedded directly as
@@ -1489,15 +1541,77 @@ char *gen_method(CG *cg, Expr *e) {
     StrBuf prelude;
     sb_init(&prelude);
 
-    char *rtmp = sequence_one(cg, seq_id, 0, ctype_of(cg, recv_t), recv_t,
-                              gen_expr(cg, recv), recv, &prelude);
     char *selfexpr = NULL;
     char *callee = NULL;
-    if (fld >= 0)
+    if (fld >= 0) {
+        char *rtmp = sequence_one(cg, seq_id, 0, ctype_of(cg, recv_t), recv_t,
+                                  gen_expr(cg, recv), recv, &prelude);
         callee = xasprintf("((%s)%s%s)", rtmp, struct_access(cg, recv_t),
                            sanitize_ident(name));
-    else
-        selfexpr = maybe_cast(cg, sig->param_slang[0], recv_t, rtmp);
+    } else {
+        char *si = NULL, *ri = NULL;
+        TypeWrap sw = type_wrap(sig->param_slang[0], &si);
+        TypeWrap rw = type_wrap(recv_t, &ri);
+        if (sw == TW_REF || sw == TW_REFMUT) {
+            if (rw == TW_REF && sw == TW_REFMUT)
+                cg_error(e->line,
+                         "cannot call '&mut %s' method '%s' on a shared "
+                         "reference of type %s",
+                         si, name, recv_t);
+            if (sw == TW_REFMUT) {
+                const char *sref = expr_shared_ref_base(cg, recv);
+                if (sref)
+                    cg_error(e->line,
+                             "cannot call '&mut %s' method '%s' through a "
+                             "shared reference of type %s: declare the "
+                             "reference as '&mut' or call a '&' method "
+                             "instead",
+                             si, name, sref);
+            }
+            if (rw == TW_NONE && expr_lvalue_for_borrow(recv)) {
+                Expr un;
+                memset(&un, 0, sizeof(un));
+                un.kind = EX_UNARY;
+                un.line = e->line;
+                un.as.unary.op =
+                    (sw == TW_REFMUT) ? (char *)"&mut" : (char *)"&";
+                un.as.unary.operand = recv;
+                un.inf_ty = sig->param_slang[0];
+                selfexpr = sequence_one(cg, seq_id, 0,
+                                        ctype_of(cg, sig->param_slang[0]),
+                                        sig->param_slang[0],
+                                        gen_expr(cg, &un), NULL, &prelude);
+                if (type_has_gc_roots(cg, recv_t)) {
+                    char *deref = xasprintf("(*(%s))", selfexpr);
+                    expr_tmp_register(cg, recv, deref, recv_t);
+                    ambient_push_value_roots(cg, deref, recv_t);
+                }
+            } else {
+                if (sw == TW_REFMUT && rw == TW_NONE) {
+                    Expr *cur = recv;
+                    while (cur && cur->kind == EX_FIELD)
+                        cur = cur->as.field.base;
+                    if (cur && cur->kind == EX_INDEX)
+                        index_borrow_refused(cg, cur, 1, e->line);
+                }
+                char *rtmp = sequence_one(cg, seq_id, 0, ctype_of(cg, recv_t),
+                                          recv_t, gen_expr(cg, recv), recv,
+                                          &prelude);
+                if (rw == TW_NONE)
+                    selfexpr = xasprintf("(&(%s))", rtmp);
+                else
+                    selfexpr =
+                        maybe_cast(cg, sig->param_slang[0], recv_t, rtmp);
+            }
+        } else {
+            char *rtmp = sequence_one(cg, seq_id, 0, ctype_of(cg, recv_t),
+                                      recv_t, gen_expr(cg, recv), recv,
+                                      &prelude);
+            selfexpr = maybe_cast(cg, sig->param_slang[0], recv_t, rtmp);
+        }
+        free(si);
+        free(ri);
+    }
 
     char **names =
         (char **)xmalloc(sizeof(char *) * (size_t)(nargs > 0 ? nargs : 1));
@@ -1690,6 +1804,19 @@ char *gen_structlit(CG *cg, Expr *e) {
     return sb.data;
 }
 
+/* The failure for a missing map key, which names the key when it is
+ * text or an integer. */
+char *map_miss_call(CG *cg, const char *k, const char *kname,
+                    const char *at) {
+    (void)cg;
+    if (!strcmp(k, "str"))
+        return xasprintf("sl_rt_map_miss_str(%s, %s)", kname, at);
+    if (is_int(k))
+        return xasprintf("sl_rt_map_miss_int((long long)%s, %d, %s)", kname,
+                         !is_signed_int(k), at);
+    return xasprintf("sl_rt_map_miss(%s)", at);
+}
+
 char *gen_index(CG *cg, Expr *e) {
     const char *bt = infer_type(cg, e->as.index.base);
     /* base and index would otherwise be embedded directly as sibling
@@ -1726,15 +1853,7 @@ char *gen_index(CG *cg, Expr *e) {
         cg->ambient_count = ambient_mark;
         int id = cg->tmp_id++;
         char *at = panic_at(cg, e->line);
-        /* the miss names the key when it is text or an integer */
-        char *miss;
-        if (!strcmp(k, "str"))
-            miss = xasprintf("sl_rt_map_miss_str(_sl_k%d, %s)", id, at);
-        else if (is_int(k))
-            miss = xasprintf("sl_rt_map_miss_int((long long)_sl_k%d, %d, %s)",
-                             id, !is_signed_int(k), at);
-        else
-            miss = xasprintf("sl_rt_map_miss(%s)", at);
+        char *miss = map_miss_call(cg, k, xasprintf("_sl_k%d", id), at);
         return xasprintf(
             "({ %s%s _sl_k%d = %s; void *_sl_p%d = sl_map_get(%s, "
             "&_sl_k%d); if (!_sl_p%d) %s; *(%s *)(void *)_sl_p%d; })",
@@ -2118,7 +2237,9 @@ char *gen_expr(CG *cg, Expr *e) {
             !strcmp(op, "<=") || !strcmp(op, ">") || !strcmp(op, ">="))
             return gen_comparison(cg, e, lt, rt);
         if (!strcmp(op, "+") && (is_str(lt) || is_str(rt) || is_fault(lt) ||
-                                 is_fault(rt) || is_enum(cg, lt) || is_enum(cg, rt)))
+                                 is_fault(rt) ||
+                                 (is_enum(cg, lt) && !is_tagged_enum(cg, lt)) ||
+                                 (is_enum(cg, rt) && !is_tagged_enum(cg, rt))))
             return gen_string_concat(cg, e, lt, rt);
         /* bytes and list concatenation sequence their operands for the
          * same two reasons gen_string_concat above does, and skipping it
@@ -2295,29 +2416,56 @@ char *gen_expr(CG *cg, Expr *e) {
         sb_append(&b, xasprintf("({ %s %s = %s; %s %s = {0}; ",
                                 ctype_of(cg, st), svname, sv,
                                 ctype_of(cg, t), tname));
+        int tagged = is_tagged_enum(cg, st);
+        EnumDef *ed = tagged ? enum_find_canon(cg, st) : NULL;
         for (int i = 0; i < e->as.switch_expr.ncases; i++) {
+            SwitchExprCase *sc = &e->as.switch_expr.cases[i];
             sb_append(&b, i ? "else " : "");
             sb_append(&b, "if (");
-            for (int j = 0; j < e->as.switch_expr.cases[i].nvals; j++) {
-                Expr *lb = e->as.switch_expr.cases[i].vals[j];
+            for (int j = 0; j < sc->nvals; j++) {
+                Expr *lb = sc->vals[j];
                 if (j)
                     sb_append(&b, " || ");
                 if (kind == 3)
                     sb_append(&b, xasprintf(
                                       "!strcmp(%s, %s)", svname,
                                       c_string_literal(lb->as.str_lit.value)));
+                else if (tagged)
+                    sb_append(&b, xasprintf("%s.tag == %s", svname,
+                                            switch_label_c_const(lb)));
                 else
                     sb_append(&b, xasprintf("%s == %s", svname,
                                             switch_label_c_const(lb)));
             }
+            StrBuf arm_decls;
+            sb_init(&arm_decls);
+            int push_scope = tagged && sc->nbindings > 0;
+            if (push_scope) {
+                var_scope_push(cg);
+                int vidx = (int)sc->vals[0]->as.int_lit.value;
+                for (int k = 0; k < sc->nbindings; k++) {
+                    const char *bn = sc->bindings[k];
+                    if (!strcmp(bn, "_"))
+                        continue;
+                    const char *bt = ed->v_types[vidx][k];
+                    var_redecl_check(cg, bn, sc->line);
+                    var_push(cg, bn, bt);
+                    sb_append(&arm_decls,
+                              xasprintf("%s %s = %s.u.v%d._%d; ",
+                                        ctype_of(cg, bt), sanitize_ident(bn),
+                                        svname, vidx, k));
+                }
+            }
             const char *saved = expect_push(cg, t);
-            const char *vt = infer_type(
-                cg, e->as.switch_expr.cases[i].value);
-            char *v = gen_expr(cg, e->as.switch_expr.cases[i].value);
+            const char *vt = infer_type(cg, sc->value);
+            char *v = gen_expr(cg, sc->value);
             cg->expect = saved;
             v = maybe_cast(cg, t, vt, v);
-            move_consume(cg, e->as.switch_expr.cases[i].value);
-            sb_append(&b, xasprintf(") { %s = %s; } ", tname, v));
+            move_consume(cg, sc->value);
+            if (push_scope)
+                var_scope_pop(cg);
+            sb_append(&b, xasprintf(") { %s%s = %s; } ", arm_decls.data,
+                                    tname, v));
         }
         if (e->as.switch_expr.def) {
             const char *saved = expect_push(cg, t);
@@ -2341,10 +2489,8 @@ char *gen_expr(CG *cg, Expr *e) {
 /* Statement code generation                                           */
 /* ------------------------------------------------------------------ */
 
-void gen_print(CG *cg, Expr *call, int newline) {
-    Expr *arg = call->as.call.args[0];
-    const char *t = infer_type(cg, arg);
-    char *v = gen_expr(cg, arg);
+void gen_print_val(CG *cg, const char *t, const char *v, int newline,
+                   int line) {
     if (is_int(t) && is_signed_int(t)) {
         emit_line(cg, "printf(\"%%lld%s\", (long long)(%s));",
                   newline ? "\\n" : "", v);
@@ -2384,8 +2530,13 @@ void gen_print(CG *cg, Expr *call, int newline) {
                   "(unsigned)_sl_p.port); });",
                   v, newline ? "\\n" : "");
     } else if (is_enum(cg, t)) {
-        char *m = mangle_enum(t);
         EnumDef *ed = enum_find_canon(cg, t);
+        if (ed->has_payload)
+            cg_error(line,
+                     "cannot print tagged enum %s directly; use inspect() or "
+                     "'switch'",
+                     ed->name);
+        char *m = mangle_enum(t);
         if (newline)
             emit_line(cg, "puts(sl_enum_name((int32_t)(%s), %s_names, "
                           "%s_values, %d));",
@@ -2395,7 +2546,7 @@ void gen_print(CG *cg, Expr *call, int newline) {
                           "%s_values, %d), stdout);",
                       v, m, m, ed->nvariants);
     } else if (!is_str(t)) {
-        cg_error(call->line,
+        cg_error(line,
                  "cannot print a value of type %s directly", t);
     } else { /* str */
         if (newline)
@@ -2403,5 +2554,12 @@ void gen_print(CG *cg, Expr *call, int newline) {
         else
             emit_line(cg, "fputs(%s, stdout);", v);
     }
+}
+
+void gen_print(CG *cg, Expr *call, int newline) {
+    Expr *arg = call->as.call.args[0];
+    const char *t = infer_type(cg, arg);
+    char *v = gen_expr(cg, arg);
+    gen_print_val(cg, t, v, newline, call->line);
 }
 

@@ -124,12 +124,10 @@ time.<span class="f">sleep</span>(<span class="n">20000000</span>);     <span cl
 <span class="k">let</span> ttl = timez.<span class="f">parse_duration</span>(<span class="s">&quot;1h30m&quot;</span>) ?? <span class="n">0</span>;      <span class="c">// nanoseconds; &quot;7d&quot; works too</span>
 <span class="b">println</span>(timez.<span class="f">relative</span>(t.<span class="f">add</span>(-<span class="n">3</span> * timez.MINUTE), t));  <span class="c">// 3 minutes ago</span>
 
-<span class="k">let</span> zr = timez.<span class="f">load_zone</span>(<span class="s">&quot;Europe/Berlin&quot;</span>);         <span class="c">// the system&#x27;s tz database</span>
-<span class="k">guard</span> <span class="k">let</span> berlin = zr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(zr) { <span class="b">println</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }
+<span class="k">guard</span> <span class="k">let</span> berlin = timez.<span class="f">load_zone</span>(<span class="s">&quot;Europe/Berlin&quot;</span>) <span class="k">else</span> |e| { <span class="b">println</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }   <span class="c">// the system&#x27;s tz database</span>
 <span class="b">println</span>(t.<span class="f">in_zone</span>(berlin).<span class="f">format</span>(<span class="s">&quot;%H:%M %Z&quot;</span>));     <span class="c">// 11:30 CEST</span>
 
-<span class="k">let</span> cr = timez.<span class="f">parse_cron</span>(<span class="s">&quot;*/15 9-17 * * MON-FRI&quot;</span>);
-<span class="k">guard</span> <span class="k">let</span> cron = cr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(cr) { <span class="b">println</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }
+<span class="k">guard</span> <span class="k">let</span> cron = timez.<span class="f">parse_cron</span>(<span class="s">&quot;*/15 9-17 * * MON-FRI&quot;</span>) <span class="k">else</span> |e| { <span class="b">println</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }
 <span class="k">let</span> next = cron.<span class="f">next_after</span>(t, berlin);             <span class="c">// opt[Time], DST-aware</span></code></pre></div>
 <p><strong>Values.</strong></p>
 <ul><li><strong><code>Time</code></strong> is Unix seconds plus nanoseconds, so it spans 0001-01-01 to 9999-12-31 and beyond. 64-bit nanoseconds stop at 1677-2262.</li><li><strong><code>Date</code></strong> is a calendar day: birthdays, due dates, report days.</li><li><strong>Durations</strong> are <code>int</code> nanoseconds, the unit <code>time.sleep</code> and deadlines take. Constants run from <code>NANOSECOND</code> to <code>HOUR</code> and <code>DAY</code> (24 hours).</li><li><strong>The calendar</strong> is proleptic Gregorian, with no leap seconds.</li></ul>
@@ -168,8 +166,7 @@ net.<span class="f">close</span>(cfd);</code></pre></div>
 <span class="k">import</span> <span class="s">&quot;time&quot;</span>;
 
 <span class="k">let</span> deadline = <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">5000000000</span>);   <span class="c">// 5s from now</span>
-<span class="k">let</span> rr = net.<span class="f">recv_until</span>(cfd, <span class="n">4096</span>, deadline);
-<span class="k">guard</span> <span class="k">let</span> data = rr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(rr) {
+<span class="k">guard</span> <span class="k">let</span> data = net.<span class="f">recv_until</span>(cfd, <span class="n">4096</span>, deadline) <span class="k">else</span> |e| {
     <span class="k">if</span> e == <span class="s">&quot;timeout&quot;</span> { net.<span class="f">close</span>(cfd); <span class="k">return</span>; }    <span class="c">// peer went quiet</span>
     log.<span class="f">error</span>(<span class="s">&quot;recv: &quot;</span> + e);                         <span class="c">// peer broke</span>
     <span class="k">return</span>;
@@ -188,12 +185,10 @@ net.<span class="f">close</span>(cfd);</code></pre></div>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;net&quot;</span>;
 <span class="k">import</span> <span class="s">&quot;time&quot;</span>;
 <span class="k">let</span> deadline = <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">5000000000</span>);
-<span class="k">let</span> seeds = net.<span class="f">lookup_srv_until</span>(<span class="s">&quot;_mongodb._tcp.cluster.example&quot;</span>, deadline);
-<span class="k">guard</span> <span class="k">let</span> records = seeds <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(seeds) { <span class="b">println</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }
+<span class="k">guard</span> <span class="k">let</span> records = net.<span class="f">lookup_srv_until</span>(<span class="s">&quot;_mongodb._tcp.cluster.example&quot;</span>, deadline) <span class="k">else</span> |e| { <span class="b">println</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }
 <span class="c">// Each SRV item is &quot;priority:weight:port:target&quot;.</span>
 
-<span class="k">let</span> defaults = net.<span class="f">lookup_txt_until</span>(<span class="s">&quot;cluster.example&quot;</span>, deadline);
-<span class="k">guard</span> <span class="k">let</span> options = defaults <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(defaults) { <span class="b">println</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }
+<span class="k">guard</span> <span class="k">let</span> options = net.<span class="f">lookup_txt_until</span>(<span class="s">&quot;cluster.example&quot;</span>, deadline) <span class="k">else</span> |e| { <span class="b">println</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }
 <span class="c">// Each TXT item is one record with its DNS character-strings concatenated.</span></code></pre></div>
 <p>An empty TXT list means the domain has no TXT defaults. SRV targets retain priority and weight so a client can apply its own ordering policy. The resolver checks the response question and each returned record owner, rejects malformed names and oversized or truncated answers, and returns <code>&quot;timeout&quot;</code> when the deadline expires. At most 64 SRV/TXT lookups may be outstanding per process, bounding their answer buffers to about 4 MiB; excess calls return <code>&quot;DNS resolver request limit reached&quot;</code>. The C resolver library is linked only by programs that call either record lookup; ordinary <code>net</code> programs keep their existing link dependencies.</p>
 <h5 id="unix-domain-sockets">Unix-domain sockets<a class="anchor" href="#unix-domain-sockets" aria-label="Link to this section">#</a></h5>
@@ -216,8 +211,7 @@ fs.<span class="f">close</span>(file);</code></pre></div>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;net&quot;</span>;
 <span class="k">import</span> <span class="s">&quot;time&quot;</span>;
 
-<span class="k">let</span> br = net.<span class="f">udp_bind</span>(<span class="s">&quot;0.0.0.0&quot;</span>, <span class="n">5353</span>);     <span class="c">// &quot;&quot; also means any IPv4 address</span>
-<span class="k">guard</span> <span class="k">let</span> fd = br <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(br) { <span class="b">println</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }
+<span class="k">guard</span> <span class="k">let</span> fd = net.<span class="f">udp_bind</span>(<span class="s">&quot;0.0.0.0&quot;</span>, <span class="n">5353</span>) <span class="k">else</span> |e| { <span class="b">println</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }   <span class="c">// &quot;&quot; also means any IPv4 address</span>
 <span class="k">while</span> <span class="k">true</span> {
     <span class="k">let</span> rr = net.<span class="f">recv_from</span>(fd, <span class="n">0</span>);            <span class="c">// 0 = up to 65535 bytes</span>
     <span class="k">guard</span> <span class="k">let</span> dgram = rr <span class="k">else</span> { <span class="k">break</span>; }
@@ -259,8 +253,7 @@ net.<span class="f">tls_close</span>(cconn);</code></pre></div>
 <p><strong>STARTTLS</strong>: <code>tls_upgrade(fd, host, ctx)</code> runs a client handshake on a socket from <code>net.dial</code> that has already spoken cleartext — how Postgres, SMTP and IMAP switch to TLS. Verification is exactly <code>tls_dial</code>&#x27;s, hostname included, which is why the host is an argument: an fd does not remember what was dialled. On failure the fd is left open for the caller to close; on success it belongs to the returned handle and <code>tls_close</code> closes it. Read no further than the server&#x27;s go-ahead before upgrading: anything a man in the middle queued behind it would otherwise be trusted as if it had arrived encrypted (libpq&#x27;s CVE-2021-23222). <code>tls_upgrade_until(fd, host, ctx, deadline)</code> bounds the handshake; a server that stops answering part way through gives <code>&quot;timeout&quot;</code>. <code>tls_dial_until(host, port, ctx, deadline)</code> is <code>tls_dial</code> with one deadline over the lookup, the connect and the handshake: an unreachable host gives <code>&quot;timeout&quot;</code> at the deadline instead of after the OS connect timeout, which is over a minute on macOS. Like <code>dial</code>, both try every address the name resolves to.</p>
 <p><strong>TLS on a <code>link</code></strong>: <code>c.tls_accept(ctx, deadline)</code> runs the server handshake on a link you already accepted, and from then on the link&#x27;s <code>send</code>/<code>recv</code> go through the session. Everything written against a link -- <code>http.read_frame</code>, <code>http.write</code>, a whole server loop -- serves HTTPS without a second code path, and a plain link pays one pointer test per call. Run it in the connection&#x27;s own task, not the accept loop, so one slow handshake holds up nobody else:</p>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">fn</span> <span class="f">serve</span>(c: <span class="k">link</span>, ctx: <span class="t">rawptr</span>) {
-    <span class="k">let</span> hr = c.<span class="f">tls_accept</span>(ctx, <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">10000000000</span>));
-    <span class="k">guard</span> <span class="k">let</span> _h = hr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(hr) {
+    <span class="k">guard</span> <span class="k">let</span> _h = c.<span class="f">tls_accept</span>(ctx, <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">10000000000</span>)) <span class="k">else</span> |e| {
         <span class="k">return</span>;                  <span class="c">// a scanner, a plaintext client, a timeout</span>
     }
     <span class="c">// read_frame / write on c exactly as over plain TCP</span>
@@ -316,7 +309,9 @@ y.<span class="f">write_byte</span>(<span class="n">104</span>).<span class="f">
 <span class="k">let</span> r: <span class="t">result</span>[Person, <span class="t">str</span>] = json.<span class="f">decode</span>(s);
 <span class="k">guard</span> <span class="k">let</span> p2 = r <span class="k">else</span> { <span class="b">exit</span>(<span class="n">1</span>); }</code></pre></div>
 <p>Plain <code>struct</code>s work as well as <code>gc struct</code>s, and are cheaper to decode: a plain struct is filled in place -- in the binding, or in a list&#x27;s or map&#x27;s own slot -- so a <code>[Item]</code> of a plain <code>Item</code> is one buffer, where a <code>gc struct Item</code> is one heap object per element. For a large array of small records (a request body with thousands of line items) that halves the allocations. Use <code>gc struct</code> when the record must be shared by reference.</p>
-<p>Supported: <code>gc struct</code> (a plain <code>struct</code> is a compile error naming it, since the codecs read and build structs through a pointer), <code>opt[T]</code>, <code>[T]</code>, <code>map[str, V]</code> (JSON object keys are always strings — a map with any other key type is a compile error), every scalar, <code>bytes</code> (RFC 4648 base64 strings on the wire), and <code>timez.Time</code> (an RFC 3339 string: written as <code>rfc3339_nano()</code> writes it, read with <code>parse_rfc3339()</code>&#x27;s rules, offsets applied; about 115 ns to encode and 130 ns to decode, in C, so a struct without one compiles to exactly the codecs it did before), and <code>decimal.Decimal</code> (written as a string of its exact text, <code>&quot;19.90&quot;</code>; read from a string or a number by <code>decimal.parse</code>&#x27;s rules, from the number&#x27;s text and never through a float, also in C). <code>rawptr</code>, <code>chan[T]</code>, and <code>result[T,E]</code> can&#x27;t appear anywhere in a decode/encode target type. A missing JSON key defaults an <code>opt[T]</code> field to <code>none</code>; for any other field type it&#x27;s a decode error. Unknown JSON keys are ignored. Every decode error names where it happened, composed through nesting — <code>json.decode</code> on <code>{&quot;addr&quot;:{&quot;city&quot;:5}}</code> against the <code>Person</code> shape above fails with <code>field &#x27;addr&#x27;: field &#x27;city&#x27;: expected a string, got a number</code>. Malformed input is a decode error, never a crash. Nesting is capped at 512 levels (deeper input is the error <code>maximum nesting depth (512) exceeded</code>), and depth costs heap, not stack: the parser keeps its own stack of open arrays and objects rather than recursing. Decoding into a type that contains itself (<code>opt[Self]</code>, <code>[Self]</code>, <code>map[str]Self</code>) does recurse once per level, so for those types alone <code>json.decode</code> first measures the input&#x27;s depth and, only when the input is deep, grows the task&#x27;s stack to fit before decoding.</p>
+<p>Supported: <code>gc struct</code> (a plain <code>struct</code> is a compile error naming it, since the codecs read and build structs through a pointer), <code>opt[T]</code>, <code>[T]</code>, <code>map[str, V]</code> (JSON object keys are always strings — a map with any other key type is a compile error), every scalar, <code>bytes</code> (RFC 4648 base64 strings on the wire), and <code>timez.Time</code> (an RFC 3339 string: written as <code>rfc3339_nano()</code> writes it, read with <code>parse_rfc3339()</code>&#x27;s rules, offsets applied; about 115 ns to encode and 130 ns to decode, in C, so a struct without one compiles to exactly the codecs it did before), and <code>decimal.Decimal</code> (written as a string of its exact text, <code>&quot;19.90&quot;</code>; read from a string or a number by <code>decimal.parse</code>&#x27;s rules, from the number&#x27;s text and never through a float, also in C). <code>rawptr</code>, <code>chan[T]</code>, and <code>result[T,E]</code> can&#x27;t appear anywhere in a decode/encode target type. A missing JSON key defaults an <code>opt[T]</code> field to <code>none</code>; for any other field type it&#x27;s a decode error. Unknown JSON keys are ignored. Struct fields support Go-style backtick tags for wire renaming, conditional omission, and skipping:</p>
+<ul><li>`<code> </code>json:&quot;userId&quot;<code> </code><code> renames the JSON key on both </code>encode<code> and </code>decode<code> (also used in decode error messages); </code><code> </code>json:&quot;-,&quot;<code> </code><code> uses a literal </code>&quot;-&quot;` key.</li><li>`<code> </code>json:&quot;userId,omitempty&quot;<code> </code><code> (or </code><code> </code>json:&quot;,omitempty&quot;<code> </code><code>) omits the field during </code>json.encode<code> when empty (</code>none<code>, </code>&quot;&quot;<code>, </code>b&quot;&quot;<code>, </code>[]<code>, </code>{}<code>, </code>false<code>, or </code>0`).</li><li>`<code> </code>json:&quot;-&quot;<code> </code><code> skips the field during </code>json.encode<code> and initializes it to its zero value during </code>json.decode<code> (</code>none<code>, </code>&quot;&quot;<code>, </code>b&quot;&quot;<code>, </code>false<code>, or </code>0`).</li></ul>
+<p>Every decode error names where it happened, composed through nesting — <code>json.decode</code> on <code>{&quot;addr&quot;:{&quot;city&quot;:5}}</code> against the <code>Person</code> shape above fails with <code>field &#x27;addr&#x27;: field &#x27;city&#x27;: expected a string, got a number</code>. Malformed input is a decode error, never a crash. Nesting is capped at 512 levels (deeper input is the error <code>maximum nesting depth (512) exceeded</code>), and depth costs heap, not stack: the parser keeps its own stack of open arrays and objects rather than recursing. Decoding into a type that contains itself (<code>opt[Self]</code>, <code>[Self]</code>, <code>map[str]Self</code>) does recurse once per level, so for those types alone <code>json.decode</code> first measures the input&#x27;s depth and, only when the input is deep, grows the task&#x27;s stack to fit before decoding.</p>
 <p>Integers decode exactly, from the number as written: a 64-bit id such as <code>9007199254740993</code> arrives intact (it is not routed through a <code>double</code>, which is exact only up to 2^53), and every value an integer type can hold is accepted, its limits included. A whole number written with a fraction or exponent is still an integer (<code>1e3</code> is 1000, <code>5.0</code> is 5); <code>1.5</code> or <code>1e-1</code> is <code>expected an integer</code>, and a value outside the target type&#x27;s range is <code>value … out of range for i8</code> (or <code>int</code>, <code>u64</code>, …). Floats decode through a <code>double</code>, as before.</p>
 <h4 id="proc"><code>proc</code><a class="anchor" href="#proc" aria-label="Link to this section">#</a></h4>
 <p>Graceful shutdown and environment variables. <code>proc.shutdown_requested()</code> turns true once the process receives <code>SIGTERM</code> or <code>SIGINT</code>; a blocked <code>net.accept()</code>/<code>net.recv()</code>/<code>net.dial()</code> is interrupted the instant the signal arrives (an <code>err</code> result, not a hang), so a listener loop notices without needing <code>select</code> or a timeout.</p>
@@ -389,8 +384,7 @@ fs.<span class="f">close</span>(in_fd);</code></pre></div>
 <span class="k">if</span> !os.<span class="f">is_file</span>(path) {
     <span class="k">return</span> <span class="f">not_found</span>();
 }
-<span class="k">let</span> sr = os.<span class="f">size</span>(path);
-<span class="k">guard</span> <span class="k">let</span> n = sr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(sr) {
+<span class="k">guard</span> <span class="k">let</span> n = os.<span class="f">size</span>(path) <span class="k">else</span> |e| {
     log.<span class="f">error</span>(<span class="s">&quot;stat &quot;</span> + path + <span class="s">&quot;: &quot;</span> + e);      <span class="c">// &quot;No such file or directory&quot;</span>
     <span class="k">return</span> <span class="f">server_error</span>();
 }</code></pre></div>
@@ -404,8 +398,7 @@ fs.<span class="f">close</span>(in_fd);</code></pre></div>
 <span class="k">import</span> <span class="s">&quot;log&quot;</span>;
 
 <span class="b">print</span>(<span class="s">&quot;name? &quot;</span>);                         <span class="c">// no io.flush() needed: reading flushes it</span>
-<span class="k">let</span> r = io.<span class="f">read_line</span>();
-<span class="k">guard</span> <span class="k">let</span> maybe = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) {
+<span class="k">guard</span> <span class="k">let</span> maybe = io.<span class="f">read_line</span>() <span class="k">else</span> |e| {
     io.<span class="f">eprintln</span>(<span class="s">&quot;cannot read input: &quot;</span> + e);
     <span class="b">exit</span>(<span class="n">1</span>);
 }
@@ -416,8 +409,7 @@ fs.<span class="f">close</span>(in_fd);</code></pre></div>
 <p>A loop over every line is the same two guards inside <code>while true</code>:</p>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> total = <span class="n">0</span>;
 <span class="k">while</span> <span class="k">true</span> {
-    <span class="k">let</span> r = io.<span class="f">read_line</span>();
-    <span class="k">guard</span> <span class="k">let</span> maybe = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { io.<span class="f">eprintln</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }
+    <span class="k">guard</span> <span class="k">let</span> maybe = io.<span class="f">read_line</span>() <span class="k">else</span> |e| { io.<span class="f">eprintln</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }
     <span class="k">guard</span> <span class="k">let</span> line = maybe <span class="k">else</span> { <span class="k">break</span>; }         <span class="c">// end of input</span>
     total = total + <span class="b">len</span>(line);
 }</code></pre></div>
@@ -432,19 +424,16 @@ fs.<span class="f">close</span>(in_fd);</code></pre></div>
 
 <span class="c">// a password: nothing is echoed while it is typed</span>
 <span class="b">print</span>(<span class="s">&quot;password: &quot;</span>);
-<span class="k">let</span> r = io.<span class="f">read_secret</span>();
-<span class="k">guard</span> <span class="k">let</span> maybe = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { io.<span class="f">eprintln</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }
+<span class="k">guard</span> <span class="k">let</span> maybe = io.<span class="f">read_secret</span>() <span class="k">else</span> |e| { io.<span class="f">eprintln</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }
 <span class="k">let</span> password = maybe ?? <span class="s">&quot;&quot;</span>;
 
 <span class="c">// wrap to the window; a pipe or a file has no width</span>
 <span class="k">let</span> width = io.<span class="f">term_width</span>() ?? <span class="n">80</span>;</code></pre></div>
 <p><code>read_secret</code> is <code>read_line</code> with the terminal&#x27;s echo off for the length of the read. The Enter is not echoed either, so it writes the newline for you. When stdin is not a terminal (a pipe, a file, a test) it is exactly <code>read_line</code>: nothing to turn off. <code>term_width</code> and <code>term_height</code> ask the terminal every time, so they follow a resized window — poll them, there is no resize event. They look at stdout, then stderr, then stdin, and are <code>none</code> when none of the three is a terminal.</p>
 <p><strong>Key by key.</strong> <code>raw_on</code> switches stdin from line-at-a-time to key-at-a-time: no line editing, no echo, and each key press is available as it happens. <code>read_key</code> names it:</p>
-<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> r = io.<span class="f">raw_on</span>();
-<span class="k">guard</span> <span class="k">let</span> <span class="b">ok</span> = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { io.<span class="f">eprintln</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }   <span class="c">// stdin is not a terminal</span>
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">guard</span> <span class="k">let</span> <span class="b">ok</span> = io.<span class="f">raw_on</span>() <span class="k">else</span> |e| { io.<span class="f">eprintln</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }   <span class="c">// stdin is not a terminal</span>
 <span class="k">while</span> <span class="k">true</span> {
-    <span class="k">let</span> k = io.<span class="f">read_key</span>();
-    <span class="k">guard</span> <span class="k">let</span> maybe = k <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(k) { <span class="k">break</span>; }
+    <span class="k">guard</span> <span class="k">let</span> maybe = io.<span class="f">read_key</span>() <span class="k">else</span> |e| { <span class="k">break</span>; }
     <span class="k">guard</span> <span class="k">let</span> key = maybe <span class="k">else</span> { <span class="k">break</span>; }                              <span class="c">// end of input</span>
     <span class="k">if</span> key == <span class="s">&quot;q&quot;</span> || key == <span class="s">&quot;esc&quot;</span> { <span class="k">break</span>; }
     <span class="k">if</span> key == <span class="s">&quot;up&quot;</span> { <span class="b">println</span>(<span class="s">&quot;up&quot;</span>); }
@@ -472,8 +461,7 @@ log.<span class="f">warn</span>(<span class="f">fault_timeout</span>());</code><
 
 <span class="k">let</span> h: <span class="t">bytes</span> = crypto.<span class="f">sha256</span>(b<span class="s">&quot;abc&quot;</span>);              <span class="c">// 32 bytes</span>
 <span class="k">let</span> m: <span class="t">bytes</span> = crypto.<span class="f">hmac_sha256</span>(key, msg);       <span class="c">// 32 bytes</span>
-<span class="k">let</span> r = crypto.<span class="f">rand</span>(<span class="n">32</span>);
-<span class="k">guard</span> <span class="k">let</span> b = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) {
+<span class="k">guard</span> <span class="k">let</span> b = crypto.<span class="f">rand</span>(<span class="n">32</span>) <span class="k">else</span> |e| {
     log.<span class="f">error</span>(<span class="s">&quot;rand failed: &quot;</span> + e);
 }
 <span class="k">let</span> k = crypto.<span class="f">pbkdf2_sha256</span>(password, salt, <span class="n">600000</span>, <span class="n">32</span>);   <span class="c">// RFC 8018</span>
@@ -503,27 +491,24 @@ log.<span class="f">warn</span>(<span class="f">fault_timeout</span>());</code><
 <p>Verifiers return <code>ok(false)</code> for a signature that does not verify (including one of the wrong length) and <code>err</code> for a malformed key, such as a P-256 point that is not on the curve. ECDSA signatures are deterministic (RFC 6979) on OpenSSL 3.2 and newer, so a weak random number generator cannot leak the key; older 3.x uses random nonces. PSS fixes the salt at the digest length, as PS256 requires. RSA key generation takes tens of milliseconds at 2048 bits and seconds at 4096, without yielding, so do it at startup or in a tool. Prepared keys are cached (up to 16), so signing or verifying repeatedly with the same keys, as a server does with its JWT key or a JWKS, skips rebuilding them. RSA-OAEP encrypts to a public key and decrypts with the private one, the same hash for the label and MGF1. Use SHA-256 for anything new; SHA-1 is there for MySQL&#x27;s password exchange, and OAEP does not depend on the hash&#x27;s collision resistance the way a signature does. The <code>*_to_pem</code> functions write a raw private key as PKCS#8 PEM, the form <code>net.tls_ctx_use_cert</code> and <code>x509</code> take.</p>
 <p><strong>X.509</strong> lives in the <code>x509</code> package; the <code>crypto.x509_*</code> functions are the layer under it (<code>x509_der</code>, <code>x509_fields</code>, <code>x509_check_host</code>, <code>x509_verify</code>, <code>x509_csr</code>, <code>x509_self_signed</code>), compiled into a program only when it calls one.</p>
 <h4 id="sql"><code>sql</code><a class="anchor" href="#sql" aria-label="Link to this section">#</a></h4>
-<p>A SQLite driver (linked automatically, only when a program imports <code>sql</code>). Connections and prepared statements are opaque <code>rawptr</code> handles, exactly like <code>net.tls_*</code>; free them with <code>sql.close</code> / <code>sql.finalize</code>. <strong>Every fallible call returns <code>result[_, str]</code> whose error is SQLite&#x27;s own message</strong> — <code>no such table: users</code>, <code>near &quot;SELCT&quot;: syntax error</code>, <code>UNIQUE constraint failed: users.id</code> — so a bad query stays as visible as a bad socket read (<code>guard let … else let e = err_of(r)</code>), never a silent <code>null</code>. The column getters are infallible (SQLite coerces types; an out-of-range index is a programming error, returning <code>0</code> / <code>&quot;&quot;</code>), so they return bare values.</p>
+<p>A SQLite driver (linked automatically, only when a program imports <code>sql</code>). Connections and prepared statements are opaque <code>rawptr</code> handles, exactly like <code>net.tls_*</code>; free them with <code>sql.close</code> / <code>sql.finalize</code>. <strong>Every fallible call returns <code>result[_, str]</code> whose error is SQLite&#x27;s own message</strong> — <code>no such table: users</code>, <code>near &quot;SELCT&quot;: syntax error</code>, <code>UNIQUE constraint failed: users.id</code> — so a bad query stays as visible as a bad socket read (<code>guard let … else |e|</code>), never a silent <code>null</code>. The column getters are infallible (SQLite coerces types; an out-of-range index is a programming error, returning <code>0</code> / <code>&quot;&quot;</code>), so they return bare values.</p>
 <div class="tablewrap"><table><thead><tr><th>Function</th><th>Signature</th></tr></thead><tbody><tr><td><code>sql.open(path)</code></td><td><code>result[rawptr, str]</code> — <code>&quot;:memory:&quot;</code> for in-memory</td></tr><tr><td><code>sql.close(db)</code></td><td>—</td></tr><tr><td><code>sql.exec(db, sql)</code></td><td><code>result[int, str]</code> — runs statement(s), returns rows changed</td></tr><tr><td><code>sql.last_insert_id(db)</code></td><td><code>int</code></td></tr><tr><td><code>sql.prepare(db, sql)</code></td><td><code>result[rawptr, str]</code></td></tr><tr><td><code>sql.finalize(st)</code></td><td>—</td></tr><tr><td><code>sql.reset(st)</code></td><td><code>result[bool, str]</code> — clears bindings, re-run</td></tr><tr><td><code>sql.bind_int/bind_float/bind_text/bind_blob(st, idx, v)</code></td><td><code>result[bool, str]</code> — <code>idx</code> is 1-based</td></tr><tr><td><code>sql.bind_null(st, idx)</code></td><td><code>result[bool, str]</code></td></tr><tr><td><code>sql.step(st)</code></td><td><code>result[bool, str]</code> — <code>true</code> = row ready, <code>false</code> = done</td></tr><tr><td><code>sql.col_count(st)</code></td><td><code>int</code></td></tr><tr><td><code>sql.col_name(st, i)</code> / <code>col_text(st, i)</code></td><td><code>str</code> — <code>i</code> is 0-based</td></tr><tr><td><code>sql.col_int(st, i)</code></td><td><code>int</code></td></tr><tr><td><code>sql.col_float(st, i)</code></td><td><code>float</code></td></tr><tr><td><code>sql.col_blob(st, i)</code></td><td><code>bytes</code></td></tr><tr><td><code>sql.col_is_null(st, i)</code></td><td><code>bool</code></td></tr></tbody></table></div>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;sql&quot;</span>;
 <span class="k">import</span> <span class="s">&quot;log&quot;</span>;
 
-<span class="k">let</span> dr = sql.<span class="f">open</span>(<span class="s">&quot;app.db&quot;</span>);
-<span class="k">guard</span> <span class="k">let</span> db = dr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(dr) {
+<span class="k">guard</span> <span class="k">let</span> db = sql.<span class="f">open</span>(<span class="s">&quot;app.db&quot;</span>) <span class="k">else</span> |e| {
     log.<span class="f">error</span>(<span class="s">&quot;db open: &quot;</span> + e);
     <span class="b">exit</span>(<span class="n">1</span>);
 }
 sql.<span class="f">exec</span>(db, <span class="s">&quot;CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)&quot;</span>);
 
-<span class="k">let</span> pr = sql.<span class="f">prepare</span>(db, <span class="s">&quot;SELECT id, name FROM users WHERE id &gt; ?&quot;</span>);
-<span class="k">guard</span> <span class="k">let</span> st = pr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(pr) {
+<span class="k">guard</span> <span class="k">let</span> st = sql.<span class="f">prepare</span>(db, <span class="s">&quot;SELECT id, name FROM users WHERE id &gt; ?&quot;</span>) <span class="k">else</span> |e| {
     log.<span class="f">error</span>(<span class="s">&quot;prepare: &quot;</span> + e);          <span class="c">// e.g. &quot;no such table: users&quot;</span>
     <span class="b">exit</span>(<span class="n">1</span>);
 }
 sql.<span class="f">bind_int</span>(st, <span class="n">1</span>, <span class="n">0</span>);
 <span class="k">while</span> <span class="k">true</span> {
-    <span class="k">let</span> sr = sql.<span class="f">step</span>(st);
-    <span class="k">guard</span> <span class="k">let</span> more = sr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(sr) { log.<span class="f">error</span>(<span class="s">&quot;step: &quot;</span> + e); <span class="k">break</span>; }
+    <span class="k">guard</span> <span class="k">let</span> more = sql.<span class="f">step</span>(st) <span class="k">else</span> |e| { log.<span class="f">error</span>(<span class="s">&quot;step: &quot;</span> + e); <span class="k">break</span>; }
     <span class="k">if</span> !more { <span class="k">break</span>; }
     <span class="b">println</span>(<span class="b">to_str</span>(sql.<span class="f">col_int</span>(st, <span class="n">0</span>)) + <span class="s">&quot; &quot;</span> + sql.<span class="f">col_text</span>(st, <span class="n">1</span>));
 }
@@ -539,8 +524,7 @@ sql.<span class="f">close</span>(db);</code></pre></div>
 
 <span class="k">let</span> dl = <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">5000000000</span>);
 
-<span class="k">let</span> pr = pg.<span class="f">new_pool</span>(<span class="s">&quot;postgres://app:secret@db.internal/shop&quot;</span>, <span class="n">10</span>);
-<span class="k">guard</span> <span class="k">let</span> pool = pr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(pr) {
+<span class="k">guard</span> <span class="k">let</span> pool = pg.<span class="f">new_pool</span>(<span class="s">&quot;postgres://app:secret@db.internal/shop&quot;</span>, <span class="n">10</span>) <span class="k">else</span> |e| {
     log.<span class="f">error</span>(<span class="s">&quot;db url: &quot;</span> + e);
     <span class="b">exit</span>(<span class="n">1</span>);
 }
@@ -548,7 +532,7 @@ sql.<span class="f">close</span>(db);</code></pre></div>
 <span class="k">let</span> r = pg.<span class="f">pool_query</span>(pool,
     <span class="s">&quot;SELECT id, name, price FROM products WHERE price &lt; $1 ORDER BY id&quot;</span>,
     [pg.<span class="f">arg_float</span>(<span class="n">20.0</span>)], dl);
-<span class="k">guard</span> <span class="k">let</span> rows = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) {
+<span class="k">guard</span> <span class="k">let</span> rows = r <span class="k">else</span> |e| {
     log.<span class="f">error</span>(<span class="s">&quot;query: &quot;</span> + e);   <span class="c">// ERROR: relation &quot;products&quot; does not exist (SQLSTATE 42P01)</span>
     <span class="b">exit</span>(<span class="n">1</span>);
 }
@@ -570,8 +554,7 @@ sql.<span class="f">close</span>(db);</code></pre></div>
 <p>The hermetic <code>bench/pg_rows_as/main.sl</code> compares this with the previous Zokor JSON adapter on the same 1,000-row fixture. Intel macOS, ABBA x4: 3.792 ms versus 0.263 ms median per conversion; 23,040 versus 3,671 allocations and 1,864,778 versus 255,780 allocated bytes per conversion. These measure mapping alone, excluding database and request latency.</p>
 <h5 id="pool">Pool<a class="anchor" href="#pool" aria-label="Link to this section">#</a></h5>
 <p><code>pg.new_pool(url, max_open)</code> parses the url and connects nothing until first use. <code>pool_query</code> and <code>pool_exec</code> take a connection, run, and give it back, so they cannot leak one. A transaction needs several statements on one connection, so it uses <code>acquire</code> and <code>release</code>:</p>
-<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> cr = pg.<span class="f">acquire</span>(pool, dl);
-<span class="k">guard</span> <span class="k">let</span> c = cr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(cr) { <span class="k">return</span>; }
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">guard</span> <span class="k">let</span> c = pg.<span class="f">acquire</span>(pool, dl) <span class="k">else</span> |e| { <span class="k">return</span>; }
 pg.<span class="f">exec</span>(c, <span class="s">&quot;BEGIN&quot;</span>, dl);
 <span class="k">let</span> moved = pg.<span class="f">query</span>(c, <span class="s">&quot;UPDATE accounts SET balance = balance - $1 WHERE id = $2&quot;</span>,
                      [pg.<span class="f">arg_int</span>(<span class="n">100</span>), pg.<span class="f">arg_int</span>(from)], dl);
@@ -591,7 +574,7 @@ pg.<span class="f">release</span>(pool, c);</code></pre></div>
 <h5 id="timeouts-and-errors">Timeouts and errors<a class="anchor" href="#timeouts-and-errors" aria-label="Link to this section">#</a></h5>
 <p>A server-side error — a syntax error, a constraint violation — leaves the connection usable. Anything that leaves the stream at an unknown point breaks it: an I/O error, a protocol violation, a deadline. After a <code>&quot;timeout&quot;</code> the server may still be running the query, so the driver asks it to stop with a cancel request on a separate connection, from its own task, and returns immediately. A broken connection only returns <code>connection is broken: &lt;why&gt;</code>.</p>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> r = pg.<span class="f">query</span>(c, <span class="s">&quot;INSERT INTO users (email) VALUES ($1)&quot;</span>, [pg.<span class="f">arg_text</span>(email)], dl);
-<span class="k">guard</span> <span class="k">let</span> ok_ = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) {
+<span class="k">guard</span> <span class="k">let</span> ok_ = r <span class="k">else</span> |e| {
     <span class="k">if</span> pg.<span class="f">sqlstate</span>(e) == <span class="s">&quot;23505&quot;</span> {     <span class="c">// unique_violation</span>
         <span class="k">return</span> <span class="f">respond</span>(<span class="n">409</span>, <span class="s">&quot;email already registered&quot;</span>);
     }
@@ -600,11 +583,9 @@ pg.<span class="f">release</span>(pool, c);</code></pre></div>
 <p>A <code>Conn</code> is safe to share between tasks (calls take turns), but a pool is the better tool for that.</p>
 <h5 id="streaming">Streaming<a class="anchor" href="#streaming" aria-label="Link to this section">#</a></h5>
 <p><code>pg.stream</code> runs a query like <code>query</code> but hands the rows over one at a time, so memory holds one row however large the result, and the server is held back by TCP flow control rather than the client reading ahead:</p>
-<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> sr = pg.<span class="f">stream</span>(c, <span class="s">&quot;SELECT id, body FROM events ORDER BY id&quot;</span>, [], dl);
-<span class="k">guard</span> <span class="k">let</span> rows = sr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(sr) { <span class="k">return</span>; }
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">guard</span> <span class="k">let</span> rows = pg.<span class="f">stream</span>(c, <span class="s">&quot;SELECT id, body FROM events ORDER BY id&quot;</span>, [], dl) <span class="k">else</span> |e| { <span class="k">return</span>; }
 <span class="k">while</span> <span class="k">true</span> {
-    <span class="k">let</span> nr = pg.<span class="f">next_row</span>(c, rows, dl);
-    <span class="k">guard</span> <span class="k">let</span> more = nr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(nr) { log.<span class="f">error</span>(e); <span class="k">break</span>; }
+    <span class="k">guard</span> <span class="k">let</span> more = pg.<span class="f">next_row</span>(c, rows, dl) <span class="k">else</span> |e| { log.<span class="f">error</span>(e); <span class="k">break</span>; }
     <span class="k">if</span> !more { <span class="k">break</span>; }
     <span class="f">archive</span>(pg.<span class="f">get_int</span>(rows, <span class="n">0</span>, <span class="n">0</span>), pg.<span class="f">get_text</span>(rows, <span class="n">0</span>, <span class="n">1</span>));   <span class="c">// always row 0</span>
 }</code></pre></div>
@@ -620,8 +601,7 @@ pg.<span class="f">release</span>(pool, c);</code></pre></div>
 <h5 id="listen-notify">LISTEN / NOTIFY<a class="anchor" href="#listen-notify" aria-label="Link to this section">#</a></h5>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code>pg.<span class="f">listen</span>(c, <span class="s">&quot;jobs&quot;</span>, dl);
 <span class="k">while</span> <span class="k">true</span> {
-    <span class="k">let</span> wr = pg.<span class="f">wait_notification</span>(c, <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">30000000000</span>));
-    <span class="k">guard</span> <span class="k">let</span> got = wr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(wr) { log.<span class="f">error</span>(e); <span class="k">break</span>; }
+    <span class="k">guard</span> <span class="k">let</span> got = pg.<span class="f">wait_notification</span>(c, <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">30000000000</span>)) <span class="k">else</span> |e| { log.<span class="f">error</span>(e); <span class="k">break</span>; }
     <span class="k">guard</span> <span class="k">let</span> note = got <span class="k">else</span> { <span class="k">continue</span>; }        <span class="c">// 30s with nothing: none</span>
     <span class="f">run_job</span>(note.payload);
 }</code></pre></div>
@@ -637,23 +617,21 @@ pg.<span class="f">release</span>(pool, c);</code></pre></div>
 <p>A MySQL and MariaDB client over TCP, TLS or a Unix socket, with prepared statements, streamed results and a pool. The API matches <code>pg</code>&#x27;s, so code moves between the two with little change.</p>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;mysql&quot;</span>;
 
-<span class="k">let</span> cr = mysql.<span class="f">connect</span>(<span class="s">&quot;mysql://app:secret@db.internal:3306/shop&quot;</span>, deadline);
-<span class="k">guard</span> <span class="k">let</span> c = cr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(cr) { <span class="f">panic</span>(e); }
+<span class="k">guard</span> <span class="k">let</span> c = mysql.<span class="f">connect</span>(<span class="s">&quot;mysql://app:secret@db.internal:3306/shop&quot;</span>, deadline) <span class="k">else</span> |e| { <span class="f">panic</span>(e); }
 
 <span class="k">let</span> r = mysql.<span class="f">query</span>(c, <span class="s">&quot;SELECT id, name, price FROM items WHERE price &lt; ?&quot;</span>,
                     [mysql.<span class="f">arg_decimal</span>(limit)], deadline);       <span class="c">// result[Rows, str]</span>
-<span class="k">guard</span> <span class="k">let</span> rows = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }
+<span class="k">guard</span> <span class="k">let</span> rows = r <span class="k">else</span> |e| { <span class="f">panic</span>(e); }
 <span class="k">let</span> items: <span class="t">result</span>[[Item], <span class="t">str</span>] = mysql.<span class="f">rows_as</span>(rows);           <span class="c">// by column name</span>
 mysql.<span class="f">get_text</span>(rows, <span class="n">0</span>, mysql.<span class="f">col</span>(rows, <span class="s">&quot;name&quot;</span>));
 
 <span class="k">let</span> ir = mysql.<span class="f">query</span>(c, <span class="s">&quot;INSERT INTO items (name) VALUES (?)&quot;</span>, [mysql.<span class="f">arg_text</span>(<span class="s">&quot;pen&quot;</span>)], deadline);
-<span class="k">guard</span> <span class="k">let</span> ins = ir <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(ir) { <span class="f">panic</span>(e); }
+<span class="k">guard</span> <span class="k">let</span> ins = ir <span class="k">else</span> |e| { <span class="f">panic</span>(e); }
 ins.last_insert_id;                                              <span class="c">// the AUTO_INCREMENT value</span>
 
 mysql.<span class="f">exec</span>(c, <span class="s">&quot;BEGIN; UPDATE stock SET n = n - 1 WHERE id = 7; COMMIT&quot;</span>, deadline);   <span class="c">// several statements</span>
 
-<span class="k">let</span> pr = mysql.<span class="f">new_pool</span>(url, <span class="n">16</span>);                                <span class="c">// shared by any number of tasks</span>
-<span class="k">guard</span> <span class="k">let</span> p = pr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(pr) { <span class="f">panic</span>(e); }
+<span class="k">guard</span> <span class="k">let</span> p = mysql.<span class="f">new_pool</span>(url, <span class="n">16</span>) <span class="k">else</span> |e| { <span class="f">panic</span>(e); }   <span class="c">// shared by any number of tasks</span>
 mysql.<span class="f">pool_query</span>(p, <span class="s">&quot;SELECT 1&quot;</span>, [], deadline);</code></pre></div>
 <p><strong>query and exec.</strong> <code>query</code> runs one statement with <code>?</code> parameters, as a server-side prepared statement cached per connection (256 by default, <code>statement_cache=N</code>), so parameter values never pass through the SQL text. It returns the rows, or for an INSERT or UPDATE an empty result whose <code>affected</code> and <code>last_insert_id</code> say what it did. <code>exec</code> sends text and runs any number of statements: migrations, schema, <code>BEGIN … COMMIT</code>.</p>
 <p><strong>Results</strong> read like <code>pg</code>&#x27;s: <code>col</code>, <code>is_null</code>, <code>get_text</code>, <code>get_int</code>, <code>get_float</code>, <code>get_bool</code> (tinyint(1)), <code>get_bytes</code> (BLOB and BINARY, NULs intact), <code>get_time</code> (DATETIME, TIMESTAMP and DATE, read as UTC), <code>get_decimal</code> (exact), and <code>rows_as[T]</code>, which binds by column name through the same compiled decoder as <code>pg.rows_as</code>. Values past 2^63 in a BIGINT UNSIGNED arrive exactly as text. <code>stream</code> with <code>next_row</code> reads a large result one row at a time. A result held whole is bounded at 256 MiB.</p>
@@ -670,8 +648,7 @@ mysql.<span class="f">pool_query</span>(p, <span class="s">&quot;SELECT 1&quot;<
 <span class="k">import</span> <span class="s">&quot;log&quot;</span>;
 
 <span class="k">let</span> dl = <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">5000000000</span>);
-<span class="k">let</span> cr = redis.<span class="f">connect</span>(<span class="s">&quot;redis://:secret@cache.internal:6380/2&quot;</span>, dl);
-<span class="k">guard</span> <span class="k">let</span> c = cr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(cr) {
+<span class="k">guard</span> <span class="k">let</span> c = redis.<span class="f">connect</span>(<span class="s">&quot;redis://:secret@cache.internal:6380/2&quot;</span>, dl) <span class="k">else</span> |e| {
     log.<span class="f">error</span>(<span class="s">&quot;connect: &quot;</span> + e);
     <span class="b">exit</span>(<span class="n">1</span>);
 }
@@ -705,11 +682,9 @@ redis.<span class="f">close</span>(c);</code></pre></div>
 <p>A client for <a href="https://nats.io">NATS</a>: publish, subscribe (plain and queue groups), headers, request/reply, flush and drain, keepalive, and automatic reconnection with resubscription. It covers core NATS, not JetStream.</p>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;nats&quot;</span>;
 
-<span class="k">let</span> r = nats.<span class="f">connect</span>(<span class="s">&quot;nats://127.0.0.1:4222&quot;</span>, deadline);
-<span class="k">guard</span> <span class="k">let</span> nc = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }
+<span class="k">guard</span> <span class="k">let</span> nc = nats.<span class="f">connect</span>(<span class="s">&quot;nats://127.0.0.1:4222&quot;</span>, deadline) <span class="k">else</span> |e| { <span class="f">panic</span>(e); }
 
-<span class="k">let</span> sr = nats.<span class="f">subscribe</span>(nc, <span class="s">&quot;orders.*&quot;</span>);                  <span class="c">// or queue_subscribe(nc, subj, &quot;workers&quot;)</span>
-<span class="k">guard</span> <span class="k">let</span> sub = sr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(sr) { <span class="f">panic</span>(e); }
+<span class="k">guard</span> <span class="k">let</span> sub = nats.<span class="f">subscribe</span>(nc, <span class="s">&quot;orders.*&quot;</span>) <span class="k">else</span> |e| { <span class="f">panic</span>(e); }   <span class="c">// or queue_subscribe(nc, subj, &quot;workers&quot;)</span>
 nats.<span class="f">publish</span>(nc, <span class="s">&quot;orders.new&quot;</span>, b<span class="s">&quot;{\&quot;id\&quot;:1}&quot;</span>);
 <span class="k">let</span> m = nats.<span class="f">next_msg</span>(sub, deadline);                     <span class="c">// result[opt[Msg], str]: none at the deadline</span>
 
@@ -735,7 +710,7 @@ nats.<span class="f">drain</span>(nc, deadline);                                
 <span class="k">let</span> r = s3.<span class="f">new_client</span>(<span class="s">&quot;https://s3.eu-west-1.amazonaws.com&quot;</span>, <span class="s">&quot;eu-west-1&quot;</span>, access_key, secret_key);
 <span class="c">// or s3.from_env(proc.getenv): AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,</span>
 <span class="c">// AWS_SESSION_TOKEN, AWS_REGION, S3_ENDPOINT</span>
-<span class="k">guard</span> <span class="k">let</span> c = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }
+<span class="k">guard</span> <span class="k">let</span> c = r <span class="k">else</span> |e| { <span class="f">panic</span>(e); }
 
 s3.<span class="f">put_object</span>(c, <span class="s">&quot;uploads&quot;</span>, <span class="s">&quot;avatars/42.png&quot;</span>, png, <span class="s">&quot;image/png&quot;</span>, deadline);   <span class="c">// ok(etag)</span>
 s3.<span class="f">get_object</span>(c, <span class="s">&quot;uploads&quot;</span>, <span class="s">&quot;avatars/42.png&quot;</span>, deadline);                     <span class="c">// ok(bytes)</span>
@@ -775,8 +750,7 @@ h[<span class="s">&quot;x-amz-target&quot;</span>] = <span class="s">&quot;Amazo
 <p><code>find</code> returns byte offsets as <code>[start, end, g1start, g1end, ...]</code>, or an <strong>empty list</strong> when there is no match — so the result is GC-owned and there is no match handle to leak. <code>find_at</code> starts at an offset, which is how you walk every match.</p>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;regex&quot;</span>;
 
-<span class="k">let</span> cr = regex.<span class="f">compile</span>(<span class="s">&quot;(\\d{4})-(\\d{2})-(\\d{2})&quot;</span>);
-<span class="k">guard</span> <span class="k">let</span> re = cr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(cr) {
+<span class="k">guard</span> <span class="k">let</span> re = regex.<span class="f">compile</span>(<span class="s">&quot;(\\d{4})-(\\d{2})-(\\d{2})&quot;</span>) <span class="k">else</span> |e| {
     log.<span class="f">error</span>(<span class="s">&quot;bad pattern: &quot;</span> + e);   <span class="c">// e.g. &quot;missing ) at offset 9&quot;</span>
     <span class="b">exit</span>(<span class="n">1</span>);
 }
@@ -799,12 +773,10 @@ regex.<span class="f">free</span>(re);</code></pre></div>
 <p>HTTP/2 framing and HPACK header compression (RFC 9113, RFC 7541), written in slang — the frame codec is what the bitwise operators were added for.</p>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;http2&quot;</span>;
 
-<span class="k">let</span> f = http2.<span class="f">decode</span>(buf, <span class="n">0</span>, <span class="n">16384</span>);        <span class="c">// one frame, bounds-checked</span>
-<span class="k">guard</span> <span class="k">let</span> fr = f <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(f) { <span class="k">return</span>; }
+<span class="k">guard</span> <span class="k">let</span> fr = http2.<span class="f">decode</span>(buf, <span class="n">0</span>, <span class="n">16384</span>) <span class="k">else</span> |e| { <span class="k">return</span>; }   <span class="c">// one frame, bounds-checked</span>
 
 <span class="k">let</span> d = http2.<span class="f">decoder_new</span>(<span class="n">4096</span>);            <span class="c">// per-connection HPACK state</span>
-<span class="k">let</span> hr = http2.<span class="f">decode_block</span>(d, fr.payload, <span class="n">64</span>);
-<span class="k">guard</span> <span class="k">let</span> hs = hr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(hr) { <span class="k">return</span>; }
+<span class="k">guard</span> <span class="k">let</span> hs = http2.<span class="f">decode_block</span>(d, fr.payload, <span class="n">64</span>) <span class="k">else</span> |e| { <span class="k">return</span>; }
 <span class="k">for</span> i <span class="k">in</span> <span class="n">0..len</span>(hs) {
     <span class="b">println</span>(hs[i].name + <span class="s">&quot;: &quot;</span> + hs[i].value);
 }</code></pre></div>
@@ -837,8 +809,7 @@ http2.<span class="f">transport_tls</span>(ssl)   <span class="c">// h2 over TLS
     <span class="k">guard</span> <span class="k">let</span> _p = http2.<span class="f">accept_preface</span>(rd, fd, wch,
             <span class="b">until_of</span>(time.<span class="f">mono</span>() + lim.handshake)) <span class="k">else</span> { <span class="k">return</span>; }
     <span class="k">while</span> <span class="k">true</span> {
-        <span class="k">let</span> rr = http2.<span class="f">read_request</span>(cn, rd, fd, wch, lim);
-        <span class="k">guard</span> <span class="k">let</span> req = rr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(rr) {
+        <span class="k">guard</span> <span class="k">let</span> req = http2.<span class="f">read_request</span>(cn, rd, fd, wch, lim) <span class="k">else</span> |e| {
             <span class="k">if</span> http2.<span class="f">is_timeout</span>(e) { /* slow <span class="t">peer</span>; shed it */ }
             <span class="b">chan_close</span>(wch);
             <span class="k">return</span>;
@@ -879,12 +850,11 @@ http2.<span class="f">transport_tls</span>(ssl)   <span class="c">// h2 over TLS
 <p><code>tests/http2_flood</code> drives both shapes, resetting and not, and fails if either exceeds the cap.</p>
 <h5 id="client">Client<a class="anchor" href="#client" aria-label="Link to this section">#</a></h5>
 <p>The same pieces, from the other end: a <code>Transport</code>, one <code>writer_task</code>, one reader. <code>client_start</code> performs the handshake and returns a <code>Client</code> whose own reader task routes each response to the task that asked for it, so <code>client_call</code> is safe from any number of tasks on one connection:</p>
-<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> started = http2.<span class="f">client_start</span>(http2.<span class="f">transport_tls</span>(ssl), http2.<span class="f">default_limits</span>());
-<span class="k">guard</span> <span class="k">let</span> c = started <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(started) { <span class="k">return</span>; }
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">guard</span> <span class="k">let</span> c = http2.<span class="f">client_start</span>(http2.<span class="f">transport_tls</span>(ssl), http2.<span class="f">default_limits</span>()) <span class="k">else</span> |e| { <span class="k">return</span>; }
 <span class="k">let</span> none_h: [http2.Header] = [];
 <span class="k">let</span> r = http2.<span class="f">client_call</span>(c, <span class="s">&quot;GET&quot;</span>, <span class="s">&quot;https&quot;</span>, <span class="s">&quot;api.example&quot;</span>, <span class="s">&quot;/v1/users&quot;</span>, none_h,
                           b<span class="s">&quot;&quot;</span>, <span class="n">2000000000</span>, <span class="n">1048576</span>);   <span class="c">// timeout ns, max body</span>
-<span class="k">guard</span> <span class="k">let</span> resp = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="k">return</span>; }
+<span class="k">guard</span> <span class="k">let</span> resp = r <span class="k">else</span> |e| { <span class="k">return</span>; }
 <span class="b">println</span>(resp.status + <span class="s">&quot; &quot;</span> + <span class="b">to_str</span>(<span class="b">len</span>(resp.body)));
 http2.<span class="f">client_close</span>(c);</code></pre></div>
 <p><code>client_call</code> allocates stream ids (odd, increasing, in wire order), waits for a slot under the peer&#x27;s <code>SETTINGS_MAX_CONCURRENT_STREAMS</code> (capped by <code>Limits.max_concurrent</code>), and times each call out on its own: an expired call is reset with <code>RST_STREAM(CANCEL)</code> and answers <code>&quot;timeout&quot;</code>, and the late response&#x27;s header block is still decoded so HPACK state stays in step for the rest of the connection. A <code>Response</code> carries <code>status</code>, <code>headers</code>, <code>body</code> and <code>trailers</code>. Calls are never retried; a stream refused by <code>GOAWAY</code> says so, since only those are safe to repeat elsewhere.</p>
@@ -982,8 +952,7 @@ encoding.<span class="f">query_keys</span>(q);                                  
 
 <span class="k">let</span> dl = <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">5000000000</span>);   <span class="c">// 5s for the whole request</span>
 
-<span class="k">let</span> r = httpc.<span class="f">get</span>(<span class="s">&quot;https://api.example.com/users?id=1&quot;</span>, dl);
-<span class="k">guard</span> <span class="k">let</span> resp = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) {
+<span class="k">guard</span> <span class="k">let</span> resp = httpc.<span class="f">get</span>(<span class="s">&quot;https://api.example.com/users?id=1&quot;</span>, dl) <span class="k">else</span> |e| {
     log.<span class="f">error</span>(<span class="s">&quot;request failed: &quot;</span> + e);
     <span class="k">return</span>;
 }
@@ -1097,8 +1066,7 @@ balance.<span class="f">done</span>(lb, p, worked, (time.<span class="f">mono</s
 
 <span class="k">let</span> mc = memcache.<span class="f">new</span>([<span class="s">&quot;cache-1:11211&quot;</span>, <span class="s">&quot;cache-2:11211&quot;</span>]);
 memcache.<span class="f">set</span>(mc, <span class="s">&quot;user:42&quot;</span>, <span class="b">to_bytes</span>(body), <span class="n">300</span>, deadline);   <span class="c">// 5 minutes</span>
-<span class="k">let</span> gr = memcache.<span class="f">get</span>(mc, <span class="s">&quot;user:42&quot;</span>, deadline);
-<span class="k">guard</span> <span class="k">let</span> found = gr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(gr) { <span class="k">return</span> <span class="b">err</span>(e); }  <span class="c">// I/O error</span>
+<span class="k">guard</span> <span class="k">let</span> found = memcache.<span class="f">get</span>(mc, <span class="s">&quot;user:42&quot;</span>, deadline) <span class="k">else</span> |e| { <span class="k">return</span> <span class="b">err</span>(e); }  <span class="c">// I/O error</span>
 <span class="k">if</span> <span class="k">let</span> v = found { <span class="f">use</span>(v); } <span class="k">else</span> { /* a miss */ }</code></pre></div>
 <p>The client has <code>get</code>, <code>gets</code> (with the cas token), <code>get_multi</code> (one request per server), <code>set</code>, <code>add</code>, <code>replace</code>, <code>cas</code>, <code>delete</code>, <code>incr</code>, <code>decr</code>, <code>touch</code> and <code>close</code>. Keys spread over servers by rendezvous hashing, so adding or removing a server moves only its share. Up to <code>max_idle</code> connections per server are kept and reused, and a connection that saw any error is closed rather than reused. Keys are checked (1 to 250 bytes, no spaces or control characters) and values are limited to <code>max_value</code> (1 MB, memcached&#x27;s default item size).</p>
 <h4 id="envelope"><code>envelope</code><a class="anchor" href="#envelope" aria-label="Link to this section">#</a></h4>
@@ -1287,8 +1255,7 @@ metrics.<span class="f">observe</span>(users, <span class="n">0.012</span>);
 <span class="k">import</span> <span class="s">&quot;proxyproto&quot;</span>;
 <span class="k">import</span> <span class="s">&quot;time&quot;</span>;
 
-<span class="k">let</span> hr = proxyproto.<span class="f">read_until</span>(fd, <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">5000000000</span>));
-<span class="k">guard</span> <span class="k">let</span> h = hr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(hr) { net.<span class="f">close</span>(fd); <span class="k">return</span>; }
+<span class="k">guard</span> <span class="k">let</span> h = proxyproto.<span class="f">read_until</span>(fd, <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">5000000000</span>)) <span class="k">else</span> |e| { net.<span class="f">close</span>(fd); <span class="k">return</span>; }
 <span class="b">println</span>(h.src_addr + <span class="s">&quot;:&quot;</span> + <span class="b">to_str</span>(h.src_port));   <span class="c">// the real client</span>
 <span class="c">// h.rest: bytes that came after the header, the start of the stream</span></code></pre></div>
 <ul><li><code>parse(b)</code> reads a header from the start of <code>b</code>: <code>some(header)</code>, <code>none</code> when <code>b</code> is a prefix of one and more bytes are needed, or an error when <code>b</code> is not a PROXY header. <code>header.size</code> is its length.</li><li><code>read_until(fd, deadline)</code> reads one off a socket and keeps any bytes that arrived after it in <code>header.rest</code>.</li><li>A <code>Header</code> has <code>version</code>, <code>family</code> (<code>tcp4</code>, <code>tcp6</code>, <code>udp4</code>, <code>udp6</code>, <code>unix</code>, <code>unknown</code>), the source and destination addresses and ports, and v2&#x27;s <code>tlvs</code> (<code>kind</code>, <code>value</code>): ALPN, the TLS server name (0x02), AWS&#x27;s VPC endpoint id (0xEA) and so on. <code>local</code> is true for a v2 LOCAL header, a balancer&#x27;s health check, which carries no addresses.</li><li><code>encode_v1(h)</code> and <code>encode_v2(h)</code> build headers, for a proxy written in slang or a test. IPv6 addresses are printed in RFC 5952 form.</li></ul>
@@ -1327,8 +1294,7 @@ protobuf.<span class="f">write_packed_sint</span>(w, <span class="n">3</span>, [
 <span class="k">fn</span> <span class="f">alive</span>(fd: <span class="t">i32</span>) -&gt; <span class="t">bool</span> { <span class="k">return</span> net.<span class="f">idle_alive</span>(fd); }
 
 <span class="k">let</span> p = pool.<span class="f">new</span>(pool.<span class="f">options</span>(<span class="n">64</span>), dial_cache, close_cache, alive);
-<span class="k">let</span> lr = pool.<span class="f">acquire</span>(p, deadline);
-<span class="k">guard</span> <span class="k">let</span> lease = lr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(lr) { <span class="k">return</span>; }   <span class="c">// &quot;timeout&quot;</span>
+<span class="k">guard</span> <span class="k">let</span> lease = pool.<span class="f">acquire</span>(p, deadline) <span class="k">else</span> |e| { <span class="k">return</span>; }   <span class="c">// &quot;timeout&quot;</span>
 <span class="k">let</span> _s = net.<span class="f">send</span>(lease.v, b<span class="s">&quot;version\r\n&quot;</span>);
 pool.<span class="f">release</span>(p, lease);        <span class="c">// pool.discard(p, lease) if it broke</span></code></pre></div>
 <ul><li><code>acquire</code> hands out an idle connection, dials one while fewer than <code>max_open</code> are open, or waits. Waiting is first come, first served: a release goes straight to the task that has waited longest, which wakes once, so the slowest waiter&#x27;s latency is its place in the queue.</li><li>An idle connection is probed (the <code>probe</code> function) before reuse only after <code>probe_after</code> idle, 1 s by default; one released moments ago is handed out as is.</li><li><code>options(max_open)</code> also sets <code>max_idle</code> (default <code>max_open</code>), <code>idle_timeout</code> (5 minutes), <code>max_lifetime</code> (none; set it behind a balancer so new connections reach new backends) and <code>probe_after</code>.</li><li><code>stats(p)</code>: open, idle and waiting now; dials, reuses, waits, total and longest wait, and timeouts.</li><li><code>close(p)</code> closes idle connections and fails waiters; leased ones close as they come back. Releasing a lease twice panics.</li></ul>
@@ -1339,19 +1305,16 @@ pool.<span class="f">release</span>(p, lease);        <span class="c">// pool.di
 <span class="k">let</span> rp = webauthn.<span class="f">relying_party</span>(<span class="s">&quot;example.com&quot;</span>, <span class="s">&quot;Example&quot;</span>, [<span class="s">&quot;https://example.com&quot;</span>]);
 
 <span class="c">// Registration: send ch.options to the page, keep ch.value in the session.</span>
-<span class="k">let</span> cr = webauthn.<span class="f">begin_registration</span>(rp, user, existing_credentials);
-<span class="k">guard</span> <span class="k">let</span> ch = cr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(cr) { <span class="k">return</span> <span class="f">fail</span>(e); }
+<span class="k">guard</span> <span class="k">let</span> ch = webauthn.<span class="f">begin_registration</span>(rp, user, existing_credentials) <span class="k">else</span> |e| { <span class="k">return</span> <span class="f">fail</span>(e); }
 <span class="c">// page: navigator.credentials.create({ publicKey:</span>
 <span class="c">//         PublicKeyCredential.parseCreationOptionsFromJSON(options) }),</span>
 <span class="c">//       then POST JSON.stringify(credential)</span>
-<span class="k">let</span> fr = webauthn.<span class="f">finish_registration</span>(rp, ch.value, posted_json);
-<span class="k">guard</span> <span class="k">let</span> cred = fr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(fr) { <span class="k">return</span> <span class="f">fail</span>(e); }   <span class="c">// store cred</span>
+<span class="k">guard</span> <span class="k">let</span> cred = webauthn.<span class="f">finish_registration</span>(rp, ch.value, posted_json) <span class="k">else</span> |e| { <span class="k">return</span> <span class="f">fail</span>(e); }   <span class="c">// store cred</span>
 
 <span class="c">// Login: the same shape.</span>
 <span class="k">let</span> lc = webauthn.<span class="f">begin_login</span>(rp, []);          <span class="c">// [] lets the user pick any passkey</span>
 <span class="k">let</span> id = webauthn.<span class="f">login_credential_id</span>(posted_json) ?? b<span class="s">&quot;&quot;</span>;   <span class="c">// look up the stored credential</span>
-<span class="k">let</span> lr = webauthn.<span class="f">finish_login</span>(rp, challenge, stored, posted_json);
-<span class="k">guard</span> <span class="k">let</span> login = lr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(lr) { <span class="k">return</span> <span class="f">fail</span>(e); }
+<span class="k">guard</span> <span class="k">let</span> login = webauthn.<span class="f">finish_login</span>(rp, challenge, stored, posted_json) <span class="k">else</span> |e| { <span class="k">return</span> <span class="f">fail</span>(e); }
 stored.sign_count = login.sign_count;           <span class="c">// and store it back</span></code></pre></div>
 <p>What <code>finish_registration</code> and <code>finish_login</code> check:</p>
 <ul><li><strong>Client data:</strong> the type, the challenge, and that the origin is one of <code>rp.origins</code>. Cross-origin iframe requests are refused.</li><li><strong>Authenticator data:</strong> the RP ID hash and the user-present flag, and the user-verified flag when <code>rp.user_verification</code> is <code>&quot;required&quot;</code>. Trailing or malformed data is refused.</li><li><strong>Signature:</strong> ES256 (P-256, from DER), EdDSA (Ed25519) or RS256, with RSA keys at least 2048 bits. The options offer these three.</li><li><strong>Counter:</strong> for an authenticator that keeps one, the signature counter must have gone up. A counter that did not is reported as a possible cloned authenticator.</li></ul>
@@ -1366,7 +1329,7 @@ stored.sign_count = login.sign_count;           <span class="c">// and store it 
 <span class="k">let</span> ips = dns.<span class="f">lookup_ip</span>(r, <span class="s">&quot;api.example.com&quot;</span>, deadline);   <span class="c">// IPv4 first, then IPv6</span>
 <span class="k">let</span> mx = dns.<span class="f">lookup_mx</span>(r, <span class="s">&quot;example.com&quot;</span>, deadline);        <span class="c">// by preference</span>
 <span class="k">let</span> srv = dns.<span class="f">lookup_srv</span>(r, <span class="s">&quot;_imap._tcp.example.com&quot;</span>, deadline);
-<span class="k">guard</span> <span class="k">let</span> found = ips <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(ips) {
+<span class="k">guard</span> <span class="k">let</span> found = ips <span class="k">else</span> |e| {
     <span class="k">if</span> e == <span class="s">&quot;no such host&quot;</span> { /* NXDOMAIN, after every search domain */ }
     <span class="k">return</span>;
 }</code></pre></div>
@@ -1397,13 +1360,11 @@ o.protocols = [<span class="s">&quot;v2.chat&quot;</span>];                     
 o.headers = [<span class="s">&quot;Authorization: Bearer &quot;</span> + token];
 o.ping_every = <span class="n">20000000000</span>;                      <span class="c">// keepalive: a ping every 20 s</span>
 o.compress = <span class="k">true</span>;                               <span class="c">// permessage-deflate</span>
-<span class="k">let</span> r = websocket.<span class="f">dial_with</span>(<span class="s">&quot;wss://example.com/live&quot;</span>, o, deadline);
-<span class="k">guard</span> <span class="k">let</span> ws = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }
+<span class="k">guard</span> <span class="k">let</span> ws = websocket.<span class="f">dial_with</span>(<span class="s">&quot;wss://example.com/live&quot;</span>, o, deadline) <span class="k">else</span> |e| { <span class="f">panic</span>(e); }
 
 websocket.<span class="f">send_text</span>(ws, <span class="s">&quot;{\&quot;subscribe\&quot;:\&quot;prices\&quot;}&quot;</span>, deadline);
 websocket.<span class="f">send_binary</span>(ws, frame, deadline);
-<span class="k">let</span> mr = websocket.<span class="f">recv</span>(ws, deadline);           <span class="c">// result[opt[Message], str]; none: the deadline passed</span>
-<span class="k">guard</span> <span class="k">let</span> got = mr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(mr) { <span class="f">panic</span>(e); }
+<span class="k">guard</span> <span class="k">let</span> got = websocket.<span class="f">recv</span>(ws, deadline) <span class="k">else</span> |e| { <span class="f">panic</span>(e); }   <span class="c">// result[opt[Message], str]; none: the deadline passed</span>
 <span class="k">guard</span> <span class="k">let</span> m = got <span class="k">else</span> { <span class="k">return</span>; }
 <span class="k">if</span> m.kind == websocket.Kind.Text { <span class="f">handle</span>(websocket.<span class="f">text</span>(m)); }
 websocket.<span class="f">close</span>(ws, <span class="n">1000</span>, <span class="s">&quot;bye&quot;</span>, deadline);      <span class="c">// the close handshake</span></code></pre></div>
@@ -1417,12 +1378,10 @@ websocket.<span class="f">close</span>(ws, <span class="n">1000</span>, <span cl
 <p>gzip, zlib and raw DEFLATE, over zlib (<code>-lz</code>, added only when a program imports <code>compress</code>).</p>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;compress&quot;</span>;
 
-<span class="k">let</span> gr = compress.<span class="f">gzip</span>(body);
-<span class="k">guard</span> <span class="k">let</span> gz = gr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(gr) { log.<span class="f">error</span>(e); <span class="k">return</span>; }
+<span class="k">guard</span> <span class="k">let</span> gz = compress.<span class="f">gzip</span>(body) <span class="k">else</span> |e| { log.<span class="f">error</span>(e); <span class="k">return</span>; }
 
 <span class="c">// decompression ALWAYS takes a ceiling -- see below</span>
-<span class="k">let</span> ur = compress.<span class="f">gunzip</span>(payload, <span class="n">4194304</span>);        <span class="c">// 4 MiB</span>
-<span class="k">guard</span> <span class="k">let</span> plain = ur <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(ur) {
+<span class="k">guard</span> <span class="k">let</span> plain = compress.<span class="f">gunzip</span>(payload, <span class="n">4194304</span>) <span class="k">else</span> |e| {   <span class="c">// 4 MiB</span>
     log.<span class="f">warn</span>(<span class="s">&quot;rejected: &quot;</span> + e);                     <span class="c">// names the limit</span>
     <span class="k">return</span>;
 }</code></pre></div>
@@ -1661,8 +1620,7 @@ vec.<span class="f">dot_q</span>(q8, vec.<span class="f">quantize</span>(vec.<sp
 <p>Exact decimal arithmetic for money: up to 38 significant digits (SQL&#x27;s <code>DECIMAL(38)</code>), an explicit scale, seven rounding modes, and overflow as <code>none</code> or an error, never a wrap.</p>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;decimal&quot;</span>;
 
-<span class="k">let</span> r = decimal.<span class="f">parse</span>(<span class="s">&quot;19.99&quot;</span>);                <span class="c">// result[Decimal, str]</span>
-<span class="k">guard</span> <span class="k">let</span> price = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }
+<span class="k">guard</span> <span class="k">let</span> price = decimal.<span class="f">parse</span>(<span class="s">&quot;19.99&quot;</span>) <span class="k">else</span> |e| { <span class="f">panic</span>(e); }   <span class="c">// result[Decimal, str]</span>
 <span class="k">let</span> total = decimal.<span class="f">mul</span>(price, decimal.<span class="f">from_int</span>(<span class="n">3</span>)) ?? decimal.<span class="f">zero</span>();   <span class="c">// 59.97</span>
 <span class="k">let</span> rate = decimal.<span class="f">parse</span>(<span class="s">&quot;0.075&quot;</span>) ?? decimal.<span class="f">zero</span>();
 <span class="k">let</span> vat = decimal.<span class="f">mul_round</span>(total, rate, <span class="n">2</span>, decimal.Rounding.HalfEven)
@@ -1717,8 +1675,7 @@ sort.<span class="f">floats</span>(fs);                     <span class="c">// N
 <p>UUIDs per RFC 9562: make version 4 (random) and version 7 (time-ordered), check, parse and convert. An id is a plain <code>str</code> in canonical form (36 characters, lowercase hex, hyphens at 8, 13, 18 and 23), the form JSON, logs and Postgres&#x27;s <code>uuid</code> text already use, so it crosses those boundaries unconverted and has exactly one spelling to compare or key a map by.</p>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;uuid&quot;</span>;
 
-<span class="k">let</span> r = uuid.<span class="f">v7</span>();
-<span class="k">guard</span> <span class="k">let</span> id = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) {
+<span class="k">guard</span> <span class="k">let</span> id = uuid.<span class="f">v7</span>() <span class="k">else</span> |e| {
     <span class="f">panic</span>(e);                          <span class="c">// only if the OS has no randomness</span>
 }
 uuid.<span class="f">is_valid</span>(id);                     <span class="c">// true: canonical form only</span>
@@ -1734,8 +1691,7 @@ uuid.<span class="f">time_ms</span>(id) ?? <span class="n">0</span>;            
 <p>CSV (RFC 4180): read a whole document or stream a large one, and write.</p>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;csv&quot;</span>;
 
-<span class="k">let</span> r = csv.<span class="f">parse</span>(<span class="s">&quot;name,qty\n\&quot;Smith, J\&quot;,3\n&quot;</span>);   <span class="c">// result[[[str]], str]</span>
-<span class="k">guard</span> <span class="k">let</span> rows = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }
+<span class="k">guard</span> <span class="k">let</span> rows = csv.<span class="f">parse</span>(<span class="s">&quot;name,qty\n\&quot;Smith, J\&quot;,3\n&quot;</span>) <span class="k">else</span> |e| { <span class="f">panic</span>(e); }   <span class="c">// result[[[str]], str]</span>
 csv.<span class="f">to_maps</span>(rows);                                     <span class="c">// the header row as keys: [map[str]str]</span>
 
 <span class="k">let</span> o = csv.<span class="f">options</span>();
@@ -1767,7 +1723,7 @@ csv.<span class="f">format_with</span>(rows, w);</code></pre></div>
 <span class="k">struct</span> Config { name: <span class="t">str</span>, db: Db }
 
 <span class="k">let</span> r: <span class="t">result</span>[Config, <span class="t">str</span>] = toml.<span class="f">decode</span>(text);
-<span class="k">guard</span> <span class="k">let</span> cfg = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }   <span class="c">// &quot;toml: line 4: ...&quot;</span>
+<span class="k">guard</span> <span class="k">let</span> cfg = r <span class="k">else</span> |e| { <span class="f">panic</span>(e); }   <span class="c">// &quot;toml: line 4: ...&quot;</span>
 
 toml.<span class="f">to_json</span>(text);                                      <span class="c">// result[str, str]</span></code></pre></div>
 <p><code>decode</code> is <code>to_json</code> then <code>json.decode</code>, so a document decodes into whatever JSON does: structs, <code>gc struct</code>s, lists, maps, <code>opt</code> (a missing key is <code>none</code>) and enums, and an offset date-time into a <code>timez.Time</code>. Tables keep their keys in document order.</p>
@@ -1782,7 +1738,7 @@ toml.<span class="f">to_json</span>(text);                                      
 <span class="k">struct</span> Config { name: <span class="t">str</span>, db: Db }
 
 <span class="k">let</span> r: <span class="t">result</span>[Config, <span class="t">str</span>] = yaml.<span class="f">decode</span>(text);
-<span class="k">guard</span> <span class="k">let</span> cfg = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }   <span class="c">// &quot;yaml: line 4: ...&quot;</span>
+<span class="k">guard</span> <span class="k">let</span> cfg = r <span class="k">else</span> |e| { <span class="f">panic</span>(e); }   <span class="c">// &quot;yaml: line 4: ...&quot;</span>
 
 yaml.<span class="f">to_json</span>(text);              <span class="c">// result[str, str]: the stream&#x27;s one document</span>
 yaml.<span class="f">to_json_all</span>(text);          <span class="c">// result[[str], str]: every document (--- between them)</span>
@@ -1798,8 +1754,7 @@ yaml.<span class="f">to_json_all</span>(text);          <span class="c">// resul
 <p>XML 1.0 with namespaces, for the APIs that still speak it: SOAP, payment gateways, SAML, RSS and Atom, sitemaps. Parse into a tree, read it, write one back.</p>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;xml&quot;</span>;
 
-<span class="k">let</span> r = xml.<span class="f">parse</span>(body);
-<span class="k">guard</span> <span class="k">let</span> doc = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }   <span class="c">// &quot;xml: line 3 col 9: ...&quot;</span>
+<span class="k">guard</span> <span class="k">let</span> doc = xml.<span class="f">parse</span>(body) <span class="k">else</span> |e| { <span class="f">panic</span>(e); }   <span class="c">// &quot;xml: line 3 col 9: ...&quot;</span>
 <span class="k">let</span> title = doc.<span class="f">find</span>(<span class="s">&quot;channel/title&quot;</span>) ?? doc;              <span class="c">// a path of local names</span>
 <span class="k">for</span> item <span class="k">in</span> doc.<span class="f">find_all</span>(<span class="s">&quot;channel/item&quot;</span>) {
     <span class="b">println</span>(item.<span class="f">child_text</span>(<span class="s">&quot;link&quot;</span>));
@@ -1821,7 +1776,7 @@ xml.<span class="f">write</span>(out);                          <span class="c">
 o.max_entries = <span class="n">50000</span>;
 o.ttl_ms = <span class="n">30000</span>;                                          <span class="c">// 0: never expires</span>
 <span class="k">let</span> cr: <span class="t">result</span>[cache.Cache[User], <span class="t">str</span>] = cache.<span class="f">new</span>(o);
-<span class="k">guard</span> <span class="k">let</span> users = cr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(cr) { <span class="f">panic</span>(e); }
+<span class="k">guard</span> <span class="k">let</span> users = cr <span class="k">else</span> |e| { <span class="f">panic</span>(e); }
 
 cache.<span class="f">put</span>(users, <span class="s">&quot;u:42&quot;</span>, u);
 cache.<span class="f">get</span>(users, <span class="s">&quot;u:42&quot;</span>);                                  <span class="c">// opt[User]</span>
@@ -1843,8 +1798,7 @@ cache.<span class="f">stats</span>(users);                                      
 <p>X.509 certificates: read them, check them, and make requests for them.</p>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;x509&quot;</span>;
 
-<span class="k">let</span> r = x509.<span class="f">parse_pem</span>(pem);              <span class="c">// result[[x509.Cert], str]: every CERTIFICATE block</span>
-<span class="k">guard</span> <span class="k">let</span> certs = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }
+<span class="k">guard</span> <span class="k">let</span> certs = x509.<span class="f">parse_pem</span>(pem) <span class="k">else</span> |e| { <span class="f">panic</span>(e); }   <span class="c">// result[[x509.Cert], str]: every CERTIFICATE block</span>
 <span class="k">let</span> c = certs[<span class="n">0</span>];
 c.common_name; c.dns_names; c.ip_addrs;   <span class="c">// the subject and its subjectAltName entries</span>
 c.not_after;                              <span class="c">// unix seconds</span>
@@ -1870,8 +1824,7 @@ x509.<span class="f">self_signed</span>(key, names, <span class="n">90</span>); 
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;tar&quot;</span>;
 <span class="k">import</span> <span class="s">&quot;zip&quot;</span>;
 
-<span class="k">let</span> r = zip.<span class="f">open</span>(data);
-<span class="k">guard</span> <span class="k">let</span> arc = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }
+<span class="k">guard</span> <span class="k">let</span> arc = zip.<span class="f">open</span>(data) <span class="k">else</span> |e| { <span class="f">panic</span>(e); }
 <span class="k">for</span> e <span class="k">in</span> arc.entries {
     <span class="k">let</span> pr = zip.<span class="f">safe_path</span>(e.name);          <span class="c">// refuses ../, /abs, C:\ (zip slip)</span>
     <span class="k">guard</span> <span class="k">let</span> rel = pr <span class="k">else</span> { <span class="k">continue</span>; }
@@ -1993,7 +1946,7 @@ global.<span class="f">stop_at_first_arg</span>();                  <span class=
     <span class="s">&quot;&lt;li&gt;&lt;a href=\&quot;{{ $it.url }}\&quot; title=\&quot;{{ $it.name }}\&quot;&gt;{{ add $i 1 }}. {{ $it.name }}&lt;/a&gt;&lt;/li&gt;&quot;</span> +
     <span class="s">&quot;{{ else }}&lt;li&gt;nothing yet&lt;/li&gt;{{ end }}&lt;/ul&gt;&quot;</span> +
     <span class="s">&quot;&lt;script&gt;const user = {{ .user }};&lt;/script&gt;&quot;</span>);
-<span class="k">guard</span> <span class="k">let</span> t = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }      <span class="c">// syntax and context errors, with line numbers</span>
+<span class="k">guard</span> <span class="k">let</span> t = r <span class="k">else</span> |e| { <span class="f">panic</span>(e); }      <span class="c">// syntax and context errors, with line numbers</span>
 <span class="k">let</span> html = template.<span class="f">render</span>(t, page);                       <span class="c">// result[str, str]</span>
 
 template.<span class="f">add</span>(t, <span class="s">&quot;layout&quot;</span>, <span class="s">&quot;&lt;html&gt;&lt;body&gt;{{ template \&quot;page\&quot; . }}&lt;/body&gt;&lt;/html&gt;&quot;</span>);

@@ -1,0 +1,11 @@
+body,nv:err,nv:ok,second:20,first:10
+ret=7 after=777
+b1=-1 guard_else:bad,close:1,if_true,outer
+b2=22 after_guard:11,close:1,if_true,outer
+b3=100 if_let:5,if_false,outer
+ls1=2 loop_fn_exit
+ls2=57 sel_recv:55,sw2,loop_fn_exit
+mode:fast,indirect_idx,close:42,val:h1
+m=-5,5,free=true
+ref=42
+before_print:printed_on_defer

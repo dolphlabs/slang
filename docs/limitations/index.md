@@ -38,10 +38,12 @@
   channel's recv arm is ready forever (see Concurrency above), and
   there is no nil channel to switch it off with; for a deadline, feed
   a channel from a spawned timer task.
-- `mutex` has no scope guard: without closures or `defer`, an early
-  `return` between `mutex_lock` and `mutex_unlock` leaks the lock.
-  Mutexes are also not recursive (locking one twice from the same
-  task is a checked error, not a hang).
+- `defer` is function-scoped and call-only (`defer close(fd);` or
+  `defer conn.close();`): there are no `defer { ... }` blocks or
+  closures, no `defer` at top level or inside loops (extract a helper
+  function), and deferred calls cannot borrow inner-block locals.
+  Mutexes are not recursive (locking one twice from the same task is
+  a checked error, not a hang).
 - TLS: no session resumption tuning. Handshake and send/recv park;
   `getaddrinfo` in `tls_dial` parks the task while a dedicated
   thread resolves. mTLS (`tls_ctx_require_client` /
@@ -49,9 +51,9 @@
   supported.
 - JSON: no dynamic/unknown-shape decoding (every decode target is a
   concrete slang type known at compile time — see the `json` section
-  above), and JSON object keys map to struct field names verbatim
-  (no camelCase/snake_case conversion). `bytes` fields are base64
-  strings (RFC 4648).
+  above); struct fields map to their field names by default unless
+  tagged with `` `json:"wireName,omitempty"` `` / `` `json:"-"` ``.
+  `bytes` fields are base64 strings (RFC 4648).
 - `proc`: only `SIGTERM`/`SIGINT` are handled (there's no general
   signal-registration API), and only in a program that calls
   `proc.shutdown_requested()`; a second signal always ends it. A

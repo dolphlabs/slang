@@ -8,12 +8,10 @@ imports `compress`).
 ```slang
 import "compress";
 
-let gr = compress.gzip(body);
-guard let gz = gr else let e = err_of(gr) { log.error(e); return; }
+guard let gz = compress.gzip(body) else |e| { log.error(e); return; }
 
 // decompression ALWAYS takes a ceiling -- see below
-let ur = compress.gunzip(payload, 4194304);        // 4 MiB
-guard let plain = ur else let e = err_of(ur) {
+guard let plain = compress.gunzip(payload, 4194304) else |e| {   // 4 MiB
     log.warn("rejected: " + e);                     // names the limit
     return;
 }

@@ -99,6 +99,15 @@ fn fib(n: int) -> int {
     if n < 2 { return n; }
     return fib(n - 1) + fib(n - 2);
 }
+
+// function-scoped defer: runs a call or method call LIFO on every return
+// or fallthrough (arguments are evaluated eagerly; no blocks/closures,
+// and not inside loops or at top level)
+fn with_cleanup(tag: str) -> int {
+    defer println("cleanup:" + tag);
+    if tag == "skip" { return 0; }
+    return 1;
+}
 ```
 
 ### Built-ins
@@ -178,7 +187,7 @@ guard let user = find(id) else {
 | `map[K]V`  | `sl_map *`  | insertion-ordered hash map     |
 | struct     | `sl_st_*`   | value record (copied)          |
 | `gc struct` | `sl_st_* *` | GC'd heap record (shared)     |
-| `enum`     | `int32_t`   | closed set of named constants (see below) |
+| `enum`     | `int32_t` or `sl_en_*` | unit variants (`int32_t`) or tagged union with payloads (see below) |
 | `opt[T]`   | `sl_opt_*`  | optional value: `some(v)` / `none`, held by value (no allocation) |
 | `result[T,E]` | `sl_res_*`  | fallible value: `ok(v)` / `err(e)`, held by value (no allocation) |
 | `duration` | `int64_t`   | nanosecond count (see `time`)  |
@@ -217,7 +226,7 @@ guard let user = find(id) else {
 
 ```slang
 let r = to_int(proc.getenv("PORT") ?? "8080");
-guard let port = r else let e = err_of(r) {
+guard let port = r else |e| {
     log.error("PORT is not a number: " + e);
     exit(2);
 }
@@ -459,7 +468,9 @@ push(pts, r.tl);
 ```
 
 Struct literals must supply every field exactly once, with types
-checked. A struct may be declared after one that holds it by value. Methods live in top-level `impl Name { ... }` blocks; mark a
+checked. Trailing commas are allowed in struct, list, and map literals, calls,
+function parameters, type and lifetime parameter/argument lists, `result[T, E,]`,
+declarations, and `switch` `case` value lists. A struct may be declared after one that holds it by value. Methods live in top-level `impl Name { ... }` blocks; mark a
 method `pub fn` to export it to importing packages. A method's name
 belongs to its struct: it may match a package-level function or another
 struct's method (`impl Client { fn get }` beside `fn get`), and a bare
@@ -704,7 +715,7 @@ println(s as i32);                // 1 -- enum -> its backing i32 is a
 
 // fallible, like to_int(s): a result, not a silent wrap
 let r: result[Status, str] = Status.from_int(2);
-guard let s2 = r else let e = err_of(r) {
+guard let s2 = r else |e| {
     log.error("bad status: " + e);      // "2 is not a valid Status" (approx)
     return;
 }
@@ -742,11 +753,41 @@ let r: result[orders.Status, str] = orders.Status.from_str("Shipped");
 An enum without `pub` is private to its package, like any other type.
 
 There is no per-variant wire label yet (`to_str`/JSON always use the
-declared name as written), no explicit backing-width syntax
-(`enum Name: i64 { ... }`), and no payload-carrying variants — enums
-here are a closed set of names, not a tagged union. Branching on one
-uses `switch`, which checks exhaustiveness: an enum switch without a
-`default` arm must list every variant.
+declared name as written) and no explicit backing-width syntax
+(`enum Name: i64 { ... }`).
+
+#### Tagged enums (variants with payloads)
+
+Variants may also carry typed payload values (`Variant(T1, T2)`). An enum
+with any payload variant is a tagged union by value (`tag` + payload); destructure
+it with `switch`, which checks exhaustiveness unless `default` is present:
+
+```slang
+enum Shape {
+    Point,
+    Circle(float),
+    Rect(float, float),
+    Label(str),
+}
+
+fn describe(s: Shape) -> str {
+    return switch s {
+        case Shape.Point { "point" }
+        case Shape.Circle(r) { "circle r=${r}" }
+        case Shape.Rect(w, _) { "rect w=${w}" }   // '_' ignores a field
+        case Shape.Label(text) { text }
+    };
+}
+
+let s = Shape.Rect(3.0, 4.0);
+println(describe(s));   // rect w=3
+println(inspect(s));    // Rect(3, 4)
+```
+
+Rules for tagged enums:
+- Explicit `= N` ordinals, `==`/`!=`, `as i32`, `from_int`/`from_str`, `to_str`/direct `println`, `map` keys, and direct `json.encode`/`json.decode` apply only to unit-only enums (convert tagged enums via `switch`).
+- Payload types must be copyable values (no `own`, `&`, `&mut`, `arena`, `link`, or `void`). For recursive variants, wrap the cycle in a `gc struct`.
+- Branching on one uses `switch`, which checks exhaustiveness: a `switch` without a `default` arm must cover every variant and bind or ignore (`_`) every payload field.
 
 #### Option / Result
 
@@ -765,8 +806,9 @@ fn parse_small(s: str) -> result[i32, str] {
 // block. The else branch must leave the scope -- return, break,
 // continue, exit(..), panic(..), or a call to a function that never
 // returns -- since the bound name has no value to fall back to; the
-// compiler rejects one that can fall through. `else let e = err_of(r)`
-// binds the error value for `result[T, E]` so failures stay visible.
+// compiler rejects one that can fall through. `else |e|` binds the
+// error value for `result[T, E]` so failures stay visible (the older
+// `else let e = err_of(r)` form is still accepted for compatibility).
 fn safe_div(n: int) -> int {
     guard let v = div10(n) else {
         return -1;
@@ -776,7 +818,7 @@ fn safe_div(n: int) -> int {
 
 fn load_config(path: str) -> str {
     let r: result[str, str] = read_file(path);
-    guard let body = r else let e = err_of(r) {
+    guard let body = r else |e| {
         log.warn("config load failed: " + e);
         return "";
     }
@@ -793,7 +835,7 @@ if let v = div10(40) {
 let pr = parse_small("big");
 if let n = pr {
     println(n);
-} else let e = err_of(pr) {
+} else |e| {
     println("rejected: " + e);         // rejected: value too large
 }
 
@@ -850,8 +892,8 @@ parameter is a compile error.
   failure; `??` supplies the default.
 - `result[T, E]` — the operation can fail with a *descriptive* error
   (`err(e)`). Parsing, validation, anything where the caller needs to
-  know *why*. `E` is usually `str`; `guard let x = r else let e =
-  err_of(r)` keeps the reason visible.
+  know *why*. `E` is usually `str`; `guard let x = r else |e|`
+  (or `else let e = err_of(r)`) keeps the reason visible.
 - `fault` — the operation hit the *environment*: timeout, reset,
   closed connection, refused dial, IO error. A closed 5-kind enum
   (`fault_timeout` / `fault_reset` / `fault_closed` / `fault_io` /
@@ -891,7 +933,7 @@ gc struct Route {
 
 let routes: [Route] = [
     Route { method: "GET",  path: "/api/tasks", handler: list_tasks },
-    Route { method: "POST", path: "/api/tasks", handler: create_task }
+    Route { method: "POST", path: "/api/tasks", handler: create_task },
 ];
 
 for i in 0..len(routes) {
@@ -999,7 +1041,7 @@ guard let user = find(id) else {
 | `map[K]V`  | `sl_map *`  | insertion-ordered hash map     |
 | struct     | `sl_st_*`   | value record (copied)          |
 | `gc struct` | `sl_st_* *` | GC'd heap record (shared)     |
-| `enum`     | `int32_t`   | closed set of named constants (see below) |
+| `enum`     | `int32_t` or `sl_en_*` | unit variants (`int32_t`) or tagged union with payloads (see below) |
 | `opt[T]`   | `sl_opt_*`  | optional value: `some(v)` / `none`, held by value (no allocation) |
 | `result[T,E]` | `sl_res_*`  | fallible value: `ok(v)` / `err(e)`, held by value (no allocation) |
 | `duration` | `int64_t`   | nanosecond count (see `time`)  |
@@ -1038,7 +1080,7 @@ guard let user = find(id) else {
 
 ```slang
 let r = to_int(proc.getenv("PORT") ?? "8080");
-guard let port = r else let e = err_of(r) {
+guard let port = r else |e| {
     log.error("PORT is not a number: " + e);
     exit(2);
 }
@@ -1280,7 +1322,9 @@ push(pts, r.tl);
 ```
 
 Struct literals must supply every field exactly once, with types
-checked. A struct may be declared after one that holds it by value. Methods live in top-level `impl Name { ... }` blocks; mark a
+checked. Trailing commas are allowed in struct, list, and map literals, calls,
+function parameters, type and lifetime parameter/argument lists, `result[T, E,]`,
+declarations, and `switch` `case` value lists. A struct may be declared after one that holds it by value. Methods live in top-level `impl Name { ... }` blocks; mark a
 method `pub fn` to export it to importing packages. A method's name
 belongs to its struct: it may match a package-level function or another
 struct's method (`impl Client { fn get }` beside `fn get`), and a bare
@@ -1525,7 +1569,7 @@ println(s as i32);                // 1 -- enum -> its backing i32 is a
 
 // fallible, like to_int(s): a result, not a silent wrap
 let r: result[Status, str] = Status.from_int(2);
-guard let s2 = r else let e = err_of(r) {
+guard let s2 = r else |e| {
     log.error("bad status: " + e);      // "2 is not a valid Status" (approx)
     return;
 }
@@ -1563,11 +1607,41 @@ let r: result[orders.Status, str] = orders.Status.from_str("Shipped");
 An enum without `pub` is private to its package, like any other type.
 
 There is no per-variant wire label yet (`to_str`/JSON always use the
-declared name as written), no explicit backing-width syntax
-(`enum Name: i64 { ... }`), and no payload-carrying variants — enums
-here are a closed set of names, not a tagged union. Branching on one
-uses `switch`, which checks exhaustiveness: an enum switch without a
-`default` arm must list every variant.
+declared name as written) and no explicit backing-width syntax
+(`enum Name: i64 { ... }`).
+
+#### Tagged enums (variants with payloads)
+
+Variants may also carry typed payload values (`Variant(T1, T2)`). An enum
+with any payload variant is a tagged union by value (`tag` + payload); destructure
+it with `switch`, which checks exhaustiveness unless `default` is present:
+
+```slang
+enum Shape {
+    Point,
+    Circle(float),
+    Rect(float, float),
+    Label(str),
+}
+
+fn describe(s: Shape) -> str {
+    return switch s {
+        case Shape.Point { "point" }
+        case Shape.Circle(r) { "circle r=${r}" }
+        case Shape.Rect(w, _) { "rect w=${w}" }   // '_' ignores a field
+        case Shape.Label(text) { text }
+    };
+}
+
+let s = Shape.Rect(3.0, 4.0);
+println(describe(s));   // rect w=3
+println(inspect(s));    // Rect(3, 4)
+```
+
+Rules for tagged enums:
+- Explicit `= N` ordinals, `==`/`!=`, `as i32`, `from_int`/`from_str`, `to_str`/direct `println`, `map` keys, and direct `json.encode`/`json.decode` apply only to unit-only enums (convert tagged enums via `switch`).
+- Payload types must be copyable values (no `own`, `&`, `&mut`, `arena`, `link`, or `void`). For recursive variants, wrap the cycle in a `gc struct`.
+- Branching on one uses `switch`, which checks exhaustiveness: a `switch` without a `default` arm must cover every variant and bind or ignore (`_`) every payload field.
 
 #### Option / Result
 
@@ -1586,8 +1660,9 @@ fn parse_small(s: str) -> result[i32, str] {
 // block. The else branch must leave the scope -- return, break,
 // continue, exit(..), panic(..), or a call to a function that never
 // returns -- since the bound name has no value to fall back to; the
-// compiler rejects one that can fall through. `else let e = err_of(r)`
-// binds the error value for `result[T, E]` so failures stay visible.
+// compiler rejects one that can fall through. `else |e|` binds the
+// error value for `result[T, E]` so failures stay visible (the older
+// `else let e = err_of(r)` form is still accepted for compatibility).
 fn safe_div(n: int) -> int {
     guard let v = div10(n) else {
         return -1;
@@ -1597,7 +1672,7 @@ fn safe_div(n: int) -> int {
 
 fn load_config(path: str) -> str {
     let r: result[str, str] = read_file(path);
-    guard let body = r else let e = err_of(r) {
+    guard let body = r else |e| {
         log.warn("config load failed: " + e);
         return "";
     }
@@ -1614,7 +1689,7 @@ if let v = div10(40) {
 let pr = parse_small("big");
 if let n = pr {
     println(n);
-} else let e = err_of(pr) {
+} else |e| {
     println("rejected: " + e);         // rejected: value too large
 }
 
@@ -1671,8 +1746,8 @@ parameter is a compile error.
   failure; `??` supplies the default.
 - `result[T, E]` — the operation can fail with a *descriptive* error
   (`err(e)`). Parsing, validation, anything where the caller needs to
-  know *why*. `E` is usually `str`; `guard let x = r else let e =
-  err_of(r)` keeps the reason visible.
+  know *why*. `E` is usually `str`; `guard let x = r else |e|`
+  (or `else let e = err_of(r)`) keeps the reason visible.
 - `fault` — the operation hit the *environment*: timeout, reset,
   closed connection, refused dial, IO error. A closed 5-kind enum
   (`fault_timeout` / `fault_reset` / `fault_closed` / `fault_io` /

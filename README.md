@@ -256,6 +256,15 @@ fn fib(n: int) -> int {
     if n < 2 { return n; }
     return fib(n - 1) + fib(n - 2);
 }
+
+// function-scoped defer: runs a call or method call LIFO on every return
+// or fallthrough (arguments are evaluated eagerly; no blocks/closures,
+// and not inside loops or at top level)
+fn with_cleanup(tag: str) -> int {
+    defer println("cleanup:" + tag);
+    if tag == "skip" { return 0; }
+    return 1;
+}
 ```
 
 ### Built-ins
@@ -335,7 +344,7 @@ guard let user = find(id) else {
 | `map[K]V`  | `sl_map *`  | insertion-ordered hash map     |
 | struct     | `sl_st_*`   | value record (copied)          |
 | `gc struct` | `sl_st_* *` | GC'd heap record (shared)     |
-| `enum`     | `int32_t`   | closed set of named constants (see below) |
+| `enum`     | `int32_t` or `sl_en_*` | unit variants (`int32_t`) or tagged union with payloads (see below) |
 | `opt[T]`   | `sl_opt_*`  | optional value: `some(v)` / `none`, held by value (no allocation) |
 | `result[T,E]` | `sl_res_*`  | fallible value: `ok(v)` / `err(e)`, held by value (no allocation) |
 | `duration` | `int64_t`   | nanosecond count (see `time`)  |
@@ -374,7 +383,7 @@ guard let user = find(id) else {
 
 ```slang
 let r = to_int(proc.getenv("PORT") ?? "8080");
-guard let port = r else let e = err_of(r) {
+guard let port = r else |e| {
     log.error("PORT is not a number: " + e);
     exit(2);
 }
@@ -616,7 +625,9 @@ push(pts, r.tl);
 ```
 
 Struct literals must supply every field exactly once, with types
-checked. A struct may be declared after one that holds it by value. Methods live in top-level `impl Name { ... }` blocks; mark a
+checked. Trailing commas are allowed in struct, list, and map literals, calls,
+function parameters, type and lifetime parameter/argument lists, `result[T, E,]`,
+declarations, and `switch` `case` value lists. A struct may be declared after one that holds it by value. Methods live in top-level `impl Name { ... }` blocks; mark a
 method `pub fn` to export it to importing packages. A method's name
 belongs to its struct: it may match a package-level function or another
 struct's method (`impl Client { fn get }` beside `fn get`), and a bare
@@ -861,7 +872,7 @@ println(s as i32);                // 1 -- enum -> its backing i32 is a
 
 // fallible, like to_int(s): a result, not a silent wrap
 let r: result[Status, str] = Status.from_int(2);
-guard let s2 = r else let e = err_of(r) {
+guard let s2 = r else |e| {
     log.error("bad status: " + e);      // "2 is not a valid Status" (approx)
     return;
 }
@@ -899,11 +910,41 @@ let r: result[orders.Status, str] = orders.Status.from_str("Shipped");
 An enum without `pub` is private to its package, like any other type.
 
 There is no per-variant wire label yet (`to_str`/JSON always use the
-declared name as written), no explicit backing-width syntax
-(`enum Name: i64 { ... }`), and no payload-carrying variants — enums
-here are a closed set of names, not a tagged union. Branching on one
-uses `switch`, which checks exhaustiveness: an enum switch without a
-`default` arm must list every variant.
+declared name as written) and no explicit backing-width syntax
+(`enum Name: i64 { ... }`).
+
+#### Tagged enums (variants with payloads)
+
+Variants may also carry typed payload values (`Variant(T1, T2)`). An enum
+with any payload variant is a tagged union by value (`tag` + payload); destructure
+it with `switch`, which checks exhaustiveness unless `default` is present:
+
+```slang
+enum Shape {
+    Point,
+    Circle(float),
+    Rect(float, float),
+    Label(str),
+}
+
+fn describe(s: Shape) -> str {
+    return switch s {
+        case Shape.Point { "point" }
+        case Shape.Circle(r) { "circle r=${r}" }
+        case Shape.Rect(w, _) { "rect w=${w}" }   // '_' ignores a field
+        case Shape.Label(text) { text }
+    };
+}
+
+let s = Shape.Rect(3.0, 4.0);
+println(describe(s));   // rect w=3
+println(inspect(s));    // Rect(3, 4)
+```
+
+Rules for tagged enums:
+- Explicit `= N` ordinals, `==`/`!=`, `as i32`, `from_int`/`from_str`, `to_str`/direct `println`, `map` keys, and direct `json.encode`/`json.decode` apply only to unit-only enums (convert tagged enums via `switch`).
+- Payload types must be copyable values (no `own`, `&`, `&mut`, `arena`, `link`, or `void`). For recursive variants, wrap the cycle in a `gc struct`.
+- Branching on one uses `switch`, which checks exhaustiveness: a `switch` without a `default` arm must cover every variant and bind or ignore (`_`) every payload field.
 
 #### Option / Result
 
@@ -922,8 +963,9 @@ fn parse_small(s: str) -> result[i32, str] {
 // block. The else branch must leave the scope -- return, break,
 // continue, exit(..), panic(..), or a call to a function that never
 // returns -- since the bound name has no value to fall back to; the
-// compiler rejects one that can fall through. `else let e = err_of(r)`
-// binds the error value for `result[T, E]` so failures stay visible.
+// compiler rejects one that can fall through. `else |e|` binds the
+// error value for `result[T, E]` so failures stay visible (the older
+// `else let e = err_of(r)` form is still accepted for compatibility).
 fn safe_div(n: int) -> int {
     guard let v = div10(n) else {
         return -1;
@@ -933,7 +975,7 @@ fn safe_div(n: int) -> int {
 
 fn load_config(path: str) -> str {
     let r: result[str, str] = read_file(path);
-    guard let body = r else let e = err_of(r) {
+    guard let body = r else |e| {
         log.warn("config load failed: " + e);
         return "";
     }
@@ -950,7 +992,7 @@ if let v = div10(40) {
 let pr = parse_small("big");
 if let n = pr {
     println(n);
-} else let e = err_of(pr) {
+} else |e| {
     println("rejected: " + e);         // rejected: value too large
 }
 
@@ -1007,8 +1049,8 @@ parameter is a compile error.
   failure; `??` supplies the default.
 - `result[T, E]` — the operation can fail with a *descriptive* error
   (`err(e)`). Parsing, validation, anything where the caller needs to
-  know *why*. `E` is usually `str`; `guard let x = r else let e =
-  err_of(r)` keeps the reason visible.
+  know *why*. `E` is usually `str`; `guard let x = r else |e|`
+  (or `else let e = err_of(r)`) keeps the reason visible.
 - `fault` — the operation hit the *environment*: timeout, reset,
   closed connection, refused dial, IO error. A closed 5-kind enum
   (`fault_timeout` / `fault_reset` / `fault_closed` / `fault_io` /
@@ -1048,7 +1090,7 @@ gc struct Route {
 
 let routes: [Route] = [
     Route { method: "GET",  path: "/api/tasks", handler: list_tasks },
-    Route { method: "POST", path: "/api/tasks", handler: create_task }
+    Route { method: "POST", path: "/api/tasks", handler: create_task },
 ];
 
 for i in 0..len(routes) {
@@ -1136,12 +1178,10 @@ let due = t.date().add_months(1);                  // Jan 31 + 1 month = Feb 28/
 let ttl = timez.parse_duration("1h30m") ?? 0;      // nanoseconds; "7d" works too
 println(timez.relative(t.add(-3 * timez.MINUTE), t));  // 3 minutes ago
 
-let zr = timez.load_zone("Europe/Berlin");         // the system's tz database
-guard let berlin = zr else let e = err_of(zr) { println(e); exit(1); }
+guard let berlin = timez.load_zone("Europe/Berlin") else |e| { println(e); exit(1); }   // the system's tz database
 println(t.in_zone(berlin).format("%H:%M %Z"));     // 11:30 CEST
 
-let cr = timez.parse_cron("*/15 9-17 * * MON-FRI");
-guard let cron = cr else let e = err_of(cr) { println(e); exit(1); }
+guard let cron = timez.parse_cron("*/15 9-17 * * MON-FRI") else |e| { println(e); exit(1); }
 let next = cron.next_after(t, berlin);             // opt[Time], DST-aware
 ```
 
@@ -1260,8 +1300,7 @@ import "net";
 import "time";
 
 let deadline = until_of(time.mono() + 5000000000);   // 5s from now
-let rr = net.recv_until(cfd, 4096, deadline);
-guard let data = rr else let e = err_of(rr) {
+guard let data = net.recv_until(cfd, 4096, deadline) else |e| {
     if e == "timeout" { net.close(cfd); return; }    // peer went quiet
     log.error("recv: " + e);                         // peer broke
     return;
@@ -1321,12 +1360,10 @@ worker; each lookup takes an absolute `until` deadline:
 import "net";
 import "time";
 let deadline = until_of(time.mono() + 5000000000);
-let seeds = net.lookup_srv_until("_mongodb._tcp.cluster.example", deadline);
-guard let records = seeds else let e = err_of(seeds) { println(e); exit(1); }
+guard let records = net.lookup_srv_until("_mongodb._tcp.cluster.example", deadline) else |e| { println(e); exit(1); }
 // Each SRV item is "priority:weight:port:target".
 
-let defaults = net.lookup_txt_until("cluster.example", deadline);
-guard let options = defaults else let e = err_of(defaults) { println(e); exit(1); }
+guard let options = net.lookup_txt_until("cluster.example", deadline) else |e| { println(e); exit(1); }
 // Each TXT item is one record with its DNS character-strings concatenated.
 ```
 
@@ -1416,8 +1453,7 @@ with `net.addr_str`.
 import "net";
 import "time";
 
-let br = net.udp_bind("0.0.0.0", 5353);     // "" also means any IPv4 address
-guard let fd = br else let e = err_of(br) { println(e); exit(1); }
+guard let fd = net.udp_bind("0.0.0.0", 5353) else |e| { println(e); exit(1); }   // "" also means any IPv4 address
 while true {
     let rr = net.recv_from(fd, 0);            // 0 = up to 65535 bytes
     guard let dgram = rr else { break; }
@@ -1546,8 +1582,7 @@ slow handshake holds up nobody else:
 
 ```slang
 fn serve(c: link, ctx: rawptr) {
-    let hr = c.tls_accept(ctx, until_of(time.mono() + 10000000000));
-    guard let _h = hr else let e = err_of(hr) {
+    guard let _h = c.tls_accept(ctx, until_of(time.mono() + 10000000000)) else |e| {
         return;                  // a scanner, a plaintext client, a timeout
     }
     // read_frame / write on c exactly as over plain TCP
@@ -1684,7 +1719,21 @@ a number by `decimal.parse`'s rules, from the number's text and never
 through a float, also in C). `rawptr`, `chan[T]`, and
 `result[T,E]` can't appear anywhere in a decode/encode target type. A
 missing JSON key defaults an `opt[T]` field to `none`; for any other
-field type it's a decode error. Unknown JSON keys are ignored. Every
+field type it's a decode error. Unknown JSON keys are ignored. Struct
+fields support Go-style backtick tags for wire renaming, conditional
+omission, and skipping:
+
+- `` `json:"userId"` `` renames the JSON key on both `encode` and `decode`
+  (also used in decode error messages); `` `json:"-,"` `` uses a literal
+  `"-"` key.
+- `` `json:"userId,omitempty"` `` (or `` `json:",omitempty"` ``) omits the
+  field during `json.encode` when empty (`none`, `""`, `b""`, `[]`, `{}`,
+  `false`, or `0`).
+- `` `json:"-"` `` skips the field during `json.encode` and initializes it
+  to its zero value during `json.decode` (`none`, `""`, `b""`, `false`,
+  or `0`).
+
+Every
 decode error names where it happened, composed through nesting —
 `json.decode` on `{"addr":{"city":5}}` against the `Person` shape
 above fails with `field 'addr': field 'city': expected a string, got
@@ -1860,8 +1909,7 @@ import "os";
 if !os.is_file(path) {
     return not_found();
 }
-let sr = os.size(path);
-guard let n = sr else let e = err_of(sr) {
+guard let n = os.size(path) else |e| {
     log.error("stat " + path + ": " + e);      // "No such file or directory"
     return server_error();
 }
@@ -1907,8 +1955,7 @@ import "io";
 import "log";
 
 print("name? ");                         // no io.flush() needed: reading flushes it
-let r = io.read_line();
-guard let maybe = r else let e = err_of(r) {
+guard let maybe = io.read_line() else |e| {
     io.eprintln("cannot read input: " + e);
     exit(1);
 }
@@ -1923,8 +1970,7 @@ A loop over every line is the same two guards inside `while true`:
 ```slang
 let total = 0;
 while true {
-    let r = io.read_line();
-    guard let maybe = r else let e = err_of(r) { io.eprintln(e); exit(1); }
+    guard let maybe = io.read_line() else |e| { io.eprintln(e); exit(1); }
     guard let line = maybe else { break; }         // end of input
     total = total + len(line);
 }
@@ -1971,8 +2017,7 @@ import "io";
 
 // a password: nothing is echoed while it is typed
 print("password: ");
-let r = io.read_secret();
-guard let maybe = r else let e = err_of(r) { io.eprintln(e); exit(1); }
+guard let maybe = io.read_secret() else |e| { io.eprintln(e); exit(1); }
 let password = maybe ?? "";
 
 // wrap to the window; a pipe or a file has no width
@@ -1992,11 +2037,9 @@ no line editing, no echo, and each key press is available as it happens.
 `read_key` names it:
 
 ```slang
-let r = io.raw_on();
-guard let ok = r else let e = err_of(r) { io.eprintln(e); exit(1); }   // stdin is not a terminal
+guard let ok = io.raw_on() else |e| { io.eprintln(e); exit(1); }   // stdin is not a terminal
 while true {
-    let k = io.read_key();
-    guard let maybe = k else let e = err_of(k) { break; }
+    guard let maybe = io.read_key() else |e| { break; }
     guard let key = maybe else { break; }                              // end of input
     if key == "q" || key == "esc" { break; }
     if key == "up" { println("up"); }
@@ -2075,8 +2118,7 @@ import "crypto";
 
 let h: bytes = crypto.sha256(b"abc");              // 32 bytes
 let m: bytes = crypto.hmac_sha256(key, msg);       // 32 bytes
-let r = crypto.rand(32);
-guard let b = r else let e = err_of(r) {
+guard let b = crypto.rand(32) else |e| {
     log.error("rand failed: " + e);
 }
 let k = crypto.pbkdf2_sha256(password, salt, 600000, 32);   // RFC 8018
@@ -2228,8 +2270,8 @@ handles, exactly like `net.tls_*`; free them with `sql.close` /
 `sql.finalize`. **Every fallible call returns `result[_, str]` whose
 error is SQLite's own message** — `no such table: users`, `near
 "SELCT": syntax error`, `UNIQUE constraint failed: users.id` — so a
-bad query stays as visible as a bad socket read (`guard let … else
-let e = err_of(r)`), never a silent `null`. The column getters are
+bad query stays as visible as a bad socket read (`guard let …
+else |e|`), never a silent `null`. The column getters are
 infallible (SQLite coerces types; an out-of-range index is a
 programming error, returning `0` / `""`), so they return bare values.
 
@@ -2256,22 +2298,19 @@ programming error, returning `0` / `""`), so they return bare values.
 import "sql";
 import "log";
 
-let dr = sql.open("app.db");
-guard let db = dr else let e = err_of(dr) {
+guard let db = sql.open("app.db") else |e| {
     log.error("db open: " + e);
     exit(1);
 }
 sql.exec(db, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)");
 
-let pr = sql.prepare(db, "SELECT id, name FROM users WHERE id > ?");
-guard let st = pr else let e = err_of(pr) {
+guard let st = sql.prepare(db, "SELECT id, name FROM users WHERE id > ?") else |e| {
     log.error("prepare: " + e);          // e.g. "no such table: users"
     exit(1);
 }
 sql.bind_int(st, 1, 0);
 while true {
-    let sr = sql.step(st);
-    guard let more = sr else let e = err_of(sr) { log.error("step: " + e); break; }
+    guard let more = sql.step(st) else |e| { log.error("step: " + e); break; }
     if !more { break; }
     println(to_str(sql.col_int(st, 0)) + " " + sql.col_text(st, 1));
 }
@@ -2309,8 +2348,7 @@ import "log";
 
 let dl = until_of(time.mono() + 5000000000);
 
-let pr = pg.new_pool("postgres://app:secret@db.internal/shop", 10);
-guard let pool = pr else let e = err_of(pr) {
+guard let pool = pg.new_pool("postgres://app:secret@db.internal/shop", 10) else |e| {
     log.error("db url: " + e);
     exit(1);
 }
@@ -2318,7 +2356,7 @@ guard let pool = pr else let e = err_of(pr) {
 let r = pg.pool_query(pool,
     "SELECT id, name, price FROM products WHERE price < $1 ORDER BY id",
     [pg.arg_float(20.0)], dl);
-guard let rows = r else let e = err_of(r) {
+guard let rows = r else |e| {
     log.error("query: " + e);   // ERROR: relation "products" does not exist (SQLSTATE 42P01)
     exit(1);
 }
@@ -2410,8 +2448,7 @@ it back, so they cannot leak one. A transaction needs several statements
 on one connection, so it uses `acquire` and `release`:
 
 ```slang
-let cr = pg.acquire(pool, dl);
-guard let c = cr else let e = err_of(cr) { return; }
+guard let c = pg.acquire(pool, dl) else |e| { return; }
 pg.exec(c, "BEGIN", dl);
 let moved = pg.query(c, "UPDATE accounts SET balance = balance - $1 WHERE id = $2",
                      [pg.arg_int(100), pg.arg_int(from)], dl);
@@ -2486,7 +2523,7 @@ task, and returns immediately. A broken connection only returns
 
 ```slang
 let r = pg.query(c, "INSERT INTO users (email) VALUES ($1)", [pg.arg_text(email)], dl);
-guard let ok_ = r else let e = err_of(r) {
+guard let ok_ = r else |e| {
     if pg.sqlstate(e) == "23505" {     // unique_violation
         return respond(409, "email already registered");
     }
@@ -2504,11 +2541,9 @@ time, so memory holds one row however large the result, and the server
 is held back by TCP flow control rather than the client reading ahead:
 
 ```slang
-let sr = pg.stream(c, "SELECT id, body FROM events ORDER BY id", [], dl);
-guard let rows = sr else let e = err_of(sr) { return; }
+guard let rows = pg.stream(c, "SELECT id, body FROM events ORDER BY id", [], dl) else |e| { return; }
 while true {
-    let nr = pg.next_row(c, rows, dl);
-    guard let more = nr else let e = err_of(nr) { log.error(e); break; }
+    guard let more = pg.next_row(c, rows, dl) else |e| { log.error(e); break; }
     if !more { break; }
     archive(pg.get_int(rows, 0, 0), pg.get_text(rows, 0, 1));   // always row 0
 }
@@ -2566,8 +2601,7 @@ this package does not build or parse it.
 ```slang
 pg.listen(c, "jobs", dl);
 while true {
-    let wr = pg.wait_notification(c, until_of(time.mono() + 30000000000));
-    guard let got = wr else let e = err_of(wr) { log.error(e); break; }
+    guard let got = pg.wait_notification(c, until_of(time.mono() + 30000000000)) else |e| { log.error(e); break; }
     guard let note = got else { continue; }        // 30s with nothing: none
     run_job(note.payload);
 }
@@ -2636,23 +2670,21 @@ moves between the two with little change.
 ```slang
 import "mysql";
 
-let cr = mysql.connect("mysql://app:secret@db.internal:3306/shop", deadline);
-guard let c = cr else let e = err_of(cr) { panic(e); }
+guard let c = mysql.connect("mysql://app:secret@db.internal:3306/shop", deadline) else |e| { panic(e); }
 
 let r = mysql.query(c, "SELECT id, name, price FROM items WHERE price < ?",
                     [mysql.arg_decimal(limit)], deadline);       // result[Rows, str]
-guard let rows = r else let e = err_of(r) { panic(e); }
+guard let rows = r else |e| { panic(e); }
 let items: result[[Item], str] = mysql.rows_as(rows);           // by column name
 mysql.get_text(rows, 0, mysql.col(rows, "name"));
 
 let ir = mysql.query(c, "INSERT INTO items (name) VALUES (?)", [mysql.arg_text("pen")], deadline);
-guard let ins = ir else let e = err_of(ir) { panic(e); }
+guard let ins = ir else |e| { panic(e); }
 ins.last_insert_id;                                              // the AUTO_INCREMENT value
 
 mysql.exec(c, "BEGIN; UPDATE stock SET n = n - 1 WHERE id = 7; COMMIT", deadline);   // several statements
 
-let pr = mysql.new_pool(url, 16);                                // shared by any number of tasks
-guard let p = pr else let e = err_of(pr) { panic(e); }
+guard let p = mysql.new_pool(url, 16) else |e| { panic(e); }   // shared by any number of tasks
 mysql.pool_query(p, "SELECT 1", [], deadline);
 ```
 
@@ -2730,8 +2762,7 @@ import "time";
 import "log";
 
 let dl = until_of(time.mono() + 5000000000);
-let cr = redis.connect("redis://:secret@cache.internal:6380/2", dl);
-guard let c = cr else let e = err_of(cr) {
+guard let c = redis.connect("redis://:secret@cache.internal:6380/2", dl) else |e| {
     log.error("connect: " + e);
     exit(1);
 }
@@ -2804,11 +2835,9 @@ reconnection with resubscription. It covers core NATS, not JetStream.
 ```slang
 import "nats";
 
-let r = nats.connect("nats://127.0.0.1:4222", deadline);
-guard let nc = r else let e = err_of(r) { panic(e); }
+guard let nc = nats.connect("nats://127.0.0.1:4222", deadline) else |e| { panic(e); }
 
-let sr = nats.subscribe(nc, "orders.*");                  // or queue_subscribe(nc, subj, "workers")
-guard let sub = sr else let e = err_of(sr) { panic(e); }
+guard let sub = nats.subscribe(nc, "orders.*") else |e| { panic(e); }   // or queue_subscribe(nc, subj, "workers")
 nats.publish(nc, "orders.new", b"{\"id\":1}");
 let m = nats.next_msg(sub, deadline);                     // result[opt[Msg], str]: none at the deadline
 
@@ -2878,7 +2907,7 @@ import "proc";
 let r = s3.new_client("https://s3.eu-west-1.amazonaws.com", "eu-west-1", access_key, secret_key);
 // or s3.from_env(proc.getenv): AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
 // AWS_SESSION_TOKEN, AWS_REGION, S3_ENDPOINT
-guard let c = r else let e = err_of(r) { panic(e); }
+guard let c = r else |e| { panic(e); }
 
 s3.put_object(c, "uploads", "avatars/42.png", png, "image/png", deadline);   // ok(etag)
 s3.get_object(c, "uploads", "avatars/42.png", deadline);                     // ok(bytes)
@@ -2988,8 +3017,7 @@ which is how you walk every match.
 ```slang
 import "regex";
 
-let cr = regex.compile("(\\d{4})-(\\d{2})-(\\d{2})");
-guard let re = cr else let e = err_of(cr) {
+guard let re = regex.compile("(\\d{4})-(\\d{2})-(\\d{2})") else |e| {
     log.error("bad pattern: " + e);   // e.g. "missing ) at offset 9"
     exit(1);
 }
@@ -3057,12 +3085,10 @@ added for.
 ```slang
 import "http2";
 
-let f = http2.decode(buf, 0, 16384);        // one frame, bounds-checked
-guard let fr = f else let e = err_of(f) { return; }
+guard let fr = http2.decode(buf, 0, 16384) else |e| { return; }   // one frame, bounds-checked
 
 let d = http2.decoder_new(4096);            // per-connection HPACK state
-let hr = http2.decode_block(d, fr.payload, 64);
-guard let hs = hr else let e = err_of(hr) { return; }
+guard let hs = http2.decode_block(d, fr.payload, 64) else |e| { return; }
 for i in 0..len(hs) {
     println(hs[i].name + ": " + hs[i].value);
 }
@@ -3145,8 +3171,7 @@ fn serve(fd: i32) {
     guard let _p = http2.accept_preface(rd, fd, wch,
             until_of(time.mono() + lim.handshake)) else { return; }
     while true {
-        let rr = http2.read_request(cn, rd, fd, wch, lim);
-        guard let req = rr else let e = err_of(rr) {
+        guard let req = http2.read_request(cn, rd, fd, wch, lim) else |e| {
             if http2.is_timeout(e) { /* slow peer; shed it */ }
             chan_close(wch);
             return;
@@ -3298,12 +3323,11 @@ whose own reader task routes each response to the task that asked for
 it, so `client_call` is safe from any number of tasks on one connection:
 
 ```slang
-let started = http2.client_start(http2.transport_tls(ssl), http2.default_limits());
-guard let c = started else let e = err_of(started) { return; }
+guard let c = http2.client_start(http2.transport_tls(ssl), http2.default_limits()) else |e| { return; }
 let none_h: [http2.Header] = [];
 let r = http2.client_call(c, "GET", "https", "api.example", "/v1/users", none_h,
                           b"", 2000000000, 1048576);   // timeout ns, max body
-guard let resp = r else let e = err_of(r) { return; }
+guard let resp = r else |e| { return; }
 println(resp.status + " " + to_str(len(resp.body)));
 http2.client_close(c);
 ```
@@ -3620,8 +3644,7 @@ import "time";
 
 let dl = until_of(time.mono() + 5000000000);   // 5s for the whole request
 
-let r = httpc.get("https://api.example.com/users?id=1", dl);
-guard let resp = r else let e = err_of(r) {
+guard let resp = httpc.get("https://api.example.com/users?id=1", dl) else |e| {
     log.error("request failed: " + e);
     return;
 }
@@ -3981,8 +4004,7 @@ import "memcache";
 
 let mc = memcache.new(["cache-1:11211", "cache-2:11211"]);
 memcache.set(mc, "user:42", to_bytes(body), 300, deadline);   // 5 minutes
-let gr = memcache.get(mc, "user:42", deadline);
-guard let found = gr else let e = err_of(gr) { return err(e); }  // I/O error
+guard let found = memcache.get(mc, "user:42", deadline) else |e| { return err(e); }  // I/O error
 if let v = found { use(v); } else { /* a miss */ }
 ```
 
@@ -4390,8 +4412,7 @@ import "net";
 import "proxyproto";
 import "time";
 
-let hr = proxyproto.read_until(fd, until_of(time.mono() + 5000000000));
-guard let h = hr else let e = err_of(hr) { net.close(fd); return; }
+guard let h = proxyproto.read_until(fd, until_of(time.mono() + 5000000000)) else |e| { net.close(fd); return; }
 println(h.src_addr + ":" + to_str(h.src_port));   // the real client
 // h.rest: bytes that came after the header, the start of the stream
 ```
@@ -4468,8 +4489,7 @@ fn close_cache(fd: i32) { net.close(fd); }
 fn alive(fd: i32) -> bool { return net.idle_alive(fd); }
 
 let p = pool.new(pool.options(64), dial_cache, close_cache, alive);
-let lr = pool.acquire(p, deadline);
-guard let lease = lr else let e = err_of(lr) { return; }   // "timeout"
+guard let lease = pool.acquire(p, deadline) else |e| { return; }   // "timeout"
 let _s = net.send(lease.v, b"version\r\n");
 pool.release(p, lease);        // pool.discard(p, lease) if it broke
 ```
@@ -4499,19 +4519,16 @@ import "webauthn";
 let rp = webauthn.relying_party("example.com", "Example", ["https://example.com"]);
 
 // Registration: send ch.options to the page, keep ch.value in the session.
-let cr = webauthn.begin_registration(rp, user, existing_credentials);
-guard let ch = cr else let e = err_of(cr) { return fail(e); }
+guard let ch = webauthn.begin_registration(rp, user, existing_credentials) else |e| { return fail(e); }
 // page: navigator.credentials.create({ publicKey:
 //         PublicKeyCredential.parseCreationOptionsFromJSON(options) }),
 //       then POST JSON.stringify(credential)
-let fr = webauthn.finish_registration(rp, ch.value, posted_json);
-guard let cred = fr else let e = err_of(fr) { return fail(e); }   // store cred
+guard let cred = webauthn.finish_registration(rp, ch.value, posted_json) else |e| { return fail(e); }   // store cred
 
 // Login: the same shape.
 let lc = webauthn.begin_login(rp, []);          // [] lets the user pick any passkey
 let id = webauthn.login_credential_id(posted_json) ?? b"";   // look up the stored credential
-let lr = webauthn.finish_login(rp, challenge, stored, posted_json);
-guard let login = lr else let e = err_of(lr) { return fail(e); }
+guard let login = webauthn.finish_login(rp, challenge, stored, posted_json) else |e| { return fail(e); }
 stored.sign_count = login.sign_count;           // and store it back
 ```
 
@@ -4554,7 +4571,7 @@ let r = dns.system_resolver();                     // resolv.conf + hosts, read 
 let ips = dns.lookup_ip(r, "api.example.com", deadline);   // IPv4 first, then IPv6
 let mx = dns.lookup_mx(r, "example.com", deadline);        // by preference
 let srv = dns.lookup_srv(r, "_imap._tcp.example.com", deadline);
-guard let found = ips else let e = err_of(ips) {
+guard let found = ips else |e| {
     if e == "no such host" { /* NXDOMAIN, after every search domain */ }
     return;
 }
@@ -4646,13 +4663,11 @@ o.protocols = ["v2.chat"];                       // offered; Conn.protocol is th
 o.headers = ["Authorization: Bearer " + token];
 o.ping_every = 20000000000;                      // keepalive: a ping every 20 s
 o.compress = true;                               // permessage-deflate
-let r = websocket.dial_with("wss://example.com/live", o, deadline);
-guard let ws = r else let e = err_of(r) { panic(e); }
+guard let ws = websocket.dial_with("wss://example.com/live", o, deadline) else |e| { panic(e); }
 
 websocket.send_text(ws, "{\"subscribe\":\"prices\"}", deadline);
 websocket.send_binary(ws, frame, deadline);
-let mr = websocket.recv(ws, deadline);           // result[opt[Message], str]; none: the deadline passed
-guard let got = mr else let e = err_of(mr) { panic(e); }
+guard let got = websocket.recv(ws, deadline) else |e| { panic(e); }   // result[opt[Message], str]; none: the deadline passed
 guard let m = got else { return; }
 if m.kind == websocket.Kind.Text { handle(websocket.text(m)); }
 websocket.close(ws, 1000, "bye", deadline);      // the close handshake
@@ -4707,12 +4722,10 @@ imports `compress`).
 ```slang
 import "compress";
 
-let gr = compress.gzip(body);
-guard let gz = gr else let e = err_of(gr) { log.error(e); return; }
+guard let gz = compress.gzip(body) else |e| { log.error(e); return; }
 
 // decompression ALWAYS takes a ceiling -- see below
-let ur = compress.gunzip(payload, 4194304);        // 4 MiB
-guard let plain = ur else let e = err_of(ur) {
+guard let plain = compress.gunzip(payload, 4194304) else |e| {   // 4 MiB
     log.warn("rejected: " + e);                     // names the limit
     return;
 }
@@ -5318,8 +5331,7 @@ Exact decimal arithmetic for money: up to 38 significant digits (SQL's
 ```slang
 import "decimal";
 
-let r = decimal.parse("19.99");                // result[Decimal, str]
-guard let price = r else let e = err_of(r) { panic(e); }
+guard let price = decimal.parse("19.99") else |e| { panic(e); }   // result[Decimal, str]
 let total = decimal.mul(price, decimal.from_int(3)) ?? decimal.zero();   // 59.97
 let rate = decimal.parse("0.075") ?? decimal.zero();
 let vat = decimal.mul_round(total, rate, 2, decimal.Rounding.HalfEven)
@@ -5457,8 +5469,7 @@ map by.
 ```slang
 import "uuid";
 
-let r = uuid.v7();
-guard let id = r else let e = err_of(r) {
+guard let id = uuid.v7() else |e| {
     panic(e);                          // only if the OS has no randomness
 }
 uuid.is_valid(id);                     // true: canonical form only
@@ -5491,8 +5502,7 @@ CSV (RFC 4180): read a whole document or stream a large one, and write.
 ```slang
 import "csv";
 
-let r = csv.parse("name,qty\n\"Smith, J\",3\n");   // result[[[str]], str]
-guard let rows = r else let e = err_of(r) { panic(e); }
+guard let rows = csv.parse("name,qty\n\"Smith, J\",3\n") else |e| { panic(e); }   // result[[[str]], str]
 csv.to_maps(rows);                                     // the header row as keys: [map[str]str]
 
 let o = csv.options();
@@ -5557,7 +5567,7 @@ struct Db { host: str, port: int, replicas: [str], timeout_ms: opt[int] }
 struct Config { name: str, db: Db }
 
 let r: result[Config, str] = toml.decode(text);
-guard let cfg = r else let e = err_of(r) { panic(e); }   // "toml: line 4: ..."
+guard let cfg = r else |e| { panic(e); }   // "toml: line 4: ..."
 
 toml.to_json(text);                                      // result[str, str]
 ```
@@ -5603,7 +5613,7 @@ struct Db { host: str, port: int, replicas: [str], timeout_ms: opt[int] }
 struct Config { name: str, db: Db }
 
 let r: result[Config, str] = yaml.decode(text);
-guard let cfg = r else let e = err_of(r) { panic(e); }   // "yaml: line 4: ..."
+guard let cfg = r else |e| { panic(e); }   // "yaml: line 4: ..."
 
 yaml.to_json(text);              // result[str, str]: the stream's one document
 yaml.to_json_all(text);          // result[[str], str]: every document (--- between them)
@@ -5664,8 +5674,7 @@ one back.
 ```slang
 import "xml";
 
-let r = xml.parse(body);
-guard let doc = r else let e = err_of(r) { panic(e); }   // "xml: line 3 col 9: ..."
+guard let doc = xml.parse(body) else |e| { panic(e); }   // "xml: line 3 col 9: ..."
 let title = doc.find("channel/title") ?? doc;              // a path of local names
 for item in doc.find_all("channel/item") {
     println(item.child_text("link"));
@@ -5722,7 +5731,7 @@ let o = cache.options();
 o.max_entries = 50000;
 o.ttl_ms = 30000;                                          // 0: never expires
 let cr: result[cache.Cache[User], str] = cache.new(o);
-guard let users = cr else let e = err_of(cr) { panic(e); }
+guard let users = cr else |e| { panic(e); }
 
 cache.put(users, "u:42", u);
 cache.get(users, "u:42");                                  // opt[User]
@@ -5783,8 +5792,7 @@ X.509 certificates: read them, check them, and make requests for them.
 ```slang
 import "x509";
 
-let r = x509.parse_pem(pem);              // result[[x509.Cert], str]: every CERTIFICATE block
-guard let certs = r else let e = err_of(r) { panic(e); }
+guard let certs = x509.parse_pem(pem) else |e| { panic(e); }   // result[[x509.Cert], str]: every CERTIFICATE block
 let c = certs[0];
 c.common_name; c.dns_names; c.ip_addrs;   // the subject and its subjectAltName entries
 c.not_after;                              // unix seconds
@@ -5857,8 +5865,7 @@ UTF-8 names) or a tar (ustar, pax, GNU long names; a `.tar.gz` is
 import "tar";
 import "zip";
 
-let r = zip.open(data);
-guard let arc = r else let e = err_of(r) { panic(e); }
+guard let arc = zip.open(data) else |e| { panic(e); }
 for e in arc.entries {
     let pr = zip.safe_path(e.name);          // refuses ../, /abs, C:\ (zip slip)
     guard let rel = pr else { continue; }
@@ -6148,7 +6155,7 @@ let r = template.parse("page",
     "<li><a href=\"{{ $it.url }}\" title=\"{{ $it.name }}\">{{ add $i 1 }}. {{ $it.name }}</a></li>" +
     "{{ else }}<li>nothing yet</li>{{ end }}</ul>" +
     "<script>const user = {{ .user }};</script>");
-guard let t = r else let e = err_of(r) { panic(e); }      // syntax and context errors, with line numbers
+guard let t = r else |e| { panic(e); }      // syntax and context errors, with line numbers
 let html = template.render(t, page);                       // result[str, str]
 
 template.add(t, "layout", "<html><body>{{ template \"page\" . }}</body></html>");
@@ -6288,20 +6295,24 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
   of inventing a second return-value convention, it reuses `opt[T]`),
   `chan_close(ch)` wakes every blocked sender/receiver. Sending on a
   closed channel is a checked runtime error, not undefined behavior.
-- **`select`** waits on several channels at once and runs the arm that
-  becomes ready first:
+- **`select`** waits on several channels (or timeouts) at once and runs
+  the arm that becomes ready first:
 
   ```slang
-  while running {
+  while work_open || quit_open {
       select {
-          case let job = chan_recv(work) {
-              handle(job ?? 0);
+          case let job = chan_recv(work) when work_open {
+              if let j = job {
+                  handle(j);
+              } else {
+                  work_open = false;
+              }
           }
-          case let q = chan_recv(quit) {
-              running = false;
+          case let q = chan_recv(quit) when quit_open {
+              quit_open = false;
           }
-          default {
-              // optional: runs when no arm is ready, instead of blocking
+          case after(100000000) {
+              // optional relative timeout in nanoseconds
           }
       }
   }
@@ -6314,20 +6325,29 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
   closed channel from a send arm is the same checked runtime error as
   `chan_send` itself.
 
-  Every arm's channel expression (and a send arm's value) is evaluated
-  **once**, before the select blocks. With no `default` and nothing ever
-  ready, `select` parks forever — the same as `chan_recv` on a channel
-  nobody sends to. Which arm wins when several are ready is not
-  specified: polling starts at a rotating offset, so a busy first
+  A `case after(ns)` arm accepts an integer or duration in nanoseconds
+  (`<= 0` fires immediately), and `case until(deadline)` accepts an
+  `until` deadline (`until_never()` leaves the arm disabled). Neither
+  timeout arm takes a `let` binding.
+
+  Any `case` arm may end with an optional `when <bool>` guard before
+  `{`: when the guard evaluates to `false`, the arm is skipped without
+  evaluating its channel, send value, or timeout expression. If every arm
+  is disabled (by `when false` or `until(until_never())`), `select` runs
+  `default` if present, or fails at runtime if there is no `default`.
+
+  Every enabled arm's expressions are evaluated **once**, before the
+  select blocks. With no `default` and at least one enabled arm that
+  never becomes ready, `select` parks forever — the same as `chan_recv`
+  on a channel nobody sends to. Which arm wins when several are ready is
+  not specified: polling starts at a rotating offset, so a busy first
   channel cannot starve the later arms.
 
   **A closed channel is permanently ready.** Its recv arm fires
-  immediately and forever, with `none`. This is the same as Go, but Go
-  lets you disable an arm by setting its channel to `nil` and slang has
-  no nil channel — so a loop that keeps selecting on a closed channel
-  will spin. Structure the loop to stop instead (count the items you
-  expect, or take the close as the exit condition), as
-  `tests/select/main.sl` does.
+  immediately and forever with `none`. In a multi-channel loop, gate off
+  closed channels with `when` (as shown above and in
+  `tests/select_timeout/main.sl`), or use the close as the loop exit
+  condition as `tests/select/main.sl` does.
 
 - **`mutex`**, built with `make_mutex()`: `mutex_lock(m)` /
   `mutex_unlock(m)` around whatever the lock protects, and
@@ -6348,20 +6368,20 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
     alternative is corruption in whatever the lock was protecting,
     discovered much later and somewhere else.
 
-  There is no scope guard (no `defer`, no closures), so an early
-  `return` between lock and unlock leaks the lock. Keep the critical
-  section small enough to see both ends of it at once:
+  Use `defer mutex_unlock(st.lock);` inside a function so every
+  exit path — including early returns — releases the lock in LIFO
+  order after evaluating the return expression:
 
   ```slang
   gc struct State { tasks: [Task], next_id: int, lock: mutex }
 
   fn create(st: State, title: str) -> Task {
       mutex_lock(st.lock);
+      defer mutex_unlock(st.lock);
       let t = Task { id: st.next_id, title: title, done: false };
       st.next_id = st.next_id + 1;
       push(st.tasks, t);
-      mutex_unlock(st.lock);
-      return t;                 // unlock BEFORE the return, every path
+      return t;                 // t is evaluated, then mutex_unlock runs
   }
   ```
 
@@ -6774,10 +6794,12 @@ Makefile       build/test/clean
   channel's recv arm is ready forever (see Concurrency above), and
   there is no nil channel to switch it off with; for a deadline, feed
   a channel from a spawned timer task.
-- `mutex` has no scope guard: without closures or `defer`, an early
-  `return` between `mutex_lock` and `mutex_unlock` leaks the lock.
-  Mutexes are also not recursive (locking one twice from the same
-  task is a checked error, not a hang).
+- `defer` is function-scoped and call-only (`defer close(fd);` or
+  `defer conn.close();`): there are no `defer { ... }` blocks or
+  closures, no `defer` at top level or inside loops (extract a helper
+  function), and deferred calls cannot borrow inner-block locals.
+  Mutexes are not recursive (locking one twice from the same task is
+  a checked error, not a hang).
 - TLS: no session resumption tuning. Handshake and send/recv park;
   `getaddrinfo` in `tls_dial` parks the task while a dedicated
   thread resolves. mTLS (`tls_ctx_require_client` /
@@ -6785,9 +6807,9 @@ Makefile       build/test/clean
   supported.
 - JSON: no dynamic/unknown-shape decoding (every decode target is a
   concrete slang type known at compile time — see the `json` section
-  above), and JSON object keys map to struct field names verbatim
-  (no camelCase/snake_case conversion). `bytes` fields are base64
-  strings (RFC 4648).
+  above); struct fields map to their field names by default unless
+  tagged with `` `json:"wireName,omitempty"` `` / `` `json:"-"` ``.
+  `bytes` fields are base64 strings (RFC 4648).
 - `proc`: only `SIGTERM`/`SIGINT` are handled (there's no general
   signal-registration API), and only in a program that calls
   `proc.shutdown_requested()`; a second signal always ends it. A

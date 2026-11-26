@@ -184,12 +184,21 @@ static void scan_expr(CG *cg, Esc *esc, Expr *e, const char *name) {
     case EX_SWITCH:
         scan_expr(cg, esc, e->as.switch_expr.scrut, name);
         for (int i = 0; i < e->as.switch_expr.ncases; i++) {
-            for (int j = 0; j < e->as.switch_expr.cases[i].nvals; j++)
-                scan_expr(cg, esc, e->as.switch_expr.cases[i].vals[j],
-                          name);
-            if (ptr_result(e->as.switch_expr.cases[i].value, name))
+            SwitchExprCase *sc = &e->as.switch_expr.cases[i];
+            for (int j = 0; j < sc->nvals; j++)
+                scan_expr(cg, esc, sc->vals[j], name);
+            int shadowed = 0;
+            for (int k = 0; k < sc->nbindings; k++) {
+                if (!strcmp(sc->bindings[k], name)) {
+                    shadowed = 1;
+                    break;
+                }
+            }
+            if (shadowed)
+                continue;
+            if (ptr_result(sc->value, name))
                 mark_escape(esc, name);
-            scan_expr(cg, esc, e->as.switch_expr.cases[i].value, name);
+            scan_expr(cg, esc, sc->value, name);
         }
         if (e->as.switch_expr.def) {
             if (ptr_result(e->as.switch_expr.def, name))
@@ -304,16 +313,22 @@ static void walk_stmt(CG *cg, Esc *esc, Stmt *s) {
         int i;
         for (i = 0; i < s->as.select_stmt.ncases; i++) {
             SelectCase *sc = &s->as.select_stmt.cases[i];
-            scan_expr_any(cg, esc, sc->ch);
+            if (sc->guard)
+                scan_expr_any(cg, esc, sc->guard);
+            if (sc->ch)
+                scan_expr_any(cg, esc, sc->ch);
             if (!sc->val)
                 continue;
             /* A send arm hands its value to whichever task receives it,
              * exactly as chan_send does: a struct built on this frame
              * would reach the receiver as a pointer into a dead stack
              * (zokor's WebSocket close crashed the writer on macOS). */
-            for (int k = esc->ncand - 1; k >= 0; k--) {
-                if (esc->cands[k].let && ptr_result(sc->val, esc->cands[k].name))
-                    mark_escape(esc, esc->cands[k].name);
+            if (sc->is_send) {
+                for (int k = esc->ncand - 1; k >= 0; k--) {
+                    if (esc->cands[k].let &&
+                        ptr_result(sc->val, esc->cands[k].name))
+                        mark_escape(esc, esc->cands[k].name);
+                }
             }
             scan_expr_any(cg, esc, sc->val);
         }
@@ -387,10 +402,32 @@ static void walk_stmt(CG *cg, Esc *esc, Stmt *s) {
         return;
     case ST_SWITCH: {
         scan_expr_any(cg, esc, s->as.switch_stmt.scrut);
+        const char *st = infer_type(cg, s->as.switch_stmt.scrut);
+        EnumDef *ed = is_tagged_enum(cg, st) ? enum_find_canon(cg, st) : NULL;
         for (int i = 0; i < s->as.switch_stmt.ncases; i++) {
-            for (int j = 0; j < s->as.switch_stmt.cases[i].nvals; j++)
-                scan_expr_any(cg, esc, s->as.switch_stmt.cases[i].vals[j]);
-            walk_block(cg, esc, s->as.switch_stmt.cases[i].body);
+            SwitchCase *sc = &s->as.switch_stmt.cases[i];
+            for (int j = 0; j < sc->nvals; j++)
+                scan_expr_any(cg, esc, sc->vals[j]);
+            int pushed = 0;
+            int mark = esc->ncand;
+            if (ed && sc->nbindings > 0) {
+                var_scope_push(cg);
+                pushed = 1;
+                int vidx = (int)sc->vals[0]->as.int_lit.value;
+                for (int k = 0; k < sc->nbindings; k++) {
+                    if (!strcmp(sc->bindings[k], "_"))
+                        continue;
+                    const char *bt = ed->v_types[vidx][k];
+                    esc_push(esc, sc->bindings[k], NULL);
+                    var_redecl_check(cg, sc->bindings[k], sc->line);
+                    var_push(cg, sc->bindings[k], bt);
+                }
+            }
+            walk_block(cg, esc, sc->body);
+            if (pushed) {
+                var_scope_pop(cg);
+                esc->ncand = mark;
+            }
         }
         if (s->as.switch_stmt.def)
             walk_block(cg, esc, s->as.switch_stmt.def);
@@ -423,9 +460,11 @@ static void walk_stmt(CG *cg, Esc *esc, Stmt *s) {
             inner = tv;
         }
         if (s->as.guard_let.err_name && tev) {
+            int eline = s->as.guard_let.err_line ? s->as.guard_let.err_line
+                                                 : s->line;
             var_scope_push(cg);
             esc_push(esc, s->as.guard_let.err_name, NULL);
-            var_redecl_check(cg, s->as.guard_let.err_name, s->line);
+            var_redecl_check(cg, s->as.guard_let.err_name, eline);
             var_push(cg, s->as.guard_let.err_name, tev);
         }
         walk_block(cg, esc, s->as.guard_let.body);
@@ -466,8 +505,10 @@ static void walk_stmt(CG *cg, Esc *esc, Stmt *s) {
         if (s->as.if_let.else_blk) {
             var_scope_push(cg);
             if (s->as.if_let.err_name && tev) {
+                int eline = s->as.if_let.err_line ? s->as.if_let.err_line
+                                                  : s->line;
                 esc_push(esc, s->as.if_let.err_name, NULL);
-                var_redecl_check(cg, s->as.if_let.err_name, s->line);
+                var_redecl_check(cg, s->as.if_let.err_name, eline);
                 var_push(cg, s->as.if_let.err_name, tev);
             }
             walk_block(cg, esc, s->as.if_let.else_blk);
@@ -476,6 +517,9 @@ static void walk_stmt(CG *cg, Esc *esc, Stmt *s) {
         }
         return;
     }
+    case ST_DEFER:
+        scan_expr_any(cg, esc, s->as.defer_stmt.call);
+        return;
     case ST_UNSAFE:
         walk_block(cg, esc, s->as.unsafe_blk.body);
         return;

@@ -20,7 +20,7 @@ let r = template.parse("page",
     "<li><a href=\"{{ $it.url }}\" title=\"{{ $it.name }}\">{{ add $i 1 }}. {{ $it.name }}</a></li>" +
     "{{ else }}<li>nothing yet</li>{{ end }}</ul>" +
     "<script>const user = {{ .user }};</script>");
-guard let t = r else let e = err_of(r) { panic(e); }      // syntax and context errors, with line numbers
+guard let t = r else |e| { panic(e); }      // syntax and context errors, with line numbers
 let html = template.render(t, page);                       // result[str, str]
 
 template.add(t, "layout", "<html><body>{{ template \"page\" . }}</body></html>");

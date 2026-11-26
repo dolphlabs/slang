@@ -283,6 +283,17 @@ static int is_bare_ident(Expr *e) {
  * for -- if that changes, extend this the same way). */
 static const char **call_arg_expects(CG *cg, Expr *e) {
     const char *name = e->as.call.name;
+    if (!strcmp(name, "__enum_ctor")) {
+        EnumDef *ed = enum_find_canon(cg, e->as.call.enum_ty);
+        int v = e->as.call.enum_variant;
+        int nf = ed->v_ntypes[v];
+        if (nf == 0)
+            return NULL;
+        const char **ex = (const char **)xmalloc(sizeof(char *) * (size_t)nf);
+        for (int i = 0; i < nf; i++)
+            ex[i] = ed->v_types[v][i];
+        return ex;
+    }
     if (!strcmp(name, "some") || !strcmp(name, "ok") || !strcmp(name, "err")) {
         /* The argument is expected to be the wrapped type, as ctor_infer
          * pushes it: ok([]) with result[[int], str] expected. */
@@ -656,10 +667,31 @@ static LiveSet *live_expr(CG *cg, Expr *e, LiveSet *live_out) {
          * any arm. The switch itself emits no safepoint of its own
          * (arm calls carry their own brackets), so no live_set is
          * recorded here. */
+        const char *st = infer_type(cg, e->as.switch_expr.scrut);
+        EnumDef *ed = is_tagged_enum(cg, st) ? enum_find_canon(cg, st) : NULL;
         LiveSet *joined = ls_clone(live_out);
         for (int i = 0; i < e->as.switch_expr.ncases; i++) {
-            LiveSet *arm = live_expr(cg, e->as.switch_expr.cases[i].value,
-                                     live_out);
+            SwitchExprCase *sc = &e->as.switch_expr.cases[i];
+            int nb = (ed && sc->nbindings > 0) ? sc->nbindings : 0;
+            LiveVar **bvs = nb ? (LiveVar **)xmalloc(sizeof(LiveVar *) * (size_t)nb)
+                               : NULL;
+            if (nb) {
+                var_scope_push(cg);
+                int vidx = (int)sc->vals[0]->as.int_lit.value;
+                for (int k = 0; k < nb; k++) {
+                    bvs[k] = strcmp(sc->bindings[k], "_")
+                                 ? declare_var(cg, sc->bindings[k],
+                                               ed->v_types[vidx][k])
+                                 : NULL;
+                }
+            }
+            LiveSet *arm = live_expr(cg, sc->value, live_out);
+            if (nb) {
+                for (int k = 0; k < nb; k++)
+                    ls_remove_named(arm, bvs[k]);
+                var_scope_pop(cg);
+                free(bvs);
+            }
             ls_union_named_into(joined, arm);
         }
         if (e->as.switch_expr.def) {
@@ -778,6 +810,462 @@ static LiveSet *live_expr(CG *cg, Expr *e, LiveSet *live_out) {
 /* ------------------------------------------------------------------ */
 
 static LiveSet *live_stmts(CG *cg, Stmt **stmts, int count, LiveSet *live_out);
+static LiveSet *live_stmts_impl(CG *cg, Stmt **stmts, int count, LiveSet *live_out, int is_fn_epilogue);
+
+static LiveSet *live_exit_set(CG *cg) {
+    LiveSet *r = cg->exit_live_set ? ls_clone((LiveSet *)cg->exit_live_set)
+                                   : ls_new();
+    for (int k = 0; k < cg->fn_ndefers; k++) {
+        DeferInfo *d = cg->fn_defers[k];
+        for (int j = 0; j < d->nborrows; j++) {
+            LiveVar *bv = resolve_local_use(cg, d->borrow_vars[j]);
+            if (bv)
+                ls_add_named(r, bv);
+        }
+    }
+    return r;
+}
+
+typedef struct {
+    char *var;
+    char **roots;
+    int nroots;
+} RefOrigin;
+
+typedef struct {
+    RefOrigin *items;
+    int count;
+    int cap;
+} RefOriginTable;
+
+static void origin_list_add(char ***out, int *nout, const char *name) {
+    if (!name)
+        return;
+    for (int i = 0; i < *nout; i++) {
+        if (!strcmp((*out)[i], name))
+            return;
+    }
+    *out = (char **)xrealloc(*out, (size_t)(*nout + 1) * sizeof(char *));
+    (*out)[(*nout)++] = xstrdup(name);
+}
+
+static RefOrigin *origin_find(RefOriginTable *t, const char *name) {
+    if (!t || !name)
+        return NULL;
+    for (int i = t->count - 1; i >= 0; i--) {
+        if (!strcmp(t->items[i].var, name))
+            return &t->items[i];
+    }
+    return NULL;
+}
+
+static void origin_push(RefOriginTable *t, const char *name, char **roots,
+                        int nroots) {
+    if (t->count == t->cap) {
+        t->cap = t->cap ? t->cap * 2 : 16;
+        t->items = (RefOrigin *)xrealloc(t->items,
+                                         (size_t)t->cap * sizeof(RefOrigin));
+    }
+    t->items[t->count].var = xstrdup(name);
+    t->items[t->count].roots = roots;
+    t->items[t->count].nroots = nroots;
+    t->count++;
+}
+
+static int type_may_hold_ref_rec(CG *cg, const char *t, StructDef **visiting,
+                                 int nvisiting) {
+    if (!t)
+        return 0;
+    char *inner = NULL;
+    TypeWrap w = type_wrap(t, &inner);
+    free(inner);
+    if (w == TW_REF || w == TW_REFMUT)
+        return 1;
+    if (w != TW_NONE)
+        return 0;
+    if (is_opt(t))
+        return type_may_hold_ref_rec(cg, opt_inner(t), visiting, nvisiting);
+    if (is_result(t)) {
+        char *tv, *te;
+        result_te(t, &tv, &te);
+        return type_may_hold_ref_rec(cg, tv, visiting, nvisiting) ||
+               type_may_hold_ref_rec(cg, te, visiting, nvisiting);
+    }
+    StructDef *sd = struct_find_canon(cg, t);
+    if (!sd || sd->is_gc)
+        return 0;
+    for (int i = 0; i < nvisiting; i++)
+        if (visiting[i] == sd)
+            return 0;
+    if (nvisiting == 64)
+        return 0;
+    visiting[nvisiting++] = sd;
+    for (int j = 0; j < sd->nfields; j++) {
+        if (type_may_hold_ref_rec(cg, sd->ftypes[j], visiting, nvisiting))
+            return 1;
+    }
+    return 0;
+}
+
+static int type_may_hold_ref(CG *cg, const char *t) {
+    StructDef *visiting[64];
+    return type_may_hold_ref_rec(cg, t, visiting, 0);
+}
+
+static const char *origin_root_ident(CG *cg, Expr *e) {
+    if (!e)
+        return NULL;
+    switch (e->kind) {
+    case EX_IDENT: {
+        char *left, *right;
+        if (split_dotted(e->as.ident.name, &left, &right)) {
+            if (import_try(cg, left))
+                return NULL;
+            return left;
+        }
+        return e->as.ident.name;
+    }
+    case EX_FIELD:
+        return origin_root_ident(cg, e->as.field.base);
+    case EX_INDEX:
+        return origin_root_ident(cg, e->as.index.base);
+    case EX_UNARY:
+        return origin_root_ident(cg, e->as.unary.operand);
+    default:
+        return NULL;
+    }
+}
+
+static void origin_collect_expr(CG *cg, RefOriginTable *t, Expr *e,
+                                char ***out, int *nout) {
+    if (!e)
+        return;
+    switch (e->kind) {
+    case EX_IDENT: {
+        char *left, *right;
+        const char *key = e->as.ident.name;
+        if (split_dotted(key, &left, &right)) {
+            if (import_try(cg, left))
+                return;
+            key = left;
+        }
+        RefOrigin *ro = origin_find(t, key);
+        if (ro) {
+            for (int i = 0; i < ro->nroots; i++)
+                origin_list_add(out, nout, ro->roots[i]);
+        }
+        return;
+    }
+    case EX_UNARY:
+        if (!strcmp(e->as.unary.op, "&") || !strcmp(e->as.unary.op, "&mut")) {
+            const char *rn = origin_root_ident(cg, e->as.unary.operand);
+            if (rn) {
+                RefOrigin *ro = origin_find(t, rn);
+                if (ro && ro->nroots > 0) {
+                    for (int i = 0; i < ro->nroots; i++)
+                        origin_list_add(out, nout, ro->roots[i]);
+                } else {
+                    origin_list_add(out, nout, rn);
+                }
+            }
+            return;
+        }
+        origin_collect_expr(cg, t, e->as.unary.operand, out, nout);
+        return;
+    case EX_FIELD:
+        origin_collect_expr(cg, t, e->as.field.base, out, nout);
+        return;
+    case EX_CAST:
+        origin_collect_expr(cg, t, e->as.cast.operand, out, nout);
+        return;
+    case EX_STRUCTLIT:
+        for (int i = 0; i < e->as.structlit.nfields; i++)
+            origin_collect_expr(cg, t, e->as.structlit.vals[i], out, nout);
+        return;
+    case EX_CALL: {
+        char *left, *right;
+        if (split_dotted(e->as.call.name, &left, &right) &&
+            !import_try(cg, left)) {
+            RefOrigin *ro = origin_find(t, left);
+            if (ro) {
+                for (int i = 0; i < ro->nroots; i++)
+                    origin_list_add(out, nout, ro->roots[i]);
+            }
+        }
+        if (e->as.call.callee)
+            origin_collect_expr(cg, t, e->as.call.callee, out, nout);
+        for (int i = 0; i < e->as.call.nargs; i++)
+            origin_collect_expr(cg, t, e->as.call.args[i], out, nout);
+        return;
+    }
+    case EX_METHOD:
+        origin_collect_expr(cg, t, e->as.method.recv, out, nout);
+        for (int i = 0; i < e->as.method.nargs; i++)
+            origin_collect_expr(cg, t, e->as.method.args[i], out, nout);
+        return;
+    case EX_SWITCH:
+        for (int i = 0; i < e->as.switch_expr.ncases; i++)
+            origin_collect_expr(cg, t, e->as.switch_expr.cases[i].value, out,
+                                nout);
+        if (e->as.switch_expr.def)
+            origin_collect_expr(cg, t, e->as.switch_expr.def, out, nout);
+        return;
+    default:
+        return;
+    }
+}
+
+static void live_scan_block(CG *cg, Block *b, int in_loop, int *defer_id,
+                            RefOriginTable *origins, int in_branch);
+
+static void live_scan_stmt(CG *cg, Stmt *s, int in_loop, int *defer_id,
+                           RefOriginTable *origins, int in_branch) {
+    if (!s)
+        return;
+    switch (s->kind) {
+    case ST_LET: {
+        const char *t = let_decl_type(cg, s);
+        char **roots = NULL;
+        int nroots = 0;
+        if (type_may_hold_ref(cg, t))
+            origin_collect_expr(cg, origins, s->as.let.init, &roots, &nroots);
+        declare_var(cg, s->as.let.name, t);
+        origin_push(origins, s->as.let.name, roots, nroots);
+        return;
+    }
+    case ST_ASSIGN: {
+        Expr *tgt = s->as.assign.target;
+        if (tgt->kind == EX_IDENT && var_find(cg, tgt->as.ident.name)) {
+            RefOrigin *ro = origin_find(origins, tgt->as.ident.name);
+            VarSym *tv = var_find(cg, tgt->as.ident.name);
+            if (ro && tv && type_may_hold_ref(cg, tv->slang)) {
+                char **roots = NULL;
+                int nroots = 0;
+                origin_collect_expr(cg, origins, s->as.assign.value, &roots,
+                                    &nroots);
+                if (!in_branch) {
+                    ro->roots = roots;
+                    ro->nroots = nroots;
+                } else {
+                    for (int i = 0; i < nroots; i++)
+                        origin_list_add(&ro->roots, &ro->nroots, roots[i]);
+                }
+            }
+        }
+        return;
+    }
+    case ST_IF: {
+        int omark = origins->count;
+        var_scope_push(cg);
+        live_scan_block(cg, s->as.if_stmt.then_blk, in_loop, defer_id, origins,
+                        in_branch + 1);
+        var_scope_pop(cg);
+        origins->count = omark;
+        if (s->as.if_stmt.else_blk) {
+            var_scope_push(cg);
+            live_scan_block(cg, s->as.if_stmt.else_blk, in_loop, defer_id,
+                            origins, in_branch + 1);
+            var_scope_pop(cg);
+            origins->count = omark;
+        }
+        return;
+    }
+    case ST_WHILE: {
+        int omark = origins->count;
+        var_scope_push(cg);
+        live_scan_block(cg, s->as.while_stmt.body, in_loop + 1, defer_id,
+                        origins, in_branch + 1);
+        var_scope_pop(cg);
+        origins->count = omark;
+        return;
+    }
+    case ST_FOR: {
+        int omark = origins->count;
+        var_scope_push(cg);
+        declare_var(cg, s->as.for_stmt.name, "int");
+        live_scan_block(cg, s->as.for_stmt.body, in_loop + 1, defer_id,
+                        origins, in_branch + 1);
+        var_scope_pop(cg);
+        origins->count = omark;
+        return;
+    }
+    case ST_FOR_IN: {
+        const char *it = infer_type(cg, s->as.for_in.iter);
+        const char *t1, *t2;
+        int omark = origins->count;
+        var_scope_push(cg);
+        if (for_in_types(it, s->as.for_in.name2 != NULL, &t1, &t2)) {
+            declare_var(cg, s->as.for_in.name, t1);
+            if (t2)
+                declare_var(cg, s->as.for_in.name2, t2);
+        }
+        live_scan_block(cg, s->as.for_in.body, in_loop + 1, defer_id, origins,
+                        in_branch + 1);
+        var_scope_pop(cg);
+        origins->count = omark;
+        return;
+    }
+    case ST_GUARD_LET: {
+        const char *et = infer_type(cg, s->as.guard_let.expr);
+        const char *inner = guard_let_inner_type(cg, s);
+        char **roots = NULL;
+        int nroots = 0;
+        if (type_may_hold_ref(cg, inner))
+            origin_collect_expr(cg, origins, s->as.guard_let.expr, &roots,
+                                &nroots);
+        int omark = origins->count;
+        var_scope_push(cg);
+        if (s->as.guard_let.err_name && is_result(et)) {
+            char *tv, *tev;
+            result_te(et, &tv, &tev);
+            declare_var(cg, s->as.guard_let.err_name, tev);
+        }
+        live_scan_block(cg, s->as.guard_let.body, in_loop, defer_id, origins,
+                        in_branch + 1);
+        var_scope_pop(cg);
+        origins->count = omark;
+        declare_var(cg, s->as.guard_let.name, inner);
+        origin_push(origins, s->as.guard_let.name, roots, nroots);
+        return;
+    }
+    case ST_IF_LET: {
+        const char *et = infer_type(cg, s->as.if_let.expr);
+        char *inner = NULL, *tev = NULL;
+        if (is_opt(et))
+            inner = opt_inner(et);
+        else if (is_result(et)) {
+            char *tv;
+            result_te(et, &tv, &tev);
+            inner = tv;
+        }
+        char **roots = NULL;
+        int nroots = 0;
+        if (inner && type_may_hold_ref(cg, inner))
+            origin_collect_expr(cg, origins, s->as.if_let.expr, &roots,
+                                &nroots);
+        int omark = origins->count;
+        var_scope_push(cg);
+        if (inner) {
+            declare_var(cg, s->as.if_let.name, inner);
+            origin_push(origins, s->as.if_let.name, roots, nroots);
+        }
+        live_scan_block(cg, s->as.if_let.then_blk, in_loop, defer_id, origins,
+                        in_branch + 1);
+        var_scope_pop(cg);
+        origins->count = omark;
+        if (s->as.if_let.else_blk) {
+            var_scope_push(cg);
+            if (s->as.if_let.err_name && tev)
+                declare_var(cg, s->as.if_let.err_name, tev);
+            live_scan_block(cg, s->as.if_let.else_blk, in_loop, defer_id,
+                            origins, in_branch + 1);
+            var_scope_pop(cg);
+            origins->count = omark;
+        }
+        return;
+    }
+    case ST_SELECT:
+        for (int i = 0; i < s->as.select_stmt.ncases; i++) {
+            SelectCase *sc = &s->as.select_stmt.cases[i];
+            int omark = origins->count;
+            var_scope_push(cg);
+            if (sc->bind) {
+                const char *ct = infer_type(cg, sc->ch);
+                declare_var(cg, sc->bind, xasprintf("opt[%s]", chan_elem(ct)));
+            }
+            live_scan_block(cg, sc->body, in_loop, defer_id, origins,
+                            in_branch + 1);
+            var_scope_pop(cg);
+            origins->count = omark;
+        }
+        if (s->as.select_stmt.def) {
+            int omark = origins->count;
+            var_scope_push(cg);
+            live_scan_block(cg, s->as.select_stmt.def, in_loop, defer_id,
+                            origins, in_branch + 1);
+            var_scope_pop(cg);
+            origins->count = omark;
+        }
+        return;
+    case ST_SWITCH: {
+        const char *st = infer_type(cg, s->as.switch_stmt.scrut);
+        EnumDef *ed = is_tagged_enum(cg, st) ? enum_find_canon(cg, st) : NULL;
+        for (int i = 0; i < s->as.switch_stmt.ncases; i++) {
+            SwitchCase *sc = &s->as.switch_stmt.cases[i];
+            int omark = origins->count;
+            var_scope_push(cg);
+            if (ed && sc->nbindings > 0) {
+                int vidx = (int)sc->vals[0]->as.int_lit.value;
+                for (int k = 0; k < sc->nbindings; k++) {
+                    if (strcmp(sc->bindings[k], "_"))
+                        declare_var(cg, sc->bindings[k], ed->v_types[vidx][k]);
+                }
+            }
+            live_scan_block(cg, sc->body, in_loop, defer_id, origins,
+                            in_branch + 1);
+            var_scope_pop(cg);
+            origins->count = omark;
+        }
+        if (s->as.switch_stmt.def) {
+            int omark = origins->count;
+            var_scope_push(cg);
+            live_scan_block(cg, s->as.switch_stmt.def, in_loop, defer_id,
+                            origins, in_branch + 1);
+            var_scope_pop(cg);
+            origins->count = omark;
+        }
+        return;
+    }
+    case ST_UNSAFE: {
+        int omark = origins->count;
+        var_scope_push(cg);
+        live_scan_block(cg, s->as.unsafe_blk.body, in_loop, defer_id, origins,
+                        in_branch);
+        var_scope_pop(cg);
+        origins->count = omark;
+        return;
+    }
+    case ST_DEFER: {
+        if (!cg->in_function)
+            cg_error(s->line,
+                     "'defer' is only allowed inside a function body; "
+                     "move it into a 'fn'");
+        if (in_loop > 0)
+            cg_error(s->line,
+                     "cannot use 'defer' inside a loop: 'defer' is "
+                     "function-scoped and runs only when the enclosing "
+                     "function returns; move the loop body into a helper "
+                     "function");
+        DeferInfo *d = (DeferInfo *)s->as.defer_stmt.defer_info;
+        if (!d) {
+            d = defer_build_info(cg, s, (*defer_id)++);
+            s->as.defer_stmt.defer_info = d;
+        } else {
+            if (d->id >= *defer_id)
+                *defer_id = d->id + 1;
+        }
+        char **roots = NULL;
+        int nroots = 0;
+        origin_collect_expr(cg, origins, s->as.defer_stmt.call, &roots,
+                            &nroots);
+        for (int i = 0; i < nroots; i++)
+            defer_add_borrow_var(cg, d, roots[i], s->line);
+        defer_push_fn(cg, d);
+        return;
+    }
+    default:
+        return;
+    }
+}
+
+static void live_scan_block(CG *cg, Block *b, int in_loop, int *defer_id,
+                            RefOriginTable *origins, int in_branch) {
+    if (!b)
+        return;
+    for (int i = 0; i < b->count; i++)
+        live_scan_stmt(cg, b->stmts[i], in_loop, defer_id, origins, in_branch);
+}
+
 
 static LiveSet *live_block(CG *cg, Block *b, LiveSet *live_out) {
     var_scope_push(cg);
@@ -942,11 +1430,15 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
             var_scope_pop(cg);
             ls_union_named_into(joined, arm);
         }
-        for (i = 0; i < s->as.select_stmt.ncases; i++) {
+        s->backedge_live_set = ls_clone(live_out);
+        for (i = s->as.select_stmt.ncases - 1; i >= 0; i--) {
             SelectCase *sc = &s->as.select_stmt.cases[i];
             if (sc->val)
                 joined = live_expr(cg, sc->val, joined);
-            joined = live_expr(cg, sc->ch, joined);
+            if (sc->ch)
+                joined = live_expr(cg, sc->ch, joined);
+            if (sc->guard)
+                joined = live_expr(cg, sc->guard, joined);
         }
         return joined;
     }
@@ -969,6 +1461,8 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
          * walked with cur_break_live_set pointing at this switch's
          * own live_out (save/restored, composing across nesting);
          * `continue` still targets the enclosing loop, untouched. */
+        const char *st = infer_type(cg, s->as.switch_stmt.scrut);
+        EnumDef *ed = is_tagged_enum(cg, st) ? enum_find_canon(cg, st) : NULL;
         void *saved_break = cg->cur_break_live_set;
         cg->cur_break_live_set = live_out;
         LiveSet *joined = s->as.switch_stmt.def
@@ -976,8 +1470,27 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
                                            live_out)
                               : ls_clone(live_out);
         for (int i = 0; i < s->as.switch_stmt.ncases; i++) {
-            LiveSet *arm =
-                live_block(cg, s->as.switch_stmt.cases[i].body, live_out);
+            SwitchCase *sc = &s->as.switch_stmt.cases[i];
+            int nb = (ed && sc->nbindings > 0) ? sc->nbindings : 0;
+            LiveVar **bvs = nb ? (LiveVar **)xmalloc(sizeof(LiveVar *) * (size_t)nb)
+                               : NULL;
+            if (nb) {
+                var_scope_push(cg);
+                int vidx = (int)sc->vals[0]->as.int_lit.value;
+                for (int k = 0; k < nb; k++) {
+                    bvs[k] = strcmp(sc->bindings[k], "_")
+                                 ? declare_var(cg, sc->bindings[k],
+                                               ed->v_types[vidx][k])
+                                 : NULL;
+                }
+            }
+            LiveSet *arm = live_block(cg, sc->body, live_out);
+            if (nb) {
+                for (int k = 0; k < nb; k++)
+                    ls_remove_named(arm, bvs[k]);
+                var_scope_pop(cg);
+                free(bvs);
+            }
             ls_union_named_into(joined, arm);
         }
         cg->cur_break_live_set = saved_break;
@@ -1077,11 +1590,11 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
 
     case ST_RETURN:
         /* kills everything after it in the same block: an
-         * unconditional exit's own live_in is exactly uses(value) */
-        if (!s->as.ret.value) return ls_new();
+         * unconditional exit's own live_in is uses(value) + exit defers */
+        if (!s->as.ret.value) return live_exit_set(cg);
         {
             const char *saved = expect_push(cg, cg->cur_ret);
-            LiveSet *r = live_expr(cg, s->as.ret.value, ls_new());
+            LiveSet *r = live_expr(cg, s->as.ret.value, live_exit_set(cg));
             cg->expect = saved;
             return r;
         }
@@ -1175,6 +1688,27 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
         return cur;
     }
 
+    case ST_DEFER: {
+        DeferInfo *d = (DeferInfo *)s->as.defer_stmt.defer_info;
+        LiveSet *out2 = ls_clone(live_out);
+        if (d) {
+            if (d->has_recv) {
+                LiveVar *rv = resolve_local_use(cg, xasprintf("_sl_def_%d_r", d->id));
+                ls_remove_named(out2, rv);
+            }
+            for (int i = 0; i < d->nargs; i++) {
+                if (i == 0 && d->is_send_static)
+                    continue;
+                LiveVar *av = resolve_local_use(cg, xasprintf("_sl_def_%d_a%d", d->id, i));
+                ls_remove_named(out2, av);
+            }
+        }
+        const char *saved = cg->expect;
+        cg->expect = NULL;
+        LiveSet *r = live_expr(cg, s->as.defer_stmt.call, out2);
+        cg->expect = saved;
+        return r;
+    }
     case ST_UNSAFE:
         return live_block(cg, s->as.unsafe_blk.body, live_out);
     case ST_STRUCT:
@@ -1195,16 +1729,18 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
  * (the initializer/guard expression/else block), matching
  * gen_stmt/gen_stmts's own var_push placement exactly (stmt.c:100,
  * 575). */
-static LiveSet *live_stmts(CG *cg, Stmt **stmts, int count, LiveSet *live_out) {
+static LiveSet *live_stmts_impl(CG *cg, Stmt **stmts, int count,
+                                LiveSet *live_out, int is_fn_epilogue) {
     if (count > 0 && stmts[0]->file)
         diag_file = stmts[0]->file;
-    if (count == 0) return live_out;
+    if (count == 0) return is_fn_epilogue ? live_exit_set(cg) : live_out;
     Stmt *s = stmts[0];
 
     if (s->kind == ST_GUARD_LET) {
         const char *inner = guard_let_inner_type(cg, s);
         LiveVar *gv = declare_var(cg, s->as.guard_let.name, inner);
-        LiveSet *live_in_tail = live_stmts(cg, stmts + 1, count - 1, live_out);
+        LiveSet *live_in_tail = live_stmts_impl(cg, stmts + 1, count - 1,
+                                                live_out, is_fn_epilogue);
         LiveSet *tail_without_gv = ls_clone(live_in_tail);
         ls_remove_named(tail_without_gv, gv); /* doesn't exist before this stmt */
         cg->vars.count--; /* the else block and expr resolve against
@@ -1216,14 +1752,16 @@ static LiveSet *live_stmts(CG *cg, Stmt **stmts, int count, LiveSet *live_out) {
         LiveSet *live_out_else =
             else_falls_through ? ls_clone(tail_without_gv) : ls_new();
         LiveVar *ev = NULL;
+        int ev_pushed = 0;
         if (s->as.guard_let.err_name &&
             is_result(infer_type(cg, s->as.guard_let.expr))) {
             char *tv, *tev;
             result_te(infer_type(cg, s->as.guard_let.expr), &tv, &tev);
             ev = declare_var(cg, s->as.guard_let.err_name, tev);
+            ev_pushed = 1;
         }
         LiveSet *live_in_else = live_block(cg, s->as.guard_let.body, live_out_else);
-        if (s->as.guard_let.err_name)
+        if (ev_pushed)
             cg->vars.count--;
 
         LiveSet *joined = ls_clone(tail_without_gv);
@@ -1236,7 +1774,8 @@ static LiveSet *live_stmts(CG *cg, Stmt **stmts, int count, LiveSet *live_out) {
     if (s->kind == ST_LET) {
         const char *t = let_decl_type(cg, s);
         LiveVar *lv = declare_var(cg, s->as.let.name, t);
-        LiveSet *live_out_of_s = live_stmts(cg, stmts + 1, count - 1, live_out);
+        LiveSet *live_out_of_s = live_stmts_impl(cg, stmts + 1, count - 1,
+                                                 live_out, is_fn_epilogue);
         LiveSet *out2 = ls_clone(live_out_of_s);
         ls_remove_named(out2, lv); /* dead before this point regardless */
         cg->vars.count--; /* the initializer resolves against the
@@ -1254,8 +1793,13 @@ static LiveSet *live_stmts(CG *cg, Stmt **stmts, int count, LiveSet *live_out) {
         return r;
     }
 
-    LiveSet *live_out_of_s = live_stmts(cg, stmts + 1, count - 1, live_out);
+    LiveSet *live_out_of_s = live_stmts_impl(cg, stmts + 1, count - 1,
+                                             live_out, is_fn_epilogue);
     return live_stmt(cg, s, live_out_of_s);
+}
+
+static LiveSet *live_stmts(CG *cg, Stmt **stmts, int count, LiveSet *live_out) {
+    return live_stmts_impl(cg, stmts, count, live_out, 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1268,7 +1812,42 @@ static void live_function_body(CG *cg, Block *body, char **params,
     var_scope_push(cg);
     for (int i = 0; i < nparams; i++)
         declare_var(cg, params[i], param_types[i]);
-    live_stmts(cg, body->stmts, body->count, ls_new());
+    cg->fn_ndefers = 0;
+    int did = 0;
+    int saved_sp = cg->var_scope_sp;
+    int saved_vc = cg->vars.count;
+    RefOriginTable origins;
+    memset(&origins, 0, sizeof(origins));
+    for (int i = 0; i < nparams; i++)
+        origin_push(&origins, params[i], NULL, 0);
+    live_scan_block(cg, body, 0, &did, &origins, 0);
+    cg->var_scope_sp = saved_sp;
+    cg->vars.count = saved_vc;
+
+    LiveSet *exit_ls = ls_new();
+    for (int k = 0; k < cg->fn_ndefers; k++) {
+        DeferInfo *d = cg->fn_defers[k];
+        if (d->has_recv && type_has_gc_roots(cg, d->recv_ty)) {
+            char *rn = xasprintf("_sl_def_%d_r", d->id);
+            LiveVar *lv = declare_var(cg, rn, d->recv_ty);
+            cg->vars.items[cg->vars.count - 1].defer_id = d->id;
+            ls_add_named(exit_ls, lv);
+        }
+        for (int i = 0; i < d->nargs; i++) {
+            if (i == 0 && d->is_send_static)
+                continue;
+            if (type_has_gc_roots(cg, d->arg_tys[i])) {
+                char *an = xasprintf("_sl_def_%d_a%d", d->id, i);
+                LiveVar *lv = declare_var(cg, an, d->arg_tys[i]);
+                cg->vars.items[cg->vars.count - 1].defer_id = d->id;
+                ls_add_named(exit_ls, lv);
+            }
+        }
+    }
+    cg->exit_live_set = exit_ls;
+    live_stmts_impl(cg, body->stmts, body->count, ls_clone(exit_ls), 1);
+    cg->exit_live_set = NULL;
+    cg->fn_ndefers = 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1427,7 +2006,10 @@ static void print_stmts(FILE *out, Stmt **stmts, int count) {
             break;
         case ST_SELECT:
             for (int i = 0; i < s->as.select_stmt.ncases; i++) {
-                print_expr(out, s->as.select_stmt.cases[i].ch);
+                if (s->as.select_stmt.cases[i].guard)
+                    print_expr(out, s->as.select_stmt.cases[i].guard);
+                if (s->as.select_stmt.cases[i].ch)
+                    print_expr(out, s->as.select_stmt.cases[i].ch);
                 if (s->as.select_stmt.cases[i].val)
                     print_expr(out, s->as.select_stmt.cases[i].val);
                 print_block(out, s->as.select_stmt.cases[i].body);
@@ -1509,6 +2091,10 @@ static void print_stmts(FILE *out, Stmt **stmts, int count) {
                 print_live_set(out, (LiveSet *)s->as.spawn.call->live_set);
                 fputc('\n', out);
             }
+            break;
+        case ST_DEFER:
+            fprintf(out, "L%d: DEFER\n", s->line);
+            print_expr(out, s->as.defer_stmt.call);
             break;
         case ST_UNSAFE:
             print_block(out, s->as.unsafe_blk.body);

@@ -23,8 +23,7 @@ import "io";
 import "log";
 
 print("name? ");                         // no io.flush() needed: reading flushes it
-let r = io.read_line();
-guard let maybe = r else let e = err_of(r) {
+guard let maybe = io.read_line() else |e| {
     io.eprintln("cannot read input: " + e);
     exit(1);
 }
@@ -39,8 +38,7 @@ A loop over every line is the same two guards inside `while true`:
 ```slang
 let total = 0;
 while true {
-    let r = io.read_line();
-    guard let maybe = r else let e = err_of(r) { io.eprintln(e); exit(1); }
+    guard let maybe = io.read_line() else |e| { io.eprintln(e); exit(1); }
     guard let line = maybe else { break; }         // end of input
     total = total + len(line);
 }
@@ -87,8 +85,7 @@ import "io";
 
 // a password: nothing is echoed while it is typed
 print("password: ");
-let r = io.read_secret();
-guard let maybe = r else let e = err_of(r) { io.eprintln(e); exit(1); }
+guard let maybe = io.read_secret() else |e| { io.eprintln(e); exit(1); }
 let password = maybe ?? "";
 
 // wrap to the window; a pipe or a file has no width
@@ -108,11 +105,9 @@ no line editing, no echo, and each key press is available as it happens.
 `read_key` names it:
 
 ```slang
-let r = io.raw_on();
-guard let ok = r else let e = err_of(r) { io.eprintln(e); exit(1); }   // stdin is not a terminal
+guard let ok = io.raw_on() else |e| { io.eprintln(e); exit(1); }   // stdin is not a terminal
 while true {
-    let k = io.read_key();
-    guard let maybe = k else let e = err_of(k) { break; }
+    guard let maybe = io.read_key() else |e| { break; }
     guard let key = maybe else { break; }                              // end of input
     if key == "q" || key == "esc" { break; }
     if key == "up" { println("up"); }

@@ -47,6 +47,11 @@ int is_enum(CG *cg, const char *t) {
     return t && enum_find_canon(cg, t) != NULL;
 }
 
+int is_tagged_enum(CG *cg, const char *t) {
+    EnumDef *ed = t ? enum_find_canon(cg, t) : NULL;
+    return ed && ed->has_payload;
+}
+
 char *mangle_enum(const char *canon) {
     char *l, *r;
     split_dotted(canon, &l, &r);
@@ -65,12 +70,25 @@ void collect_enum_decls(CG *cg, Package *pkgs, int npkgs) {
             Stmt *s = body->stmts[j];
             if (s->kind != ST_ENUM)
                 continue;
+            if (s->file)
+                diag_file = s->file;
             if (enum_find_in_pkg(cg, p->name, s->as.enum_decl.name))
                 cg_error(s->line,
                          "redefinition of enum '%s' in package '%s'",
                          s->as.enum_decl.name, p->name);
 
             int n = s->as.enum_decl.nvariants;
+            int has_payload = s->as.enum_decl.has_payload;
+            if (has_payload) {
+                for (int a = 0; a < n; a++) {
+                    if (s->as.enum_decl.has_explicit[a])
+                        cg_error(s->line,
+                                 "enum '%s' has payload variants and cannot "
+                                 "use explicit '= N' ordinals",
+                                 s->as.enum_decl.name);
+                    s->as.enum_decl.values[a] = a;
+                }
+            }
             for (int a = 0; a < n; a++) {
                 for (int b = 0; b < a; b++) {
                     if (!strcmp(s->as.enum_decl.variants[a],
@@ -79,7 +97,8 @@ void collect_enum_decls(CG *cg, Package *pkgs, int npkgs) {
                                  "duplicate variant '%s' in enum '%s'",
                                  s->as.enum_decl.variants[a],
                                  s->as.enum_decl.name);
-                    if (s->as.enum_decl.values[a] == s->as.enum_decl.values[b])
+                    if (!has_payload &&
+                        s->as.enum_decl.values[a] == s->as.enum_decl.values[b])
                         cg_error(s->line,
                                  "enum '%s': variants '%s' and '%s' both "
                                  "have value %lld",
@@ -88,8 +107,9 @@ void collect_enum_decls(CG *cg, Package *pkgs, int npkgs) {
                                  s->as.enum_decl.variants[a],
                                  s->as.enum_decl.values[a]);
                 }
-                if (s->as.enum_decl.values[a] > 2147483647LL ||
-                    s->as.enum_decl.values[a] < 0)
+                if (!has_payload &&
+                    (s->as.enum_decl.values[a] > 2147483647LL ||
+                     s->as.enum_decl.values[a] < 0))
                     cg_error(s->line,
                              "enum '%s': variant '%s' value %lld does not "
                              "fit in the i32 backing type",
@@ -103,16 +123,124 @@ void collect_enum_decls(CG *cg, Package *pkgs, int npkgs) {
                     cg->enums.items, cg->enums.cap * sizeof(EnumDef));
             }
             EnumDef *ed = &cg->enums.items[cg->enums.count++];
+            memset(ed, 0, sizeof(*ed));
             ed->canonical = xasprintf("%s.%s", p->name, s->as.enum_decl.name);
             ed->pkg = p->name;
             ed->name = s->as.enum_decl.name;
             ed->is_pub = s->as.enum_decl.is_pub;
             ed->variants = s->as.enum_decl.variants;
+            ed->has_payload = has_payload;
+            ed->v_ntypes = s->as.enum_decl.v_ntypes;
+            if (has_payload && n > 0) {
+                ed->v_types = (char ***)xmalloc(sizeof(char **) * (size_t)n);
+                for (int a = 0; a < n; a++) {
+                    int k = ed->v_ntypes ? ed->v_ntypes[a] : 0;
+                    if (k > 0) {
+                        ed->v_types[a] = (char **)xmalloc(sizeof(char *) * (size_t)k);
+                        for (int f = 0; f < k; f++)
+                            ed->v_types[a][f] = s->as.enum_decl.v_types[a][f];
+                    } else {
+                        ed->v_types[a] = NULL;
+                    }
+                }
+            }
             ed->nvariants = n;
             ed->line = s->line;
             ed->values = (int32_t *)xmalloc(sizeof(int32_t) * (n ? n : 1));
             for (int a = 0; a < n; a++)
                 ed->values[a] = (int32_t)s->as.enum_decl.values[a];
+        }
+    }
+}
+
+static int enum_payload_has_borrow(CG *cg, const char *t,
+                                   const char **visiting, int nvis) {
+    char *inner = NULL;
+    TypeWrap w = type_wrap(t, &inner);
+    if (w == TW_REF || w == TW_REFMUT || w == TW_OWN)
+        return 1;
+    if (type_is_arena(t) || type_is_link(t) || type_is_trip(t))
+        return 1;
+    if (w != TW_NONE)
+        return enum_payload_has_borrow(cg, inner, visiting, nvis);
+    if (is_opt(t))
+        return enum_payload_has_borrow(cg, opt_inner(t), visiting, nvis);
+    if (is_result(t)) {
+        char *tv, *te;
+        result_te(t, &tv, &te);
+        return enum_payload_has_borrow(cg, tv, visiting, nvis) ||
+               enum_payload_has_borrow(cg, te, visiting, nvis);
+    }
+    StructDef *sd = struct_find_canon(cg, t);
+    if (sd && !sd->is_gc) {
+        for (int i = 0; i < nvis; i++)
+            if (!strcmp(visiting[i], sd->canonical))
+                return 0;
+        if (nvis == 64)
+            return 0;
+        visiting[nvis++] = sd->canonical;
+        for (int j = 0; j < sd->nfields; j++)
+            if (enum_payload_has_borrow(cg, sd->ftypes[j], visiting, nvis))
+                return 1;
+        return 0;
+    }
+    EnumDef *ed = enum_find_canon(cg, t);
+    if (ed && ed->has_payload) {
+        for (int i = 0; i < nvis; i++)
+            if (!strcmp(visiting[i], ed->canonical))
+                return 0;
+        if (nvis == 64)
+            return 0;
+        visiting[nvis++] = ed->canonical;
+        for (int v = 0; v < ed->nvariants; v++)
+            for (int f = 0; f < ed->v_ntypes[v]; f++)
+                if (enum_payload_has_borrow(cg, ed->v_types[v][f], visiting,
+                                            nvis))
+                    return 1;
+    }
+    return 0;
+}
+
+void canon_enum_payloads(CG *cg) {
+    /* Pass A: canonicalize every variant payload type string before
+     * checking cross-enum dependencies in Pass B. */
+    for (int i = 0; i < cg->enums.count; i++) {
+        EnumDef *ed = &cg->enums.items[i];
+        if (!ed->has_payload)
+            continue;
+        const char *saved_pkg = cg->cur_pkg;
+        cg->cur_pkg = ed->pkg;
+        cg_lookup_reset(cg);
+        for (int v = 0; v < ed->nvariants; v++) {
+            for (int f = 0; f < ed->v_ntypes[v]; f++) {
+                const char *ct = canon_type(cg, ed->v_types[v][f], ed->line);
+                if (!strcmp(ct, "void"))
+                    cg_error(ed->line,
+                             "enum '%s' variant '%s' cannot have 'void' payload",
+                             ed->name, ed->variants[v]);
+                ed->v_types[v][f] = (char *)ct;
+            }
+        }
+        cg->cur_pkg = saved_pkg;
+    }
+    /* Pass B: enforce copy/no-drop/non-borrowed payload invariant in v1. */
+    for (int i = 0; i < cg->enums.count; i++) {
+        EnumDef *ed = &cg->enums.items[i];
+        if (!ed->has_payload)
+            continue;
+        for (int v = 0; v < ed->nvariants; v++) {
+            for (int f = 0; f < ed->v_ntypes[v]; f++) {
+                const char *pt = ed->v_types[v][f];
+                const char *vis[64];
+                if (!type_is_copy(cg, pt) || type_needs_drop(cg, pt) ||
+                    enum_payload_has_borrow(cg, pt, vis, 0)) {
+                    cg_error(ed->line,
+                             "enum '%s' variant '%s' payload type '%s' "
+                             "cannot be non-copy or borrowed; use a value "
+                             "type or 'gc struct'",
+                             ed->name, ed->variants[v], pt);
+                }
+            }
         }
     }
 }
@@ -158,25 +286,44 @@ static EnumDef *enum_ref(CG *cg, const char *pkg, const char *dotted,
     return ed;
 }
 
+static int enum_variant_idx(EnumDef *ed, const char *name) {
+    for (int i = 0; i < ed->nvariants; i++) {
+        if (!strcmp(ed->variants[i], name))
+            return i;
+    }
+    return -1;
+}
+
+static void make_enum_ctor(Expr *e, EnumDef *ed, int idx, Expr **args, int nargs) {
+    e->kind = EX_CALL;
+    e->as.call.name = xstrdup("__enum_ctor");
+    e->as.call.callee = NULL;
+    e->as.call.args = args;
+    e->as.call.nargs = nargs;
+    e->as.call.enum_ty = ed->canonical;
+    e->as.call.enum_variant = idx;
+    e->as.call.gsig = NULL;
+}
+
 static void resolve_ident(CG *cg, const char *pkg, Expr *e) {
     char *right;
     EnumDef *ed = enum_ref(cg, pkg, e->as.ident.name, &right, e->line);
     if (!ed)
         return; /* not an enum reference -- leave for the usual
                   * package/field resolution in infer.c */
-    int32_t val = 0;
-    int found = 0;
-    for (int i = 0; i < ed->nvariants; i++) {
-        if (!strcmp(ed->variants[i], right)) {
-            val = ed->values[i];
-            found = 1;
-            break;
-        }
-    }
-    if (!found)
+    int idx = enum_variant_idx(ed, right);
+    if (idx < 0)
         cg_error(e->line, "enum '%s' has no variant '%s'", ed->name, right);
+    if (ed->has_payload) {
+        if (ed->v_ntypes[idx] > 0)
+            cg_error(e->line,
+                     "variant '%s.%s' requires %d payload argument(s)",
+                     ed->name, right, ed->v_ntypes[idx]);
+        make_enum_ctor(e, ed, idx, NULL, 0);
+        return;
+    }
     e->kind = EX_INT;
-    e->as.int_lit.value = val;
+    e->as.int_lit.value = ed->values[idx];
     e->as.int_lit.big_u64 = 0;
     e->as.int_lit.enum_ty = ed->canonical;
 }
@@ -188,18 +335,40 @@ static void resolve_call_name(CG *cg, const char *pkg, Expr *e) {
     EnumDef *ed = enum_ref(cg, pkg, e->as.call.name, &right, e->line);
     if (!ed)
         return;
-    if (!strcmp(right, "from_int")) {
-        e->as.call.name = xstrdup("__enum_from_int");
+    if (!strcmp(right, "from_int") || !strcmp(right, "from_str")) {
+        if (ed->has_payload)
+            cg_error(e->line,
+                     "'%s' is only supported on unit-only enums, not tagged "
+                     "enum '%s'",
+                     right, ed->name);
+        e->as.call.name = xstrdup(!strcmp(right, "from_int")
+                                      ? "__enum_from_int"
+                                      : "__enum_from_str");
         e->as.call.enum_ty = ed->canonical;
-    } else if (!strcmp(right, "from_str")) {
-        e->as.call.name = xstrdup("__enum_from_str");
-        e->as.call.enum_ty = ed->canonical;
-    } else {
+        return;
+    }
+    int idx = enum_variant_idx(ed, right);
+    if (idx < 0) {
         cg_error(e->line,
-                 "enum '%s' has no associated function '%s' (only "
-                 "from_int/from_str)",
+                 "enum '%s' has no variant or associated function '%s'",
                  ed->name, right);
     }
+    if (!ed->has_payload)
+        cg_error(e->line,
+                 "enum '%s' variant '%s' has no payload and cannot be called "
+                 "like a function",
+                 ed->name, right);
+    if (ed->v_ntypes[idx] == 0)
+        cg_error(e->line,
+                 "unit variant '%s.%s' takes no arguments; omit '()'",
+                 ed->name, right);
+    if (e->as.call.nargs != ed->v_ntypes[idx])
+        cg_error(e->line,
+                 "variant '%s.%s' expects %d argument(s), got %d",
+                 ed->name, right, ed->v_ntypes[idx], e->as.call.nargs);
+    e->as.call.name = xstrdup("__enum_ctor");
+    e->as.call.enum_ty = ed->canonical;
+    e->as.call.enum_variant = idx;
 }
 
 /* The enum an `EX_IDENT` of the form `pkg.Enum` names, or NULL. */
@@ -229,53 +398,112 @@ static EnumDef *enum_of_qualified(CG *cg, const char *pkg, Expr *base,
     return ed;
 }
 
-/* `pkg.Enum.Variant` -> the variant's value. */
+/* `pkg.Enum.Variant` -> the variant's value or unit constructor. */
 static int resolve_dotted_variant(CG *cg, const char *pkg, Expr *e) {
     EnumDef *ed = enum_of_qualified(cg, pkg, e->as.field.base, e->line);
     if (!ed)
         return 0;
     const char *name = e->as.field.name;
-    for (int i = 0; i < ed->nvariants; i++) {
-        if (!strcmp(ed->variants[i], name)) {
-            int32_t val = ed->values[i];
-            e->kind = EX_INT;
-            e->as.int_lit.value = val;
-            e->as.int_lit.big_u64 = 0;
-            e->as.int_lit.enum_ty = ed->canonical;
-            return 1;
-        }
+    int idx = enum_variant_idx(ed, name);
+    if (idx < 0)
+        cg_error(e->line, "enum '%s' has no variant '%s'", ed->name, name);
+    if (ed->has_payload) {
+        if (ed->v_ntypes[idx] > 0)
+            cg_error(e->line,
+                     "variant '%s.%s' requires %d payload argument(s)",
+                     ed->name, name, ed->v_ntypes[idx]);
+        make_enum_ctor(e, ed, idx, NULL, 0);
+        return 1;
     }
-    cg_error(e->line, "enum '%s' has no variant '%s'", ed->name, name);
-    return 0;
+    e->kind = EX_INT;
+    e->as.int_lit.value = ed->values[idx];
+    e->as.int_lit.big_u64 = 0;
+    e->as.int_lit.enum_ty = ed->canonical;
+    return 1;
 }
 
-/* `pkg.Enum.from_str(s)` / `from_int(n)` -> the builtin call. */
+/* `pkg.Enum.from_str(s)` / `from_int(n)` / `pkg.Enum.Variant(args...)`. */
 static int resolve_dotted_assoc(CG *cg, const char *pkg, Expr *e) {
     EnumDef *ed = enum_of_qualified(cg, pkg, e->as.method.recv, e->line);
     if (!ed)
         return 0;
     const char *name = e->as.method.name;
-    const char *builtin = NULL;
-    if (!strcmp(name, "from_int"))
-        builtin = "__enum_from_int";
-    else if (!strcmp(name, "from_str"))
-        builtin = "__enum_from_str";
-    else
-        cg_error(e->line,
-                 "enum '%s' has no associated function '%s' (only "
-                 "from_int/from_str)",
-                 ed->name, name);
     Expr **args = e->as.method.args;
     int nargs = e->as.method.nargs;
+    if (!strcmp(name, "from_int") || !strcmp(name, "from_str")) {
+        if (ed->has_payload)
+            cg_error(e->line,
+                     "'%s' is only supported on unit-only enums, not tagged "
+                     "enum '%s'",
+                     name, ed->name);
+        for (int i = 0; i < nargs; i++)
+            resolve_expr(cg, pkg, args[i]);
+        e->kind = EX_CALL;
+        e->as.call.name = xstrdup(!strcmp(name, "from_int")
+                                      ? "__enum_from_int"
+                                      : "__enum_from_str");
+        e->as.call.args = args;
+        e->as.call.nargs = nargs;
+        e->as.call.callee = NULL;
+        e->as.call.enum_ty = ed->canonical;
+        return 1;
+    }
+    int idx = enum_variant_idx(ed, name);
+    if (idx < 0)
+        cg_error(e->line,
+                 "enum '%s' has no variant or associated function '%s'",
+                 ed->name, name);
+    if (!ed->has_payload)
+        cg_error(e->line,
+                 "enum '%s' variant '%s' has no payload and cannot be called "
+                 "like a function",
+                 ed->name, name);
+    if (ed->v_ntypes[idx] == 0)
+        cg_error(e->line,
+                 "unit variant '%s.%s' takes no arguments; omit '()'",
+                 ed->name, name);
+    if (nargs != ed->v_ntypes[idx])
+        cg_error(e->line,
+                 "variant '%s.%s' expects %d argument(s), got %d",
+                 ed->name, name, ed->v_ntypes[idx], nargs);
     for (int i = 0; i < nargs; i++)
         resolve_expr(cg, pkg, args[i]);
-    e->kind = EX_CALL;
-    e->as.call.name = xstrdup(builtin);
-    e->as.call.args = args;
-    e->as.call.nargs = nargs;
-    e->as.call.callee = NULL;
-    e->as.call.enum_ty = ed->canonical;
+    make_enum_ctor(e, ed, idx, args, nargs);
     return 1;
+}
+
+static void resolve_switch_label(CG *cg, const char *pkg, Expr *lb) {
+    if (!lb)
+        return;
+    if (lb->kind == EX_IDENT) {
+        char *right;
+        EnumDef *ed = enum_ref(cg, pkg, lb->as.ident.name, &right, lb->line);
+        if (ed) {
+            int idx = enum_variant_idx(ed, right);
+            if (idx < 0)
+                cg_error(lb->line, "enum '%s' has no variant '%s'",
+                         ed->name, right);
+            lb->kind = EX_INT;
+            lb->as.int_lit.value = ed->values[idx];
+            lb->as.int_lit.big_u64 = 0;
+            lb->as.int_lit.enum_ty = ed->canonical;
+            return;
+        }
+    } else if (lb->kind == EX_FIELD) {
+        EnumDef *ed = enum_of_qualified(cg, pkg, lb->as.field.base, lb->line);
+        if (ed) {
+            int idx = enum_variant_idx(ed, lb->as.field.name);
+            if (idx < 0)
+                cg_error(lb->line, "enum '%s' has no variant '%s'",
+                         ed->name, lb->as.field.name);
+            lb->kind = EX_INT;
+            lb->as.int_lit.value = ed->values[idx];
+            lb->as.int_lit.big_u64 = 0;
+            lb->as.int_lit.enum_ty = ed->canonical;
+            return;
+        }
+    }
+    resolve_expr(cg, pkg, lb);
 }
 
 static void resolve_expr(CG *cg, const char *pkg, Expr *e) {
@@ -352,7 +580,8 @@ static void resolve_expr(CG *cg, const char *pkg, Expr *e) {
         resolve_expr(cg, pkg, e->as.switch_expr.scrut);
         for (int i = 0; i < e->as.switch_expr.ncases; i++) {
             for (int j = 0; j < e->as.switch_expr.cases[i].nvals; j++)
-                resolve_expr(cg, pkg, e->as.switch_expr.cases[i].vals[j]);
+                resolve_switch_label(cg, pkg,
+                                     e->as.switch_expr.cases[i].vals[j]);
             resolve_expr(cg, pkg, e->as.switch_expr.cases[i].value);
         }
         resolve_expr(cg, pkg, e->as.switch_expr.def);
@@ -414,6 +643,9 @@ static void resolve_stmt(CG *cg, const char *pkg, Stmt *s) {
     case ST_SPAWN:
         resolve_expr(cg, pkg, s->as.spawn.call);
         return;
+    case ST_DEFER:
+        resolve_expr(cg, pkg, s->as.defer_stmt.call);
+        return;
     case ST_UNSAFE:
         resolve_block(cg, pkg, s->as.unsafe_blk.body);
         return;
@@ -422,6 +654,7 @@ static void resolve_stmt(CG *cg, const char *pkg, Stmt *s) {
             SelectCase *c = &s->as.select_stmt.cases[i];
             resolve_expr(cg, pkg, c->ch);
             resolve_expr(cg, pkg, c->val);
+            resolve_expr(cg, pkg, c->guard);
             resolve_block(cg, pkg, c->body);
         }
         resolve_block(cg, pkg, s->as.select_stmt.def);
@@ -430,7 +663,8 @@ static void resolve_stmt(CG *cg, const char *pkg, Stmt *s) {
         resolve_expr(cg, pkg, s->as.switch_stmt.scrut);
         for (int i = 0; i < s->as.switch_stmt.ncases; i++) {
             for (int j = 0; j < s->as.switch_stmt.cases[i].nvals; j++)
-                resolve_expr(cg, pkg, s->as.switch_stmt.cases[i].vals[j]);
+                resolve_switch_label(cg, pkg,
+                                     s->as.switch_stmt.cases[i].vals[j]);
             resolve_block(cg, pkg, s->as.switch_stmt.cases[i].body);
         }
         resolve_block(cg, pkg, s->as.switch_stmt.def);
@@ -482,6 +716,88 @@ void resolve_enum_refs(CG *cg, Package *pkgs, int npkgs) {
 
 /* ---- emission -------------------------------------------------------- */
 
+void emit_enum_fwd_decls(CG *cg) {
+    int any = 0;
+    for (int i = 0; i < cg->enums.count; i++) {
+        EnumDef *ed = &cg->enums.items[i];
+        if (!ed->has_payload)
+            continue;
+        char *m = mangle_enum(ed->canonical);
+        emit_line(cg, "typedef struct %s %s;", m, m);
+        any = 1;
+    }
+    if (any)
+        emit_line(cg, "");
+}
+
+void emit_enum_body(CG *cg, EnumDef *ed, unsigned char *sstate, int line) {
+    if (!ed->has_payload)
+        return;
+    if (ed->body_state == 2)
+        return;
+    if (ed->body_state == 1)
+        cg_error(line ? line : ed->line,
+                 "cannot lay out enum '%s': it contains itself by value, which "
+                 "would need an infinitely large value; wrap the recursive "
+                 "field in a 'gc struct'",
+                 ed->canonical);
+    ed->body_state = 1;
+    for (int v = 0; v < ed->nvariants; v++) {
+        for (int f = 0; f < ed->v_ntypes[v]; f++)
+            emit_value_dep(cg, ed->v_types[v][f], sstate, ed->line);
+    }
+    char *m = mangle_enum(ed->canonical);
+    emit_line(cg, "struct %s {", m);
+    cg->indent++;
+    emit_line(cg, "int32_t tag;");
+    emit_line(cg, "union {");
+    cg->indent++;
+    for (int v = 0; v < ed->nvariants; v++) {
+        if (ed->v_ntypes[v] == 0)
+            continue;
+        emit_line(cg, "struct {");
+        cg->indent++;
+        for (int f = 0; f < ed->v_ntypes[v]; f++)
+            emit_line(cg, "%s _%d;", ctype_of(cg, ed->v_types[v][f]), f);
+        cg->indent--;
+        emit_line(cg, "} v%d;", v);
+    }
+    cg->indent--;
+    emit_line(cg, "} u;");
+    cg->indent--;
+    emit_line(cg, "};");
+    for (int v = 0; v < ed->nvariants; v++) {
+        int nf = ed->v_ntypes[v];
+        StrBuf params;
+        sb_init(&params);
+        if (nf == 0) {
+            sb_append(&params, "void");
+        } else {
+            for (int f = 0; f < nf; f++) {
+                if (f)
+                    sb_append(&params, ", ");
+                sb_append(&params,
+                          xasprintf("%s _a%d", ctype_of(cg, ed->v_types[v][f]),
+                                    f));
+            }
+        }
+        emit_line(cg,
+                  "static inline __attribute__((unused)) %s %s_mk_v%d(%s) {",
+                  m, m, v, params.data);
+        cg->indent++;
+        emit_line(cg, "%s _v;", m);
+        emit_line(cg, "memset(&_v, 0, sizeof(_v));");
+        emit_line(cg, "_v.tag = %d;", (int)ed->values[v]);
+        for (int f = 0; f < nf; f++)
+            emit_line(cg, "_v.u.v%d._%d = _a%d;", v, f, f);
+        emit_line(cg, "return _v;");
+        cg->indent--;
+        emit_line(cg, "}");
+    }
+    emit_line(cg, "");
+    ed->body_state = 2;
+}
+
 void emit_enum_tables(CG *cg) {
     for (int i = 0; i < cg->enums.count; i++) {
         EnumDef *ed = &cg->enums.items[i];
@@ -492,6 +808,11 @@ void emit_enum_tables(CG *cg) {
             const char *sep = j ? ", " : "";
             names = xasprintf("%s%s\"%s\"", names, sep, ed->variants[j]);
             values = xasprintf("%s%s%d", values, sep, ed->values[j]);
+        }
+        if (ed->has_payload) {
+            emit_line(cg, "static const char *%s_names[] __attribute__((unused)) = {%s};",
+                      m, ed->nvariants ? names : "\"\"");
+            continue;
         }
         emit_line(cg, "static const char *%s_names[] = {%s};", m,
                   ed->nvariants ? names : "\"\"");

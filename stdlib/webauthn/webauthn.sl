@@ -10,14 +10,12 @@
 //     //   browser: navigator.credentials.create({ publicKey:
 //     //              PublicKeyCredential.parseCreationOptionsFromJSON(options) })
 //     //   then POST JSON.stringify(credential) back
-//     let cr = webauthn.finish_registration(rp, ch.value, posted_json);
-//     guard let cred = cr else let e = err_of(cr) { ... }   // store cred
+//     guard let cred = webauthn.finish_registration(rp, ch.value, posted_json) else |e| { ... }   // store cred
 //
 //     // Login: the same shape.
 //     let lc = webauthn.begin_login(rp, []) ?? fail;          // [] = any passkey
 //     let id = webauthn.login_credential_id(posted_json) ?? fail;  // find the stored credential
-//     let lr = webauthn.finish_login(rp, lc.value, cred, posted_json);
-//     guard let login = lr else let e = err_of(lr) { ... }
+//     guard let login = webauthn.finish_login(rp, lc.value, cred, posted_json) else |e| { ... }
 //     cred.sign_count = login.sign_count;                     // store it back
 //
 // What is checked: the client data's type, challenge and origin (one of

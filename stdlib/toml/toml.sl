@@ -7,7 +7,7 @@
 //     struct Config { name: str, db: Db }
 //
 //     let r: result[Config, str] = toml.decode(text);
-//     guard let cfg = r else let e = err_of(r) { panic(e); }   // "toml: line 4: ..."
+//     guard let cfg = r else |e| { panic(e); }   // "toml: line 4: ..."
 //
 //     toml.to_json(text);          // result[str, str]: the same document as JSON
 //

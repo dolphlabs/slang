@@ -38,6 +38,727 @@
  * use this per-iteration enter. ST_WHILE/ST_FOR have no hidden alias
  * -- a numeric range loop's bounds are plain `long long`s -- so they
  * pass 1. */
+
+static const char *defer_root_ident(CG *cg, Expr *e) {
+    if (!e)
+        return NULL;
+    switch (e->kind) {
+    case EX_IDENT: {
+        char *left, *right;
+        if (split_dotted(e->as.ident.name, &left, &right)) {
+            if (import_try(cg, left))
+                return NULL;
+            return left;
+        }
+        return e->as.ident.name;
+    }
+    case EX_FIELD:
+        return defer_root_ident(cg, e->as.field.base);
+    case EX_INDEX:
+        return defer_root_ident(cg, e->as.index.base);
+    case EX_UNARY:
+        return defer_root_ident(cg, e->as.unary.operand);
+    default:
+        return NULL;
+    }
+}
+
+static void defer_record_borrow(CG *cg, DeferInfo *d, const char *rname,
+                                int line) {
+    if (!rname)
+        return;
+    VarSym *v = var_find(cg, rname);
+    if (!v)
+        return;
+    if (v->scope_depth > 1)
+        cg_error(line,
+                 "deferred call cannot borrow inner-scope variable '%s': "
+                 "declare '%s' at function scope or pass it by value",
+                 rname, rname);
+    if (!type_has_gc_roots(cg, v->slang))
+        return;
+    for (int i = 0; i < d->nborrows; i++) {
+        if (!strcmp(d->borrow_vars[i], rname))
+            return;
+    }
+    d->borrow_vars = (char **)xrealloc(
+        d->borrow_vars, (size_t)(d->nborrows + 1) * sizeof(char *));
+    d->borrow_tys = (const char **)xrealloc(
+        d->borrow_tys, (size_t)(d->nborrows + 1) * sizeof(const char *));
+    d->borrow_vars[d->nborrows] = xstrdup(rname);
+    d->borrow_tys[d->nborrows] = v->slang;
+    d->nborrows++;
+}
+
+void defer_add_borrow_var(CG *cg, DeferInfo *d, const char *rname, int line) {
+    defer_record_borrow(cg, d, rname, line);
+}
+
+int expr_lvalue_for_borrow(Expr *e) {
+    while (e) {
+        if (e->kind == EX_IDENT)
+            return 1;
+        if (e->kind == EX_FIELD) {
+            e = e->as.field.base;
+            continue;
+        }
+        if (e->kind == EX_UNARY && !strcmp(e->as.unary.op, "*")) {
+            e = e->as.unary.operand;
+            continue;
+        }
+        return 0;
+    }
+    return 0;
+}
+
+static void defer_check_operand_borrow(CG *cg, DeferInfo *d, Expr *op,
+                                       int line) {
+    if (!op)
+        return;
+    if (op->kind == EX_UNARY &&
+        (!strcmp(op->as.unary.op, "&") || !strcmp(op->as.unary.op, "&mut"))) {
+        const char *rn = defer_root_ident(cg, op->as.unary.operand);
+        defer_record_borrow(cg, d, rn, line);
+    }
+}
+
+DeferInfo *defer_build_info(CG *cg, Stmt *s, int id) {
+    Expr *call = s->as.defer_stmt.call;
+    const char *saved_exp = cg->expect;
+    cg->expect = NULL;
+
+    DeferInfo *d = (DeferInfo *)xmalloc(sizeof(DeferInfo));
+    memset(d, 0, sizeof(DeferInfo));
+    d->id = id;
+    d->line = s->line;
+    d->stmt = s;
+
+    const char *rt = infer_type(cg, call);
+    d->ret_ty = rt;
+
+    if (call->kind == EX_METHOD) {
+        d->is_method_expr = 1;
+        d->has_recv = 1;
+        const char *raw_recv_t = infer_type(cg, call->as.method.recv);
+        d->method_name = xstrdup(call->as.method.name);
+        StructDef *sd = NULL;
+        int fld = -1;
+        FuncSig *sig = method_target(cg, raw_recv_t, d->method_name,
+                                     call->line, &sd, &fld);
+        int argi = fld >= 0 ? 0 : 1;
+        if (fld >= 0) {
+            d->recv_ty = raw_recv_t;
+        } else {
+            const char *self_t = sig->param_slang[0];
+            char *si = NULL, *ri = NULL;
+            TypeWrap sw = type_wrap(self_t, &si);
+            TypeWrap rw = type_wrap(raw_recv_t, &ri);
+            if (sw == TW_REF || sw == TW_REFMUT) {
+                if (rw == TW_REF && sw == TW_REFMUT)
+                    cg_error(call->line,
+                             "cannot call '&mut %s' method '%s' on a shared "
+                             "reference of type %s",
+                             si, d->method_name, raw_recv_t);
+                if (sw == TW_REFMUT) {
+                    const char *sref =
+                        expr_shared_ref_base(cg, call->as.method.recv);
+                    if (sref)
+                        cg_error(call->line,
+                                 "cannot call '&mut %s' method '%s' through "
+                                 "a shared reference of type %s: declare the "
+                                 "reference as '&mut' or call a '&' method "
+                                 "instead",
+                                 si, d->method_name, sref);
+                }
+                if (expr_lvalue_for_borrow(call->as.method.recv)) {
+                    d->recv_ty = self_t;
+                    if (rw == TW_NONE) {
+                        d->recv_by_addr = 1;
+                        defer_record_borrow(
+                            cg, d, defer_root_ident(cg, call->as.method.recv),
+                            s->line);
+                    } else if (rw == TW_OWN || rw == TW_GC) {
+                        defer_record_borrow(
+                            cg, d, defer_root_ident(cg, call->as.method.recv),
+                            s->line);
+                    }
+                } else {
+                    if (sw == TW_REFMUT && rw == TW_NONE) {
+                        Expr *cur = call->as.method.recv;
+                        while (cur && cur->kind == EX_FIELD)
+                            cur = cur->as.field.base;
+                        if (cur && cur->kind == EX_INDEX)
+                            index_borrow_refused(cg, cur, 1, call->line);
+                    }
+                    d->recv_ty = raw_recv_t;
+                    if (!expr_addressable(call->as.method.recv) &&
+                        type_needs_drop(cg, raw_recv_t))
+                        d->recv_drop_after = 1;
+                }
+            } else if (sw == TW_NONE && rw == TW_OWN &&
+                       type_is_copy(cg, self_t)) {
+                d->recv_ty = self_t;
+            } else {
+                d->recv_ty = raw_recv_t;
+            }
+            free(si);
+            free(ri);
+        }
+        d->nargs = call->as.method.nargs;
+        if (d->nargs > 0) {
+            d->arg_tys = (const char **)xmalloc((size_t)d->nargs *
+                                                sizeof(const char *));
+            for (int i = 0; i < d->nargs; i++) {
+                d->arg_tys[i] = sig->param_slang[argi + i];
+                defer_check_operand_borrow(cg, d, call->as.method.args[i],
+                                           s->line);
+            }
+        }
+        defer_check_operand_borrow(cg, d, call->as.method.recv, s->line);
+        cg->expect = saved_exp;
+        return d;
+    }
+
+    const char *name = call->as.call.name;
+    d->nargs = call->as.call.nargs;
+    if (d->nargs > 0)
+        d->arg_tys = (const char **)xmalloc((size_t)d->nargs *
+                                            sizeof(const char *));
+
+    if (!strcmp(name, "print") || !strcmp(name, "println")) {
+        d->is_print = !strcmp(name, "println") ? 2 : 1;
+        d->callee_name = xstrdup(name);
+        d->arg_tys[0] = infer_type(cg, call->as.call.args[0]);
+        defer_check_operand_borrow(cg, d, call->as.call.args[0], s->line);
+        cg->expect = saved_exp;
+        return d;
+    }
+
+    if (!strcmp(name, "some") || !strcmp(name, "ok") ||
+        !strcmp(name, "err")) {
+        d->callee_name = xstrdup(name);
+        for (int i = 0; i < d->nargs; i++) {
+            d->arg_tys[i] = infer_type(cg, call->as.call.args[i]);
+            defer_check_operand_borrow(cg, d, call->as.call.args[i], s->line);
+        }
+        cg->expect = saved_exp;
+        return d;
+    }
+
+    if (is_builtin_name(name)) {
+        d->callee_name = xstrdup(name);
+        if (!strcmp(name, "push") && d->nargs == 2) {
+            d->arg_tys[0] = infer_type(cg, call->as.call.args[0]);
+            const char *el = is_arr(d->arg_tys[0]) ? arr_elem(d->arg_tys[0])
+                                                   : NULL;
+            const char *se = expect_push(cg, el);
+            const char *t1 = infer_type(cg, call->as.call.args[1]);
+            cg->expect = se;
+            d->arg_tys[1] = el ? el : t1;
+        } else if (!strcmp(name, "chan_send") && d->nargs == 2) {
+            d->arg_tys[0] = infer_type(cg, call->as.call.args[0]);
+            const char *el = is_chan(d->arg_tys[0]) ? chan_elem(d->arg_tys[0])
+                                                    : NULL;
+            const char *se = expect_push(cg, el);
+            const char *t1 = infer_type(cg, call->as.call.args[1]);
+            cg->expect = se;
+            d->arg_tys[1] = el ? el : t1;
+        } else if ((!strcmp(name, "map_del") || !strcmp(name, "has")) &&
+                   d->nargs == 2) {
+            d->arg_tys[0] = infer_type(cg, call->as.call.args[0]);
+            char *mk = NULL, *mv = NULL;
+            if (is_map(d->arg_tys[0]))
+                map_kv(d->arg_tys[0], &mk, &mv);
+            const char *se = expect_push(cg, mk);
+            const char *t1 = infer_type(cg, call->as.call.args[1]);
+            cg->expect = se;
+            d->arg_tys[1] = mk ? mk : t1;
+        } else {
+            for (int i = 0; i < d->nargs; i++)
+                d->arg_tys[i] = infer_type(cg, call->as.call.args[i]);
+        }
+        for (int i = 0; i < d->nargs; i++)
+            defer_check_operand_borrow(cg, d, call->as.call.args[i], s->line);
+        cg->expect = saved_exp;
+        return d;
+    }
+
+    char *left = NULL, *right = NULL;
+    if (split_dotted(name, &left, &right)) {
+        const char *pkg = import_try(cg, left);
+        if (pkg) {
+            d->callee_name = xstrdup(name);
+            FuncSig *sig = sig_find_in(cg, pkg, right);
+            if (!sig)
+                sig = generic_call_sig(cg, pkg, right, call);
+            for (int i = 0; i < d->nargs; i++) {
+                if (sig) {
+                    d->arg_tys[i] = sig->param_slang[i];
+                } else {
+                    d->arg_tys[i] = infer_type(cg, call->as.call.args[i]);
+                }
+                defer_check_operand_borrow(cg, d, call->as.call.args[i],
+                                           s->line);
+            }
+        } else {
+            const char *recv_t = infer_ident_name(cg, left, call->line);
+            if (type_is_arena(recv_t) || type_is_link(recv_t) ||
+                type_is_trip(recv_t)) {
+                d->has_recv = 1;
+                d->callee_name = xstrdup(left);
+                d->method_name = xstrdup(right);
+                if (type_is_arena(recv_t) || type_is_link(recv_t)) {
+                    char *innerw = NULL;
+                    if (type_wrap(recv_t, &innerw) == TW_NONE) {
+                        d->recv_by_addr = 1;
+                        d->recv_ty = xasprintf("&mut %s", recv_t);
+                        defer_record_borrow(cg, d, left, s->line);
+                    } else {
+                        d->recv_ty = recv_t;
+                    }
+                    if (type_is_link(recv_t) && !strcmp(right, "send_static"))
+                        d->is_send_static = 1;
+                } else {
+                    d->recv_ty = recv_t;
+                }
+                for (int i = 0; i < d->nargs; i++) {
+                    d->arg_tys[i] = infer_type(cg, call->as.call.args[i]);
+                    defer_check_operand_borrow(cg, d, call->as.call.args[i],
+                                               s->line);
+                }
+            } else {
+                StructDef *sd = struct_of_type(cg, recv_t);
+                int fld = -1;
+                for (int i = 0; sd && i < sd->nfields; i++) {
+                    if (!strcmp(sd->fields[i], right) &&
+                        is_fn(sd->ftypes[i])) {
+                        fld = i;
+                        break;
+                    }
+                }
+                if (fld >= 0) {
+                    d->has_cal = 1;
+                    d->cal_ty = sd->ftypes[fld];
+                    d->callee_name = xstrdup(left);
+                    d->method_name = xstrdup(right);
+                    FuncSig *sig = fn_sig_of_type(cg, d->cal_ty, name,
+                                                  call->line);
+                    for (int i = 0; i < d->nargs; i++) {
+                        d->arg_tys[i] = sig->param_slang[i];
+                        defer_check_operand_borrow(
+                            cg, d, call->as.call.args[i], s->line);
+                    }
+                } else {
+                    FuncSig *sig = method_find(cg, sd, right, call->line);
+                    d->has_recv = 1;
+                    d->callee_name = xstrdup(left);
+                    d->method_name = xstrdup(right);
+                    const char *self_t = sig->param_slang[0];
+                    char *si = NULL, *ri = NULL;
+                    TypeWrap sw = type_wrap(self_t, &si);
+                    TypeWrap rw = type_wrap(recv_t, &ri);
+                    if (sw == TW_REF || sw == TW_REFMUT) {
+                        if (rw == TW_REF && sw == TW_REFMUT)
+                            cg_error(call->line,
+                                     "cannot call '&mut %s' method '%s' on a "
+                                     "shared reference of type %s",
+                                     si, right, recv_t);
+                        d->recv_ty = self_t;
+                        if (rw == TW_NONE) {
+                            d->recv_by_addr = 1;
+                            defer_record_borrow(cg, d, left, s->line);
+                        } else if (rw == TW_OWN || rw == TW_GC) {
+                            defer_record_borrow(cg, d, left, s->line);
+                        }
+                    } else if (sw == TW_NONE && rw == TW_OWN &&
+                               type_is_copy(cg, self_t)) {
+                        d->recv_ty = self_t;
+                    } else {
+                        d->recv_ty = recv_t;
+                    }
+                    free(si);
+                    free(ri);
+                    for (int i = 0; i < d->nargs; i++) {
+                        d->arg_tys[i] = sig->param_slang[1 + i];
+                        defer_check_operand_borrow(
+                            cg, d, call->as.call.args[i], s->line);
+                    }
+                }
+            }
+        }
+    } else if (call->as.call.callee) {
+        d->has_cal = 1;
+        d->cal_ty = infer_type(cg, call->as.call.callee);
+        FuncSig *sig = fn_sig_of_type(cg, d->cal_ty, "<function value>",
+                                      call->line);
+        for (int i = 0; i < d->nargs; i++) {
+            d->arg_tys[i] = sig->param_slang[i];
+            defer_check_operand_borrow(cg, d, call->as.call.args[i], s->line);
+        }
+    } else {
+        const char *fvt = fn_var_type(cg, name);
+        if (fvt) {
+            d->has_cal = 1;
+            d->cal_ty = fvt;
+            d->callee_name = xstrdup(name);
+            FuncSig *sig = fn_sig_of_type(cg, fvt, name, call->line);
+            for (int i = 0; i < d->nargs; i++) {
+                d->arg_tys[i] = sig->param_slang[i];
+                defer_check_operand_borrow(cg, d, call->as.call.args[i],
+                                           s->line);
+            }
+        } else {
+            d->callee_name = xstrdup(name);
+            FuncSig *sig = sig_find_in(cg, cg->cur_pkg, name);
+            if (!sig)
+                sig = generic_call_sig(cg, cg->cur_pkg, name, call);
+            for (int i = 0; i < d->nargs; i++) {
+                d->arg_tys[i] = sig->param_slang[i];
+                defer_check_operand_borrow(cg, d, call->as.call.args[i],
+                                           s->line);
+            }
+        }
+    }
+
+    cg->expect = saved_exp;
+    return d;
+}
+
+void defer_push_fn(CG *cg, DeferInfo *d) {
+    for (int i = 0; i < cg->fn_ndefers; i++) {
+        if (cg->fn_defers[i] == d)
+            return;
+    }
+    if (cg->fn_ndefers == cg->fn_defer_cap) {
+        cg->fn_defer_cap = cg->fn_defer_cap ? cg->fn_defer_cap * 2 : 8;
+        cg->fn_defers = (DeferInfo **)xrealloc(
+            cg->fn_defers, (size_t)cg->fn_defer_cap * sizeof(DeferInfo *));
+    }
+    cg->fn_defers[cg->fn_ndefers++] = d;
+}
+
+static void defer_push_slot_sym(CG *cg, const char *name, const char *slang,
+                                int defer_id) {
+    var_push(cg, name, slang);
+    VarSym *v = &cg->vars.items[cg->vars.count - 1];
+    v->drop = 0;
+    v->defer_id = defer_id;
+}
+
+void defer_register_fn_slots(CG *cg, DeferInfo *d) {
+    if (d->has_cal) {
+        char *cn = xasprintf("_sl_def_%d_cal", d->id);
+        if (!var_find(cg, cn))
+            defer_push_slot_sym(cg, cn, d->cal_ty, d->id);
+    }
+    if (d->has_recv) {
+        char *rn = xasprintf("_sl_def_%d_r", d->id);
+        if (!var_find(cg, rn))
+            defer_push_slot_sym(cg, rn, d->recv_ty, d->id);
+    }
+    for (int i = 0; i < d->nargs; i++) {
+        if (i == 0 && d->is_send_static)
+            continue;
+        char *an = xasprintf("_sl_def_%d_a%d", d->id, i);
+        if (!var_find(cg, an))
+            defer_push_slot_sym(cg, an, d->arg_tys[i], d->id);
+    }
+}
+
+static void defer_collect_block(CG *cg, Block *b);
+
+static void defer_collect_stmt(CG *cg, Stmt *s) {
+    if (!s)
+        return;
+    switch (s->kind) {
+    case ST_DEFER: {
+        DeferInfo *d = (DeferInfo *)s->as.defer_stmt.defer_info;
+        if (d) {
+            defer_push_fn(cg, d);
+            defer_register_fn_slots(cg, d);
+        }
+        return;
+    }
+    case ST_IF:
+        defer_collect_block(cg, s->as.if_stmt.then_blk);
+        defer_collect_block(cg, s->as.if_stmt.else_blk);
+        return;
+    case ST_WHILE:
+        defer_collect_block(cg, s->as.while_stmt.body);
+        return;
+    case ST_FOR:
+        defer_collect_block(cg, s->as.for_stmt.body);
+        return;
+    case ST_FOR_IN:
+        defer_collect_block(cg, s->as.for_in.body);
+        return;
+    case ST_GUARD_LET:
+        defer_collect_block(cg, s->as.guard_let.body);
+        return;
+    case ST_IF_LET:
+        defer_collect_block(cg, s->as.if_let.then_blk);
+        defer_collect_block(cg, s->as.if_let.else_blk);
+        return;
+    case ST_UNSAFE:
+        defer_collect_block(cg, s->as.unsafe_blk.body);
+        return;
+    case ST_SELECT:
+        for (int i = 0; i < s->as.select_stmt.ncases; i++)
+            defer_collect_block(cg, s->as.select_stmt.cases[i].body);
+        defer_collect_block(cg, s->as.select_stmt.def);
+        return;
+    case ST_SWITCH:
+        for (int i = 0; i < s->as.switch_stmt.ncases; i++)
+            defer_collect_block(cg, s->as.switch_stmt.cases[i].body);
+        defer_collect_block(cg, s->as.switch_stmt.def);
+        return;
+    default:
+        return;
+    }
+}
+
+static void defer_collect_block(CG *cg, Block *b) {
+    if (!b)
+        return;
+    for (int i = 0; i < b->count; i++)
+        defer_collect_stmt(cg, b->stmts[i]);
+}
+
+void defer_collect_fn_defers(CG *cg, Block *b) {
+    defer_collect_block(cg, b);
+}
+
+void defer_emit_fn_decls_at(CG *cg, size_t decl_at) {
+    if (cg->fn_ndefers == 0)
+        return;
+    StrBuf db;
+    sb_init(&db);
+    for (int k = 0; k < cg->fn_ndefers; k++) {
+        DeferInfo *d = cg->fn_defers[k];
+        sb_append(&db, xasprintf("    unsigned char _sl_def_act_%d = 0;\n",
+                                 d->id));
+        if (d->has_cal) {
+            const char *ct = ctype_defer_slot(cg, d->cal_ty);
+            sb_append(&db,
+                      xasprintf("    %s _sl_def_%d_cal; "
+                                "memset(&_sl_def_%d_cal, 0, "
+                                "sizeof(_sl_def_%d_cal));\n",
+                                ct, d->id, d->id, d->id));
+        }
+        if (d->has_recv) {
+            const char *ct = ctype_defer_slot(cg, d->recv_ty);
+            sb_append(&db,
+                      xasprintf("    %s _sl_def_%d_r; "
+                                "memset(&_sl_def_%d_r, 0, "
+                                "sizeof(_sl_def_%d_r));\n",
+                                ct, d->id, d->id, d->id));
+        }
+        for (int i = 0; i < d->nargs; i++) {
+            if (i == 0 && d->is_send_static)
+                continue;
+            const char *ct = ctype_defer_slot(cg, d->arg_tys[i]);
+            sb_append(&db,
+                      xasprintf("    %s _sl_def_%d_a%d; "
+                                "memset(&_sl_def_%d_a%d, 0, "
+                                "sizeof(_sl_def_%d_a%d));\n",
+                                ct, d->id, i, d->id, i, d->id, i));
+        }
+    }
+    if (cg->out->len + db.len + 1 > cg->out->cap) {
+        while (cg->out->len + db.len + 1 > cg->out->cap)
+            cg->out->cap *= 2;
+        cg->out->data = (char *)xrealloc(cg->out->data, cg->out->cap);
+    }
+    memmove(cg->out->data + decl_at + db.len, cg->out->data + decl_at,
+            cg->out->len - decl_at + 1);
+    memcpy(cg->out->data + decl_at, db.data, db.len);
+    cg->out->len += db.len;
+}
+
+void push_defer_gc_roots(CG *cg, DeferInfo *d) {
+    char *act = xasprintf("_sl_def_act_%d", d->id);
+    if (d->has_recv && type_has_gc_roots(cg, d->recv_ty))
+        ambient_push_guarded_value_roots(
+            cg, act, xasprintf("_sl_def_%d_r", d->id), d->recv_ty);
+    for (int i = 0; i < d->nargs; i++) {
+        if (i == 0 && d->is_send_static)
+            continue;
+        if (type_has_gc_roots(cg, d->arg_tys[i]))
+            ambient_push_guarded_value_roots(
+                cg, act, xasprintf("_sl_def_%d_a%d", d->id, i), d->arg_tys[i]);
+    }
+    for (int i = 0; i < d->nborrows; i++) {
+        VarSym *bv = var_find(cg, d->borrow_vars[i]);
+        if (!bv)
+            continue;
+        char *cn = sanitize_ident(d->borrow_vars[i]);
+        char *bw_inner = NULL;
+        TypeWrap bw = type_wrap(d->borrow_tys[i], &bw_inner);
+        free(bw_inner);
+        const char *grd =
+            bv->drop ? xasprintf("%s && _sl_d_%s", act, cn) : act;
+        if (bv->stack && bw != TW_OWN) {
+            char *iw = NULL;
+            TypeWrap w = type_wrap(bv->slang, &iw);
+            const char *boxed = NULL;
+            if (w == TW_GC)
+                boxed = type_has_gc_roots(cg, iw) ? iw : NULL;
+            else if (w == TW_NONE && struct_type_is_gc(cg, bv->slang))
+                boxed = bv->slang;
+            if (boxed) {
+                StructDef *sd = struct_find_canon(cg, boxed);
+                if (sd && sd->is_gc) {
+                    for (int j = 0; j < sd->nfields; j++) {
+                        if (!type_has_gc_roots(cg, sd->ftypes[j]))
+                            continue;
+                        ambient_push_guarded_value_roots(
+                            cg, grd,
+                            xasprintf("(*%s).%s", cn,
+                                      sanitize_ident(sd->fields[j])),
+                            sd->ftypes[j]);
+                    }
+                } else {
+                    ambient_push_guarded_value_roots(
+                        cg, grd, xasprintf("(*%s)", cn), boxed);
+                }
+            }
+            free(iw);
+        } else {
+            ambient_push_guarded_value_roots(cg, grd, cn, d->borrow_tys[i]);
+        }
+    }
+}
+
+static Expr *defer_make_ident(const char *name, int line) {
+    Expr *e = (Expr *)xmalloc(sizeof(Expr));
+    memset(e, 0, sizeof(Expr));
+    e->kind = EX_IDENT;
+    e->line = line;
+    e->as.ident.name = xstrdup(name);
+    return e;
+}
+
+static void defer_emit_call(CG *cg, DeferInfo *d) {
+    int pushed_tmp_scope = 0;
+    int need_tmp_scope = 0;
+    if (d->has_cal && !var_find(cg, xasprintf("_sl_def_%d_cal", d->id)))
+        need_tmp_scope = 1;
+    if (d->has_recv && !var_find(cg, xasprintf("_sl_def_%d_r", d->id)))
+        need_tmp_scope = 1;
+    for (int i = 0; i < d->nargs; i++) {
+        if (i == 0 && d->is_send_static)
+            continue;
+        if (!var_find(cg, xasprintf("_sl_def_%d_a%d", d->id, i)))
+            need_tmp_scope = 1;
+    }
+    if (need_tmp_scope) {
+        pushed_tmp_scope = 1;
+        var_scope_push(cg);
+        defer_register_fn_slots(cg, d);
+    }
+
+    if (d->is_print) {
+        char *an = xasprintf("_sl_def_%d_a0", d->id);
+        gen_print_val(cg, d->arg_tys[0], an, d->is_print == 2, d->line);
+        if (pushed_tmp_scope)
+            var_scope_pop(cg);
+        return;
+    }
+
+    Expr syn;
+    memset(&syn, 0, sizeof(syn));
+    syn.line = d->line;
+    Expr *orig = d->stmt->as.defer_stmt.call;
+
+    if (d->is_method_expr) {
+        syn.kind = EX_METHOD;
+        syn.as.method.recv =
+            defer_make_ident(xasprintf("_sl_def_%d_r", d->id), d->line);
+        syn.as.method.name = d->method_name;
+        syn.as.method.nargs = d->nargs;
+        if (d->nargs > 0) {
+            syn.as.method.args =
+                (Expr **)xmalloc((size_t)d->nargs * sizeof(Expr *));
+            for (int i = 0; i < d->nargs; i++)
+                syn.as.method.args[i] = defer_make_ident(
+                    xasprintf("_sl_def_%d_a%d", d->id, i), d->line);
+        }
+    } else {
+        syn.kind = EX_CALL;
+        if (d->has_cal) {
+            syn.as.call.name = xasprintf("_sl_def_%d_cal", d->id);
+        } else if (d->has_recv) {
+            syn.as.call.name =
+                xasprintf("_sl_def_%d_r.%s", d->id, d->method_name);
+        } else {
+            syn.as.call.name = d->callee_name;
+            syn.as.call.enum_ty = orig->as.call.enum_ty;
+            syn.as.call.gsig = orig->as.call.gsig;
+        }
+        syn.as.call.nargs = d->nargs;
+        if (d->nargs > 0) {
+            syn.as.call.args =
+                (Expr **)xmalloc((size_t)d->nargs * sizeof(Expr *));
+            for (int i = 0; i < d->nargs; i++) {
+                if (i == 0 && d->is_send_static)
+                    syn.as.call.args[i] = orig->as.call.args[0];
+                else
+                    syn.as.call.args[i] = defer_make_ident(
+                        xasprintf("_sl_def_%d_a%d", d->id, i), d->line);
+            }
+        }
+    }
+
+    const char *saved_exp = cg->expect;
+    cg->expect = (d->ret_ty && strcmp(d->ret_ty, "void")) ? d->ret_ty : NULL;
+    char *code = gen_expr(cg, &syn);
+    cg->expect = saved_exp;
+
+    if (d->ret_ty && strcmp(d->ret_ty, "void") &&
+        type_needs_drop(cg, d->ret_ty)) {
+        int dr_id = cg->tmp_id++;
+        char *dr_name = xasprintf("_sl_def_ret_%d", dr_id);
+        emit_line(cg, "{");
+        cg->indent++;
+        emit_line(cg, "%s %s = %s;", ctype_of(cg, d->ret_ty), dr_name, code);
+        emit_drop_ty(cg, dr_name, d->ret_ty, 0);
+        cg->indent--;
+        emit_line(cg, "}");
+    } else {
+        emit_line(cg, "(void)(%s);", code);
+    }
+
+    if (pushed_tmp_scope)
+        var_scope_pop(cg);
+}
+
+void emit_defers_exit(CG *cg, const char *ret_ty, const char *ret_expr) {
+    if (cg->fn_ndefers == 0)
+        return;
+    int ambient_mark = cg->ambient_count;
+    if (ret_ty && ret_expr && type_has_gc_roots(cg, ret_ty))
+        ambient_push_value_roots(cg, ret_expr, ret_ty);
+    int saved_cleanup = cg->in_defer_cleanup;
+    cg->in_defer_cleanup = 1;
+    for (int idx = cg->fn_ndefers - 1; idx >= 0; idx--) {
+        DeferInfo *d = cg->fn_defers[idx];
+        int inner_mark = cg->ambient_count;
+        for (int j = 0; j <= idx; j++)
+            push_defer_gc_roots(cg, cg->fn_defers[j]);
+        emit_line(cg, "if (_sl_def_act_%d) {", d->id);
+        cg->indent++;
+        defer_emit_call(cg, d);
+        if (d->recv_drop_after)
+            emit_drop_ty(cg, xasprintf("_sl_def_%d_r", d->id), d->recv_ty, 0);
+        emit_line(cg, "_sl_def_act_%d = 0;", d->id);
+        cg->indent--;
+        emit_line(cg, "}");
+        cg->ambient_count = inner_mark;
+    }
+    cg->in_defer_cleanup = saved_cleanup;
+    cg->ambient_count = ambient_mark;
+}
+
 static int emit_backedge_enter(CG *cg, void *backedge_live_set,
                                 int direct_yield_ok, int edge_id,
                                 const char *extra_root) {
@@ -605,6 +1326,7 @@ static int stmt_is_leaf(CG *cg, Stmt *s) {
         return block_is_leaf(cg, s->as.switch_stmt.def);
     }
     case ST_SPAWN:
+    case ST_DEFER:
     case ST_SELECT:
     case ST_STRUCT:
     case ST_ENUM:
@@ -921,11 +1643,59 @@ void gen_stmt(CG *cg, Stmt *s) {
                 const char *lt = cur->kind == EX_INDEX
                                      ? infer_type(cg, cur->as.index.base)
                                      : NULL;
-                if (lt && is_map(lt))
-                    cg_error(s->line,
-                             "cannot assign to a field of a map value "
-                             "(it is a copy); read it into a local, change "
-                             "the field, and store it back with m[k] = v");
+                /* m[k].f = v: the same store through the value's slot.
+                 * The address is taken after the value is evaluated, since
+                 * the value may insert into the map and grow it. A missing
+                 * key fails as reading m[k] does. The store takes the
+                 * barrier an update through sl_map_put takes. */
+                if (lt && is_map(lt)) {
+                    char *mk, *mv;
+                    map_kv(lt, &mk, &mv);
+                    const char *kc = ctype_of(cg, mk);
+                    const char *vc = ctype_of(cg, mv);
+                    const char *ft = sd->ftypes[fi];
+                    StrBuf prelude;
+                    sb_init(&prelude);
+                    int lid = cg->tmp_id++;
+                    int ambient_mark = cg->ambient_count;
+                    char *mb = gen_expr(cg, cur->as.index.base);
+                    mb = sequence_one(cg, lid, 0, ctype_of(cg, lt), lt, mb,
+                                      cur->as.index.base, &prelude);
+                    const char *ikt = infer_type(cg, cur->as.index.index);
+                    char *key = maybe_cast(cg, mk, ikt,
+                                           gen_expr(cg, cur->as.index.index));
+                    key = sequence_one(cg, lid, 1, kc, mk, key,
+                                       cur->as.index.index, &prelude);
+                    const char *se8 = expect_push(cg, ft);
+                    char *val = maybe_cast(cg, ft, vt,
+                                           gen_expr(cg, s->as.assign.value));
+                    cg->expect = se8;
+                    val = sequence_one(cg, lid, 2, ctype_of(cg, ft), ft, val,
+                                       s->as.assign.value, &prelude);
+                    cg->ambient_count = ambient_mark;
+                    move_consume(cg, s->as.assign.value);
+                    int id = cg->tmp_id++;
+                    char *kname = xasprintf("_sl_k%d", id);
+                    char *miss = map_miss_call(cg, mk, kname,
+                                               panic_at(cg, s->line));
+                    emit_line(cg,
+                              "{ %s%s %s = %s; void *_sl_p%d = sl_map_get(%s, "
+                              "&%s); if (!_sl_p%d) %s; ((%s *)_sl_p%d)->%s%s%s "
+                              "= %s;%s }",
+                              prelude.data, kc, kname, key, id, mb, kname, id,
+                              miss, vc, id,
+                              mid[0] ? mid + 1 : sanitize_ident(sd->fields[fi]),
+                              mid[0] ? "." : "",
+                              mid[0] ? sanitize_ident(sd->fields[fi]) : "",
+                              val,
+                              type_has_gc_roots(cg, ft)
+                                  ? xasprintf(" sl_rt_preempt_disable(); "
+                                              "sl_map_value_stored(%s); "
+                                              "sl_rt_preempt_enable();",
+                                              mb)
+                                  : "");
+                    break;
+                }
                 if (lt && is_arr(lt)) {
                     char *elem = arr_elem(lt);
                     const char *ec = ctype_of(cg, elem);
@@ -1689,6 +2459,7 @@ void gen_stmt(CG *cg, Stmt *s) {
                 cg_error(s->line, "missing return value");
             for (int i = 0; i < cg->open_backedge_brackets; i++)
                 emit_line(cg, "sl_rt_safepoint_exit_s(SL_SELF());");
+            emit_defers_exit(cg, NULL, NULL);
             emit_scope_drops(cg, 0);
             emit_line(cg, "return;");
         } else {
@@ -1712,6 +2483,7 @@ void gen_stmt(CG *cg, Stmt *s) {
                       val);
             for (int i = 0; i < cg->open_backedge_brackets; i++)
                 emit_line(cg, "sl_rt_safepoint_exit_s(SL_SELF());");
+            emit_defers_exit(cg, cg->cur_ret, "_sl_rv");
             emit_scope_drops(cg, 0);
             emit_line(cg, "return _sl_rv;");
         }
@@ -1816,72 +2588,172 @@ void gen_stmt(CG *cg, Stmt *s) {
         int i, nroots = 0;
         char **elems = (char **)xmalloc((size_t)n * sizeof(char *));
         StrBuf roots;
+        int ambient_mark = cg->ambient_count;
 
         emit_line(cg, "{");
         cg->indent++;
         for (i = 0; i < n; i++) {
             SelectCase *sc = &s->as.select_stmt.cases[i];
-            const char *ct = infer_type(cg, sc->ch);
-            if (!is_chan(ct))
-                cg_error(sc->line,
-                         "select: chan_%s() expects a chan (got %s)",
-                         sc->is_send ? "send" : "recv", ct);
-            elems[i] = chan_elem(ct);
-            char *ch = gen_expr(cg, sc->ch);
-            emit_line(cg, "sl_chan *_sl_selh%d_%d = %s;", id, i, ch);
-            emit_line(cg, "%s _sl_selv%d_%d;", ctype_of(cg, elems[i]), id,
-                      i);
-            if (sc->is_send) {
-                const char *saved = expect_push(cg, elems[i]);
-                const char *vt = infer_type(cg, sc->val);
-                char *v = gen_expr(cg, sc->val);
-                cg->expect = saved;
-                if (!value_assignable(elems[i], sc->val, vt))
+            elems[i] = NULL;
+            if (sc->guard) {
+                const char *gt = infer_type(cg, sc->guard);
+                if (strcmp(gt, "bool"))
                     cg_error(sc->line,
-                             "chan_send(): cannot send %s on a chan[%s]",
-                             vt, elems[i]);
-                v = maybe_cast(cg, elems[i], vt, v);
-                emit_line(cg, "_sl_selv%d_%d = %s;", id, i, v);
+                             "select 'when' guard must be a bool (got %s)", gt);
+                char *ge = gen_expr(cg, sc->guard);
+                emit_line(cg, "bool _sl_selen%d_%d = %s;", id, i, ge);
             } else {
-                /* Zeroed, not merely declared: a recv arm that fires
-                 * because the channel is CLOSED never writes this slot,
-                 * and it is named in the root array below. An
-                 * uninitialised pointer there would be a garbage root.
-                 * (sl_gc_mark tolerates NULL and non-GC addresses.) */
+                emit_line(cg, "bool _sl_selen%d_%d = true;", id, i);
+            }
+
+            if (sc->kind == 0 || sc->kind == 1) {
+                const char *ct = infer_type(cg, sc->ch);
+                if (!is_chan(ct))
+                    cg_error(sc->line,
+                             "select: chan_%s() expects a chan (got %s)",
+                             sc->is_send ? "send" : "recv", ct);
+                elems[i] = chan_elem(ct);
+                const char *vt = NULL;
+                if (sc->is_send) {
+                    const char *saved = expect_push(cg, elems[i]);
+                    vt = infer_type(cg, sc->val);
+                    cg->expect = saved;
+                    if (!value_assignable(elems[i], sc->val, vt))
+                        cg_error(sc->line,
+                                 "chan_send(): cannot send %s on a chan[%s]",
+                                 vt, elems[i]);
+                }
+                emit_line(cg, "sl_chan *_sl_selh%d_%d = NULL;", id, i);
+                emit_line(cg, "%s _sl_selv%d_%d;", ctype_of(cg, elems[i]), id,
+                          i);
                 emit_line(cg,
-                          "memset(&_sl_selv%d_%d, 0, "
-                          "sizeof(_sl_selv%d_%d));",
+                          "memset(&_sl_selv%d_%d, 0, sizeof(_sl_selv%d_%d));",
                           id, i, id, i);
+                if (sc->guard) {
+                    emit_line(cg, "if (_sl_selen%d_%d) {", id, i);
+                    cg->indent++;
+                }
+                char *ch = gen_expr(cg, sc->ch);
+                emit_line(cg, "_sl_selh%d_%d = %s;", id, i, ch);
+                ambient_push_value_roots(
+                    cg, xasprintf("_sl_selh%d_%d", id, i), ct);
+                if (sc->is_send) {
+                    const char *saved = expect_push(cg, elems[i]);
+                    char *v = gen_expr(cg, sc->val);
+                    cg->expect = saved;
+                    v = maybe_cast(cg, elems[i], vt, v);
+                    emit_line(cg, "_sl_selv%d_%d = %s;", id, i, v);
+                }
+                if (sc->guard) {
+                    cg->indent--;
+                    emit_line(cg, "}");
+                }
+                if (type_has_gc_roots(cg, elems[i]))
+                    ambient_push_value_roots(
+                        cg, xasprintf("_sl_selv%d_%d", id, i), elems[i]);
+            } else {
+                const char *vt = infer_type(cg, sc->val);
+                if (sc->kind == 2) {
+                    if (!is_int(vt) && strcmp(vt, "duration"))
+                        cg_error(sc->line,
+                                 "select: after() expects an integer or "
+                                 "duration in nanoseconds (got %s)",
+                                 vt);
+                } else {
+                    if (!is_until(vt))
+                        cg_error(sc->line,
+                                 "select: until() expects an until deadline "
+                                 "(got %s)",
+                                 vt);
+                }
+                emit_line(cg, "long long _sl_seld%d_%d = 0;", id, i);
+                if (sc->guard) {
+                    emit_line(cg, "if (_sl_selen%d_%d) {", id, i);
+                    cg->indent++;
+                }
+                char *v = gen_expr(cg, sc->val);
+                if (sc->kind == 2) {
+                    emit_line(cg, "long long _sl_sela%d_%d = (long long)(%s);",
+                              id, i, v);
+                    emit_line(cg,
+                              "_sl_seld%d_%d = _sl_sela%d_%d <= 0 ? 1LL "
+                              ": sl_now_ns() + _sl_sela%d_%d;",
+                              id, i, id, i, id, i);
+                } else {
+                    emit_line(cg, "_sl_seld%d_%d = (long long)(%s);", id, i, v);
+                    emit_line(cg,
+                              "if (_sl_seld%d_%d == 0) _sl_selen%d_%d = false;",
+                              id, i, id, i);
+                }
+                if (sc->guard) {
+                    cg->indent--;
+                    emit_line(cg, "}");
+                }
             }
         }
+        cg->ambient_count = ambient_mark;
+
         emit_line(cg, "sl_sel_case _sl_selc%d[%d];", id, n);
         emit_line(cg, "sl_waiter _sl_seln%d[%d];", id, n);
         for (i = 0; i < n; i++) {
             SelectCase *sc = &s->as.select_stmt.cases[i];
-            emit_line(cg, "_sl_selc%d[%d].ch = _sl_selh%d_%d;", id, i, id,
-                      i);
-            emit_line(cg, "_sl_selc%d[%d].is_send = %d;", id, i,
-                      sc->is_send);
-            emit_line(cg, "_sl_selc%d[%d].val = (void *)&_sl_selv%d_%d;",
+            int ck = sc->kind >= 2 ? 2 : sc->kind;
+            emit_line(cg, "_sl_selc%d[%d].kind = %d;", id, i, ck);
+            emit_line(cg, "_sl_selc%d[%d].enabled = _sl_selen%d_%d ? 1 : 0;",
                       id, i, id, i);
             emit_line(cg, "_sl_selc%d[%d].closed = 0;", id, i);
+            if (ck < 2) {
+                emit_line(cg, "_sl_selc%d[%d].ch = _sl_selh%d_%d;", id, i, id,
+                          i);
+                emit_line(cg, "_sl_selc%d[%d].deadline = 0;", id, i);
+                emit_line(cg, "_sl_selc%d[%d].val = (void *)&_sl_selv%d_%d;",
+                          id, i, id, i);
+            } else {
+                emit_line(cg, "_sl_selc%d[%d].ch = NULL;", id, i);
+                emit_line(cg, "_sl_selc%d[%d].deadline = _sl_seld%d_%d;", id, i,
+                          id, i);
+                emit_line(cg, "_sl_selc%d[%d].val = NULL;", id, i);
+            }
         }
 
         sb_init(&roots);
+        int sel_wrote = 0;
         for (i = 0; i < n; i++) {
-            sb_append(&roots, nroots ? ", " : "");
+            SelectCase *sc = &s->as.select_stmt.cases[i];
+            if (sc->kind >= 2)
+                continue;
+            sb_append(&roots, sel_wrote++ ? ", " : "");
             sb_append(&roots, xasprintf("(void *)_sl_selh%d_%d", id, i));
             nroots++;
             /* a value received by value (struct, result) roots each
                pointer inside it */
             append_gc_roots_of(cg, &roots, xasprintf("_sl_selv%d_%d", id, i),
-                               elems[i], &nroots);
+                               elems[i], &sel_wrote);
+            nroots = sel_wrote;
         }
-        emit_line(cg, "void *_sl_selr%d[] = { %s };", id, roots.data);
-        emit_line(cg, "sl_safepoint _sl_selsp%d;", id);
-        emit_line(cg,
-                  "sl_rt_safepoint_enter_s(SL_SELF(), &_sl_selsp%d, _sl_selr%d, %d);",
-                  id, id, nroots);
+        int sel_nlive = live_set_nnamed(s->backedge_live_set);
+        for (i = 0; i < sel_nlive; i++) {
+            const char *lname = live_set_named(s->backedge_live_set, i);
+            int cnt = count_named_gc_roots(cg, lname);
+            if (cnt > 0) {
+                nroots += cnt;
+                append_named_gc_roots(cg, &roots, lname, &sel_wrote);
+            }
+        }
+        if (nroots > 0) {
+            emit_line(cg, "void *_sl_selr%d[] = { %s };", id, roots.data);
+            emit_line(cg, "sl_safepoint _sl_selsp%d;", id);
+            emit_line(
+                cg,
+                "sl_rt_safepoint_enter_s(SL_SELF(), &_sl_selsp%d, _sl_selr%d, %d);",
+                id, id, nroots);
+        } else {
+            emit_line(cg, "sl_safepoint _sl_selsp%d;", id);
+            emit_line(
+                cg,
+                "sl_rt_safepoint_enter_s(SL_SELF(), &_sl_selsp%d, NULL, 0);",
+                id);
+        }
         emit_line(cg,
                   "int _sl_seli%d = sl_select_run(_sl_selc%d, "
                   "_sl_seln%d, %d, %d);",
@@ -1947,15 +2819,29 @@ void gen_stmt(CG *cg, Stmt *s) {
                                : NULL;
         int *counts = ncases ? (int *)xmalloc(sizeof(int) * (size_t)ncases)
                              : NULL;
+        char ***binds = ncases ? (char ***)xmalloc(sizeof(char **) * (size_t)ncases)
+                               : NULL;
+        int *nbinds = ncases ? (int *)xmalloc(sizeof(int) * (size_t)ncases)
+                             : NULL;
+        int *hparens = ncases ? (int *)xmalloc(sizeof(int) * (size_t)ncases)
+                              : NULL;
         for (int i = 0; i < ncases; i++) {
             groups[i] = s->as.switch_stmt.cases[i].vals;
             counts[i] = s->as.switch_stmt.cases[i].nvals;
+            binds[i] = s->as.switch_stmt.cases[i].bindings;
+            nbinds[i] = s->as.switch_stmt.cases[i].nbindings;
+            hparens[i] = s->as.switch_stmt.cases[i].has_parens;
         }
-        switch_validate(cg, st, groups, counts, ncases,
+        switch_validate(cg, st, groups, counts, binds, nbinds, hparens, ncases,
                         s->as.switch_stmt.def != NULL, s->line);
         free(groups);
         free(counts);
+        free(binds);
+        free(nbinds);
+        free(hparens);
         int kind = switch_kind(cg, st);
+        int tagged = is_tagged_enum(cg, st);
+        EnumDef *ed = tagged ? enum_find_canon(cg, st) : NULL;
         int id = cg->tmp_id++;
         char *sv = gen_expr(cg, s->as.switch_stmt.scrut);
         char *svname = xasprintf("_sl_sv%d", id);
@@ -1966,15 +2852,19 @@ void gen_stmt(CG *cg, Stmt *s) {
         break_push(cg, 1, endname);
         cg->switch_depth++;
         for (int i = 0; i < ncases; i++) {
+            SwitchCase *sc = &s->as.switch_stmt.cases[i];
             char *cond = xstrdup("");
-            for (int j = 0; j < s->as.switch_stmt.cases[i].nvals; j++) {
-                Expr *lb = s->as.switch_stmt.cases[i].vals[j];
+            for (int j = 0; j < sc->nvals; j++) {
+                Expr *lb = sc->vals[j];
                 char *term = kind == 3
                                  ? xasprintf("!strcmp(%s, %s)", svname,
                                              c_string_literal(
                                                  lb->as.str_lit.value))
-                                 : xasprintf("%s == %s", svname,
-                                             switch_label_c_const(lb));
+                                 : tagged
+                                       ? xasprintf("%s.tag == %s", svname,
+                                                   switch_label_c_const(lb))
+                                       : xasprintf("%s == %s", svname,
+                                                   switch_label_c_const(lb));
                 cond = xasprintf("%s%s%s", cond, j ? " || " : "", term);
             }
             emit_line(cg, "%sif (%s) {", i ? "} else " : "", cond);
@@ -1982,7 +2872,21 @@ void gen_stmt(CG *cg, Stmt *s) {
             var_scope_push(cg);
             {
                 int from = cg->vars.count;
-                gen_block(cg, s->as.switch_stmt.cases[i].body);
+                if (tagged && sc->nbindings > 0) {
+                    int vidx = (int)sc->vals[0]->as.int_lit.value;
+                    for (int k = 0; k < sc->nbindings; k++) {
+                        const char *bn = sc->bindings[k];
+                        if (!strcmp(bn, "_"))
+                            continue;
+                        const char *bt = ed->v_types[vidx][k];
+                        var_redecl_check(cg, bn, sc->line);
+                        var_push(cg, bn, bt);
+                        emit_line(cg, "%s %s = %s.u.v%d._%d;",
+                                  ctype_of(cg, bt), sanitize_ident(bn), svname,
+                                  vidx, k);
+                    }
+                }
+                gen_block(cg, sc->body);
                 emit_scope_drops(cg, from);
             }
             var_scope_pop(cg);
@@ -2052,6 +2956,112 @@ void gen_stmt(CG *cg, Stmt *s) {
                   shape->tname, id, id, shape->sname);
         cg->indent--;
         emit_line(cg, "}");
+        break;
+    }
+    case ST_DEFER: {
+        if (!cg->in_function)
+            cg_error(s->line,
+                     "'defer' is only allowed inside a function body; "
+                     "move it into a 'fn'");
+        if (cg->loop_depth > 0)
+            cg_error(s->line,
+                     "cannot use 'defer' inside a loop: 'defer' is "
+                     "function-scoped and runs only when the enclosing "
+                     "function returns; move the loop body into a helper "
+                     "function");
+        DeferInfo *d = (DeferInfo *)s->as.defer_stmt.defer_info;
+        if (!d) {
+            d = defer_build_info(cg, s, cg->fn_ndefers);
+            s->as.defer_stmt.defer_info = d;
+        }
+        defer_push_fn(cg, d);
+
+        Expr *call = s->as.defer_stmt.call;
+        int ambient_mark = cg->ambient_count;
+        const char *saved_exp = cg->expect;
+        cg->expect = NULL;
+
+        if (d->has_cal) {
+            char *cal_c = NULL;
+            if (call->as.call.callee) {
+                cal_c = gen_expr(cg, call->as.call.callee);
+            } else if (d->method_name) {
+                char *base = gen_ident_name(cg, d->callee_name, s->line);
+                const char *rt = infer_ident_name(cg, d->callee_name, s->line);
+                cal_c = xasprintf("((%s)%s%s)", base, struct_access(cg, rt),
+                                  sanitize_ident(d->method_name));
+            } else {
+                cal_c = gen_ident_name(cg, d->callee_name, s->line);
+            }
+            emit_line(cg, "_sl_def_%d_cal = %s;", d->id, cal_c);
+        }
+
+        if (d->has_recv) {
+            char *r_c = NULL;
+            const char *raw_rt = NULL;
+            if (d->is_method_expr) {
+                raw_rt = infer_type(cg, call->as.method.recv);
+                if (d->recv_by_addr) {
+                    char *ri = NULL;
+                    TypeWrap rw = type_wrap(d->recv_ty, &ri);
+                    free(ri);
+                    Expr un;
+                    memset(&un, 0, sizeof(un));
+                    un.kind = EX_UNARY;
+                    un.line = s->line;
+                    un.as.unary.op =
+                        (rw == TW_REFMUT) ? (char *)"&mut" : (char *)"&";
+                    un.as.unary.operand = call->as.method.recv;
+                    un.inf_ty = d->recv_ty;
+                    r_c = gen_expr(cg, &un);
+                } else {
+                    r_c = maybe_cast(cg, d->recv_ty, raw_rt,
+                                     gen_expr(cg, call->as.method.recv));
+                }
+            } else {
+                raw_rt = infer_ident_name(cg, d->callee_name, s->line);
+                r_c = gen_ident_name(cg, d->callee_name, s->line);
+                if (d->recv_by_addr)
+                    r_c = xasprintf("(&(%s))", r_c);
+                else
+                    r_c = maybe_cast(cg, d->recv_ty, raw_rt, r_c);
+            }
+            char *rn = xasprintf("_sl_def_%d_r", d->id);
+            emit_line(cg, "%s = %s;", rn, r_c);
+            if (type_has_gc_roots(cg, d->recv_ty)) {
+                ambient_push_value_roots(cg, rn, d->recv_ty);
+                if (d->is_method_expr)
+                    expr_tmp_register(cg, call->as.method.recv, rn, d->recv_ty);
+            } else if (d->is_method_expr && d->recv_by_addr && raw_rt &&
+                       type_has_gc_roots(cg, raw_rt)) {
+                char *deref = xasprintf("(*(%s))", rn);
+                ambient_push_value_roots(cg, deref, raw_rt);
+                expr_tmp_register(cg, call->as.method.recv, deref, raw_rt);
+            }
+        }
+
+        Expr **args = d->is_method_expr ? call->as.method.args
+                                        : call->as.call.args;
+        for (int i = 0; i < d->nargs; i++) {
+            if (i == 0 && d->is_send_static)
+                continue;
+            const char *se = expect_push(cg, d->arg_tys[i]);
+            const char *at = infer_type(cg, args[i]);
+            char *av = gen_expr(cg, args[i]);
+            cg->expect = se;
+            av = maybe_cast(cg, d->arg_tys[i], at, av);
+            char *an = xasprintf("_sl_def_%d_a%d", d->id, i);
+            emit_line(cg, "%s = %s;", an, av);
+            if (type_has_gc_roots(cg, d->arg_tys[i])) {
+                ambient_push_value_roots(cg, an, d->arg_tys[i]);
+                expr_tmp_register(cg, args[i], an, d->arg_tys[i]);
+            }
+        }
+
+        cg->ambient_count = ambient_mark;
+        cg->expect = saved_exp;
+        move_consume(cg, call);
+        emit_line(cg, "_sl_def_act_%d = 1;", d->id);
         break;
     }
     case ST_UNSAFE:
@@ -2410,34 +3420,43 @@ static int expr_same(Expr *a, Expr *b) {
     }
 }
 
-/* `else let e = err_of(<expr>)`, on a guard or an if let: only for a
- * result, and only err_of of the very expression being unwrapped. */
-static void check_err_binding(Expr *ee, Expr *expr, int is_res, int line,
+/* `else |e|` or legacy `else let e = err_of(<expr>)`, on a guard or an
+ * if let: only for a result; shorthand skips err_of repetition. */
+static void check_err_binding(const char *err_name, Expr *ee, Expr *expr,
+                              const char *et, int is_res, int line,
                               const char *what) {
-    if (!is_res)
-        cg_error(line, "else let error binding requires a result value");
-    if (!ee || ee->kind != EX_CALL || ee->as.call.nargs != 1 ||
+    if (!is_res) {
+        if (!ee)
+            cg_error(line,
+                     "else |%s| error binding in %s requires a result[T, E] "
+                     "value (got %s); remove '|%s|' to write 'else { ... }'",
+                     err_name, what, et, err_name);
+        cg_error(line,
+                 "else let error binding requires a result value (got %s)",
+                 et);
+    }
+    if (!ee)
+        return;
+    if (ee->kind != EX_CALL || ee->as.call.nargs != 1 ||
         !ee->as.call.name || strcmp(ee->as.call.name, "err_of"))
         cg_error(line, "else let binding must be err_of(<same expression>)");
     if (!expr_same(ee->as.call.args[0], expr))
         cg_error(line, "err_of argument must match the %s expression", what);
 }
 
-static void gen_guard_else_body(CG *cg, Stmt *s, int gid, const char *acc,
-                                int is_res) {
+static void gen_guard_else_body(CG *cg, Stmt *s, int gid, const char *acc) {
+    int from = cg->vars.count;
     if (s->as.guard_let.err_name) {
-        check_err_binding(s->as.guard_let.err_expr, s->as.guard_let.expr,
-                          is_res, s->line, "guard");
+        int eline = s->as.guard_let.err_line ? s->as.guard_let.err_line : s->line;
         char *tv, *tev;
         result_te(infer_type(cg, s->as.guard_let.expr), &tv, &tev);
         const char *ec = ctype_of(cg, tev);
-        var_redecl_check(cg, s->as.guard_let.err_name, s->line);
+        var_redecl_check(cg, s->as.guard_let.err_name, eline);
         var_push(cg, s->as.guard_let.err_name, tev);
         emit_drop_flag(cg, s->as.guard_let.err_name);
         emit_line(cg, "%s %s = _sl_g%d%se;", ec,
                   sanitize_ident(s->as.guard_let.err_name), gid, acc);
     }
-    int from = cg->vars.count;
     gen_stmts(cg, s->as.guard_let.body->stmts, s->as.guard_let.body->count);
     emit_scope_drops(cg, from);
 }
@@ -2461,9 +3480,10 @@ static void gen_if_let(CG *cg, Stmt *s) {
         cg_error(s->line, "if let requires an opt or result value (got %s)",
                  et);
     }
+    int eline = s->as.if_let.err_line ? s->as.if_let.err_line : s->line;
     if (s->as.if_let.err_name)
-        check_err_binding(s->as.if_let.err_expr, s->as.if_let.expr, is_res,
-                          s->line, "if let");
+        check_err_binding(s->as.if_let.err_name, s->as.if_let.err_expr,
+                          s->as.if_let.expr, et, is_res, eline, "if let");
     int id = cg->tmp_id++;
     char *e = gen_expr(cg, s->as.if_let.expr);
     const char *acc = type_is_gc_ptr(cg, et) ? "->" : ".";
@@ -2487,14 +3507,14 @@ static void gen_if_let(CG *cg, Stmt *s) {
         emit_line(cg, "} else {");
         cg->indent++;
         var_scope_push(cg);
+        int efrom = cg->vars.count;
         if (s->as.if_let.err_name) {
-            var_redecl_check(cg, s->as.if_let.err_name, s->line);
+            var_redecl_check(cg, s->as.if_let.err_name, eline);
             var_push(cg, s->as.if_let.err_name, tev);
             emit_drop_flag(cg, s->as.if_let.err_name);
             emit_line(cg, "%s %s = _sl_g%d%se;", ctype_of(cg, tev),
                       sanitize_ident(s->as.if_let.err_name), id, acc);
         }
-        int efrom = cg->vars.count;
         gen_stmts(cg, s->as.if_let.else_blk->stmts,
                   s->as.if_let.else_blk->count);
         emit_scope_drops(cg, efrom);
@@ -2535,7 +3555,8 @@ static void mark_joined_spawn(Stmt *s, Stmt *next) {
         s->as.let.init->as.spawn.joined = 1;
 }
 
-void gen_stmts(CG *cg, Stmt **stmts, int count) {
+static void gen_stmts_impl(CG *cg, Stmt **stmts, int count,
+                           int is_fn_epilogue) {
     for (int i = 0; i < count; i++) {
         Stmt *s = stmts[i];
         mark_joined_spawn(s, i + 1 < count ? stmts[i + 1] : NULL);
@@ -2558,6 +3579,13 @@ void gen_stmts(CG *cg, Stmt **stmts, int count) {
                      "guard let requires an opt or result value (got %s)",
                      et);
         }
+        if (s->as.guard_let.err_name) {
+            int eline = s->as.guard_let.err_line ? s->as.guard_let.err_line
+                                                 : s->line;
+            check_err_binding(s->as.guard_let.err_name, s->as.guard_let.err_expr,
+                              s->as.guard_let.expr, et, is_res, eline,
+                              "guard let");
+        }
         check_guard_else_leaves(cg, s->as.guard_let.body, s->line);
         int id = cg->tmp_id++;
         char *e = gen_expr(cg, s->as.guard_let.expr);
@@ -2570,7 +3598,7 @@ void gen_stmts(CG *cg, Stmt **stmts, int count) {
         emit_line(cg, "if (!(_sl_g%d%s%s)) {", id, acc, is_res ? "ok" : "has");
         cg->indent++;
         var_scope_push(cg);
-        gen_guard_else_body(cg, s, id, acc, is_res);
+        gen_guard_else_body(cg, s, id, acc);
         var_scope_pop(cg);
         cg->indent--;
         emit_line(cg, "}");
@@ -2580,17 +3608,29 @@ void gen_stmts(CG *cg, Stmt **stmts, int count) {
         emit_drop_flag(cg, s->as.guard_let.name);
         emit_line(cg, "%s %s = _sl_g%d%sv;", ic,
                   sanitize_ident(s->as.guard_let.name), id, acc);
-        gen_stmts(cg, stmts + i + 1, count - i - 1);
+        gen_stmts_impl(cg, stmts + i + 1, count - i - 1, is_fn_epilogue);
         emit_scope_drops(cg, from);
         cg->vars.count = from;
         cg->indent--;
         emit_line(cg, "}");
         return;
     }
+    if (is_fn_epilogue && !cg->cur_ret && cg->fn_ndefers > 0)
+        emit_defers_exit(cg, NULL, NULL);
+}
+
+void gen_stmts(CG *cg, Stmt **stmts, int count) {
+    gen_stmts_impl(cg, stmts, count, 0);
 }
 
 void gen_block(CG *cg, Block *b) {
     cg->indent++;
-    gen_stmts(cg, b->stmts, b->count);
+    gen_stmts_impl(cg, b->stmts, b->count, 0);
+    cg->indent--;
+}
+
+void gen_fn_body(CG *cg, Block *b) {
+    cg->indent++;
+    gen_stmts_impl(cg, b->stmts, b->count, 1);
     cg->indent--;
 }

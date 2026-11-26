@@ -46,18 +46,20 @@ typedef struct {
     int cap;
 } Block;
 
-/* One arm of a `select`. A recv arm is
- *     case let v = chan_recv(ch) { ... }
- * and binds `v` to opt[T] for the arm's body, exactly as a plain
- * chan_recv would; a send arm is
- *     case chan_send(ch, v) { ... }
- * and binds nothing. The channel expression is evaluated ONCE, before
- * the select blocks -- see the codegen in stmt.c. */
+/* One arm of a `select`.
+ *   kind 0: `case let v = chan_recv(ch) [when cond] { ... }` (binds `v` to opt[T])
+ *   kind 1: `case chan_send(ch, v) [when cond] { ... }` (binds nothing)
+ *   kind 2: `case after(ns) [when cond] { ... }` (relative timeout in ns)
+ *   kind 3: `case until(deadline) [when cond] { ... }` (`until` deadline)
+ * Channel expressions (and send values / timeouts) are evaluated ONCE, before
+ * the select blocks -- disabled `when` arms skip ch/val evaluation. */
 typedef struct {
+    int kind;
     int is_send;
-    char *bind;  /* recv arm's binding name; NULL for a send arm */
-    Expr *ch;    /* the channel */
-    Expr *val;   /* send arm's value; NULL for a recv arm */
+    char *bind;  /* recv arm's binding name; NULL for send or timeout arm */
+    Expr *ch;    /* channel (kind 0/1); NULL for timeout arms */
+    Expr *val;   /* send value (kind 1) or duration/deadline (kind 2/3) */
+    Expr *guard; /* optional `when <bool>` guard, or NULL */
     Block *body;
     int line;
 } SelectCase;
@@ -70,6 +72,9 @@ typedef struct {
 typedef struct {
     Expr **vals;
     int nvals;
+    char **bindings; /* payload variable names (or "_"), NULL when none */
+    int nbindings;
+    int has_parens;  /* 1 if pattern wrote Variant(...), 0 otherwise */
     Block *body;
     int line;
 } SwitchCase;
@@ -79,6 +84,9 @@ typedef struct {
 typedef struct {
     Expr **vals;
     int nvals;
+    char **bindings;
+    int nbindings;
+    int has_parens;
     Expr *value;
     int line;
 } SwitchExprCase;
@@ -153,6 +161,7 @@ struct Expr {
             Expr **args;
             int nargs;
             char *enum_ty;
+            int enum_variant; /* variant index when name is "__enum_ctor" */
             /* A generic function call's resolved instance, cached the
              * first time it is asked for -- so a LATER pass, which may
              * revisit this node without the same cg->expect context the
@@ -230,7 +239,7 @@ typedef enum {
     ST_BREAK,
     ST_CONTINUE,
     ST_EXPR,
-    ST_GUARD_LET, /* guard let x = opt_expr else { ... } */
+    ST_GUARD_LET, /* guard let x = opt_expr else [|e|] { ... } */
     ST_SPAWN,  /* spawn f(args...) -- submit an sl_task to the M:N pool */
     ST_STRUCT, /* struct Name { field: T, ... } (top level only) */
     ST_ENUM,   /* enum Name { Variant [= N], ... } (top level only) */
@@ -238,7 +247,8 @@ typedef enum {
     ST_UNSAFE, /* unsafe { ... } */
     ST_SELECT,  /* select { case ... { } ... default { } } */
     ST_SWITCH,  /* switch scrut { case v, ... { } ... default { } } */
-    ST_IF_LET   /* if let x = opt_or_result { } [else [let e = err_of(..)] { }] */
+    ST_IF_LET,  /* if let x = opt_or_result { } [else [|e| | let e = err_of(..)] { }] */
+    ST_DEFER    /* defer call(args...) -- function-scoped cleanup */
 } StmtKind;
 
 typedef struct Stmt Stmt;
@@ -291,22 +301,25 @@ struct Stmt {
         struct {
             char *name;  /* variable to bind the unwrapped value to */
             Expr *expr;  /* expression of type opt[T] or result[T, E] */
-            char *err_name; /* optional: else let name = err_of(expr) */
+            char *err_name; /* optional: else |e| or legacy else let name = err_of(expr) */
             Expr *err_expr;
+            int err_line;
             Block *body; /* else block: must exit (return/break/...) */
         } guard_let;
         struct { Expr *call; } spawn; /* EX_CALL to a plain/extern fn */
+        struct { Expr *call; void *defer_info; } defer_stmt; /* EX_CALL or EX_METHOD */
         struct { Block *body; } unsafe_blk;
-        /* `if let name = expr { then } else let err_name = err_expr { else }`:
-           name is bound in then_blk only, err_name (result only) in
-           else_blk only. else_blk may be NULL; unlike a guard's, it may
-           fall through. */
+        /* `if let name = expr { then } else |err_name| { else }` (or legacy
+           `else let err_name = err_expr`): name is bound in then_blk only,
+           err_name (result only) in else_blk only. else_blk may be NULL;
+           unlike a guard's, it may fall through. */
         struct {
             char *name;
             Expr *expr;
             Block *then_blk;
             char *err_name;
             Expr *err_expr;
+            int err_line;
             Block *else_blk;
         } if_let;
         struct {
@@ -326,6 +339,7 @@ struct Stmt {
             int is_gc;
             char **fields;
             char **ftypes;
+            char **ftags;
             int nfields;
             char **lts;
             int nlts;
@@ -344,6 +358,9 @@ struct Stmt {
             char *name;
             int is_pub;
             char **variants;     /* variant names, in declared order */
+            char ***v_types;     /* payload type names per variant, or NULL */
+            int *v_ntypes;       /* payload count per variant (0 for unit) */
+            int has_payload;     /* 1 if any variant carries a payload */
             int *has_explicit;   /* 1 if this variant wrote '= N' itself */
             long long *values;   /* resolved ordinal per variant */
             int nvariants;

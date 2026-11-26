@@ -12,8 +12,7 @@ map by.
 ```slang
 import "uuid";
 
-let r = uuid.v7();
-guard let id = r else let e = err_of(r) {
+guard let id = uuid.v7() else |e| {
     panic(e);                          // only if the OS has no randomness
 }
 uuid.is_valid(id);                     // true: canonical form only

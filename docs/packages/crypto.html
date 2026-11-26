@@ -100,8 +100,7 @@ try { var t = localStorage.getItem("slang-theme");
 
 <span class="k">let</span> h: <span class="t">bytes</span> = crypto.<span class="f">sha256</span>(b<span class="s">&quot;abc&quot;</span>);              <span class="c">// 32 bytes</span>
 <span class="k">let</span> m: <span class="t">bytes</span> = crypto.<span class="f">hmac_sha256</span>(key, msg);       <span class="c">// 32 bytes</span>
-<span class="k">let</span> r = crypto.<span class="f">rand</span>(<span class="n">32</span>);
-<span class="k">guard</span> <span class="k">let</span> b = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) {
+<span class="k">guard</span> <span class="k">let</span> b = crypto.<span class="f">rand</span>(<span class="n">32</span>) <span class="k">else</span> |e| {
     log.<span class="f">error</span>(<span class="s">&quot;rand failed: &quot;</span> + e);
 }
 <span class="k">let</span> k = crypto.<span class="f">pbkdf2_sha256</span>(password, salt, <span class="n">600000</span>, <span class="n">32</span>);   <span class="c">// RFC 8018</span>

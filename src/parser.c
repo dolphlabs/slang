@@ -11,6 +11,7 @@ typedef struct {
     int pos;
     int count;
     int fn_body; /* inside a function body: trailing expr = implicit return */
+    int in_function; /* inside any block of a fn/method body */
     int in_unsafe;
     /* A statement that must be emitted immediately BEFORE the one
      * parse_statement is about to return. Used by compound assignment to
@@ -53,18 +54,24 @@ static int match(Parser *p, TokenType t) {
     return 0;
 }
 
-/* What to add to "expected X but found Y" for the two mistakes that cost
- * benchmark agents the most compile rounds (bench/agent): a trailing comma
- * (four struct literals, three rounds in one run) and a reserved word
- * used as a name (`result` as a field). */
+/* What to add to "expected X but found Y" for common mistakes:
+ * duplicate commas (,,), unexpected leading commas (, x), and a reserved
+ * word used as a name (`result` as a field). */
 static const char *found_hint(Parser *p, Token *tk, int want_name) {
     long idx = tk - p->toks;
     TokenType t = tk->type;
-    if (idx > 0 && p->toks[idx - 1].type == T_COMMA &&
-        (t == T_RBRACE || t == T_RBRACKET || t == T_RPAREN))
-        return xasprintf(" (slang has no trailing commas: remove the ',' "
-                         "before %s on line %d)",
-                         token_type_name(t), p->toks[idx - 1].line);
+    if (idx > 0 && p->toks[idx - 1].type == T_COMMA && t == T_COMMA)
+        return xasprintf(" (duplicate ',' after ',' on line %d: remove the "
+                         "extra ',')",
+                         p->toks[idx - 1].line);
+    if (t == T_COMMA && idx > 0) {
+        TokenType prev = p->toks[idx - 1].type;
+        if (prev == T_LPAREN || prev == T_LBRACKET || prev == T_LBRACE ||
+            prev == T_LT || prev == T_KW_CASE)
+            return xasprintf(" (unexpected leading ',' after %s: remove the "
+                             "',' or supply an element before it)",
+                             token_type_name(prev));
+    }
     if (want_name) {
         const char *n = token_type_name(t);
         if (n[0] == '\'' && isalpha((unsigned char)n[1]))
@@ -340,12 +347,10 @@ static Expr *parse_primary(Parser *p) {
     case T_LBRACKET: {
         advance(p);
         Expr *e = new_expr(p, EX_LIST, tk->line);
-        if (!check(p, T_RBRACKET)) {
-            for (;;) {
-                list_push_elem(e, parse_expression(p));
-                if (!match(p, T_COMMA))
-                    break;
-            }
+        while (!check(p, T_RBRACKET)) {
+            list_push_elem(e, parse_expression(p));
+            if (!match(p, T_COMMA))
+                break;
         }
         expect(p, T_RBRACKET, "']' to close list literal");
         return e;
@@ -354,16 +359,14 @@ static Expr *parse_primary(Parser *p) {
         /* map literal: {key: value, ...} */
         advance(p);
         Expr *e = new_expr(p, EX_MAPLIT, tk->line);
-        if (!check(p, T_RBRACE)) {
-            for (;;) {
-                Expr *k = parse_expression(p);
-                expect(p, T_COLON, "':' between key and value in map "
-                                   "literal");
-                Expr *v = parse_expression(p);
-                maplit_push_pair(e, k, v);
-                if (!match(p, T_COMMA))
-                    break;
-            }
+        while (!check(p, T_RBRACE)) {
+            Expr *k = parse_expression(p);
+            expect(p, T_COLON, "':' between key and value in map "
+                               "literal");
+            Expr *v = parse_expression(p);
+            maplit_push_pair(e, k, v);
+            if (!match(p, T_COMMA))
+                break;
         }
         expect(p, T_RBRACE, "'}' to close map literal");
         return e;
@@ -428,6 +431,8 @@ static Expr *parse_primary(Parser *p) {
                 nf++;
                 if (!match(p, T_COMMA))
                     break;
+                if (check(p, T_RBRACE))
+                    break;
             }
             sl->as.structlit.nfields = nf;
             expect(p, T_RBRACE, "'}' to close struct literal");
@@ -437,12 +442,10 @@ static Expr *parse_primary(Parser *p) {
             advance(p); /* '(' */
             Expr *call = new_expr(p, EX_CALL, tk->line);
             call->as.call.name = name;
-            if (!check(p, T_RPAREN)) {
-                for (;;) {
-                    call_push_arg(call, parse_expression(p));
-                    if (!match(p, T_COMMA))
-                        break;
-                }
+            while (!check(p, T_RPAREN)) {
+                call_push_arg(call, parse_expression(p));
+                if (!match(p, T_COMMA))
+                    break;
             }
             expect(p, T_RPAREN, "')' to close argument list");
             return call;
@@ -454,9 +457,17 @@ static Expr *parse_primary(Parser *p) {
     case T_LPAREN: {
         advance(p);
         Expr *e = parse_expression(p);
+        if (check(p, T_COMMA))
+            parse_error(peek(p),
+                        "expected ')' but found ',' (parentheses are only for "
+                        "grouping, not tuples; remove the ',' or use a struct "
+                        "or list)");
         expect(p, T_RPAREN, "')'");
         return e;
     }
+    case T_TAG:
+        parse_error(tk, "struct tag is only allowed on a struct field");
+        break;
     default:
         parse_error(tk, "expected an expression but found %s%s",
                     token_type_name(tk->type), found_hint(p, tk, 0));
@@ -486,12 +497,10 @@ static Expr *parse_postfix(Parser *p) {
                 Expr *m = new_expr(p, EX_METHOD, mt->line);
                 m->as.method.recv = e;
                 m->as.method.name = mt->text;
-                if (!check(p, T_RPAREN)) {
-                    for (;;) {
-                        method_push_arg(m, parse_expression(p));
-                        if (!match(p, T_COMMA))
-                            break;
-                    }
+                while (!check(p, T_RPAREN)) {
+                    method_push_arg(m, parse_expression(p));
+                    if (!match(p, T_COMMA))
+                        break;
                 }
                 expect(p, T_RPAREN, "')' to close argument list");
                 e = m;
@@ -520,12 +529,10 @@ static Expr *parse_postfix(Parser *p) {
              * the right answer for a call that has no name. */
             call->as.call.name = xstrdup("<function value>");
             call->as.call.callee = e;
-            if (!check(p, T_RPAREN)) {
-                for (;;) {
-                    call_push_arg(call, parse_expression(p));
-                    if (!match(p, T_COMMA))
-                        break;
-                }
+            while (!check(p, T_RPAREN)) {
+                call_push_arg(call, parse_expression(p));
+                if (!match(p, T_COMMA))
+                    break;
             }
             expect(p, T_RPAREN, "')' to close argument list");
             e = call;
@@ -858,6 +865,7 @@ static Type *parse_type_atom(Parser *p) {
         advance(p);
         expect(p, T_LBRACKET, "'[' after 'map'");
         Type *k = parse_type(p);
+        match(p, T_COMMA);
         expect(p, T_RBRACKET, "']' between key and value types");
         Type *v = parse_type(p);
         Type *t = ty_new(TY_MAP);
@@ -869,6 +877,7 @@ static Type *parse_type_atom(Parser *p) {
         advance(p);
         expect(p, T_LBRACKET, "'[' after 'opt'");
         Type *inner = parse_type(p);
+        match(p, T_COMMA);
         expect(p, T_RBRACKET, "']' to close opt type");
         return ty_wrap(TY_OPT, inner);
     }
@@ -876,6 +885,7 @@ static Type *parse_type_atom(Parser *p) {
         advance(p);
         expect(p, T_LBRACKET, "'[' after 'chan'");
         Type *inner = parse_type(p);
+        match(p, T_COMMA);
         expect(p, T_RBRACKET, "']' to close chan type");
         return ty_wrap(TY_CHAN, inner);
     }
@@ -883,6 +893,7 @@ static Type *parse_type_atom(Parser *p) {
         advance(p);
         expect(p, T_LBRACKET, "'[' after 'join'");
         Type *inner = parse_type(p);
+        match(p, T_COMMA);
         expect(p, T_RBRACKET, "']' to close join type");
         return ty_wrap(TY_JOIN, inner);
     }
@@ -892,6 +903,7 @@ static Type *parse_type_atom(Parser *p) {
         Type *ok = parse_type(p);
         expect(p, T_COMMA, "',' between value and error types");
         Type *err = parse_type(p);
+        match(p, T_COMMA);
         expect(p, T_RBRACKET, "']' to close result type");
         Type *t = ty_new(TY_RESULT);
         t->as.result.ok = ok;
@@ -935,15 +947,15 @@ static Type *parse_type_atom(Parser *p) {
         expect(p, T_LPAREN, "'(' after 'fn' in a type");
         sb_init(&b);
         sb_append(&b, "fn(");
-        if (!check(p, T_RPAREN)) {
-            int first = 1;
-            do {
-                Type *pt = parse_type(p);
-                if (!first)
-                    sb_append(&b, ",");
-                sb_append(&b, type_string(pt));
-                first = 0;
-            } while (match(p, T_COMMA));
+        int first = 1;
+        while (!check(p, T_RPAREN)) {
+            Type *pt = parse_type(p);
+            if (!first)
+                sb_append(&b, ",");
+            sb_append(&b, type_string(pt));
+            first = 0;
+            if (!match(p, T_COMMA))
+                break;
         }
         expect(p, T_RPAREN, "')' to close the parameter list");
         sb_append(&b, ")");
@@ -959,6 +971,7 @@ static Type *parse_type_atom(Parser *p) {
             advance(p);
             expect(p, T_LBRACKET, "'[' after 'ptr'");
             Type *inner = parse_type(p);
+            match(p, T_COMMA);
             expect(p, T_RBRACKET, "']' to close ptr type");
             return ty_wrap(TY_PTR, inner);
         }
@@ -980,6 +993,7 @@ static Type *parse_type_atom(Parser *p) {
     case T_LBRACKET: {
         advance(p);
         Type *inner = parse_type(p);
+        match(p, T_COMMA);
         expect(p, T_RBRACKET, "']' to close array type");
         return ty_wrap(TY_ARRAY, inner);
     }
@@ -989,7 +1003,8 @@ static Type *parse_type_atom(Parser *p) {
                     "i8..u64, f32, [T], map[K]V, opt[T], result[T,E], "
                     "chan[T], join[T], duration, rawptr, arena, wire, until, fault, "
                     "peer, trip, link, ptr[T], own T, gc T, "
-                    "&T, &'a T, &mut T, *T, *mut T, or a struct name)");
+                    "&T, &'a T, &mut T, *T, *mut T, or a struct name), but found %s%s",
+                    token_type_name(tk->type), found_hint(p, tk, 0));
     }
     return NULL;
 }
@@ -1036,6 +1051,8 @@ static char *parse_type_args(Parser *p) {
         sb_append(&sb, type_string(parse_type(p)));
         n++;
         if (!match(p, T_COMMA))
+            break;
+        if (check(p, T_RBRACKET))
             break;
     }
     expect(p, T_RBRACKET, "']' to close the type arguments");
@@ -1103,6 +1120,58 @@ static Stmt *parse_let_stmt(Parser *p) {
     return s;
 }
 
+/* Parse an optional error binding after `else` in `guard let` or `if let`:
+ * either shorthand `|e|` (err_expr == NULL) or legacy `let e = err_of(expr)`.
+ * Returns 1 if an error binding was parsed, 0 otherwise. */
+static int parse_else_err_binding(Parser *p, const char *construct,
+                                  char **out_name, Expr **out_expr,
+                                  int *out_line) {
+    if (check(p, T_OROR))
+        parse_error(peek(p),
+                    "empty error binding '||' in %s: name the error variable "
+                    "(e.g. 'else |e| { ... }') or omit it ('else { ... }')",
+                    construct);
+    if (check(p, T_PIPEEQ))
+        parse_error(peek(p),
+                    "unexpected '|=' after 'else' in %s: write 'else |e| { ... }' "
+                    "to bind the error or 'else { ... }' without binding",
+                    construct);
+    if (match(p, T_PIPE)) {
+        if (check(p, T_PIPE))
+            parse_error(peek(p),
+                        "empty error binding '| |' in %s: name the error "
+                        "variable (e.g. 'else |e| { ... }') or omit it "
+                        "('else { ... }')",
+                        construct);
+        if (!check(p, T_IDENT))
+            parse_error(peek(p),
+                        "expected an error variable name in '%s ... else |...|', "
+                        "found %s%s; write 'else |e| { ... }'",
+                        construct, token_type_name(peek(p)->type),
+                        found_hint(p, peek(p), 1));
+        Token *ename = advance(p);
+        if (!match(p, T_PIPE))
+            parse_error(peek(p),
+                        "expected closing '|' after error variable '%s' in "
+                        "'%s ... else |%s|', found %s; write 'else |%s| { ... }'",
+                        ename->text, construct, ename->text,
+                        token_type_name(peek(p)->type), ename->text);
+        *out_name = ename->text;
+        *out_expr = NULL;
+        *out_line = ename->line;
+        return 1;
+    }
+    if (match(p, T_KW_LET)) {
+        Token *ename = expect(p, T_IDENT, "a variable name");
+        expect(p, T_ASSIGN, "'='");
+        *out_expr = parse_expression(p);
+        *out_name = ename->text;
+        *out_line = ename->line;
+        return 1;
+    }
+    return 0;
+}
+
 static Stmt *parse_if_stmt(Parser *p) {
     Token *kw = advance(p); /* 'if' */
     if (match(p, T_KW_LET)) {
@@ -1115,11 +1184,9 @@ static Stmt *parse_if_stmt(Parser *p) {
         s->as.if_let.expr = expr;
         s->as.if_let.then_blk = then_blk;
         if (match(p, T_KW_ELSE)) {
-            if (match(p, T_KW_LET)) {
-                Token *ename = expect(p, T_IDENT, "a variable name");
-                expect(p, T_ASSIGN, "'='");
-                s->as.if_let.err_expr = parse_expression(p);
-                s->as.if_let.err_name = ename->text;
+            if (parse_else_err_binding(p, "if let", &s->as.if_let.err_name,
+                                       &s->as.if_let.err_expr,
+                                       &s->as.if_let.err_line)) {
                 s->as.if_let.else_blk = parse_block(p, 0);
             } else if (check(p, T_KW_IF)) {
                 Block *else_blk = new_block();
@@ -1176,13 +1243,8 @@ static Stmt *parse_guard_stmt(Parser *p) {
         expect(p, T_KW_ELSE, "'else'");
         char *err_name = NULL;
         Expr *err_expr = NULL;
-        if (check(p, T_KW_LET)) {
-            advance(p);
-            Token *ename = expect(p, T_IDENT, "a variable name");
-            expect(p, T_ASSIGN, "'='");
-            err_expr = parse_expression(p);
-            err_name = ename->text;
-        }
+        int err_line = 0;
+        parse_else_err_binding(p, "guard let", &err_name, &err_expr, &err_line);
         Block *body = parse_block(p, 0);
 
         Stmt *s = new_stmt(ST_GUARD_LET, kw->line);
@@ -1190,6 +1252,7 @@ static Stmt *parse_guard_stmt(Parser *p) {
         s->as.guard_let.expr = expr;
         s->as.guard_let.err_name = err_name;
         s->as.guard_let.err_expr = err_expr;
+        s->as.guard_let.err_line = err_line;
         s->as.guard_let.body = body;
         return s;
     }
@@ -1224,6 +1287,35 @@ static Stmt *parse_spawn_stmt(Parser *p) {
     return s;
 }
 
+/* defer f(args...) ; / defer recv.m(args...) ; -- function-scoped cleanup.
+ * Closures and blocks are deliberately unsupported; extract a helper fn. */
+static Stmt *parse_defer_stmt(Parser *p) {
+    Token *kw = advance(p); /* 'defer' */
+    if (!p->in_function)
+        parse_error(kw, "'defer' is only allowed inside a function body; "
+                        "move it into a 'fn'");
+    if (check(p, T_LBRACE))
+        parse_error(peek(p),
+                    "'defer { ... }' blocks are not supported (slang has no "
+                    "closures); extract a helper function and write "
+                    "'defer cleanup();'");
+    if (check(p, T_KW_FN))
+        parse_error(peek(p),
+                    "'defer fn(...) { ... }' closures are not supported in "
+                    "slang; extract a named function and write "
+                    "'defer cleanup();'");
+    Expr *call = parse_expression(p);
+    if (call->kind != EX_CALL && call->kind != EX_METHOD)
+        parse_error(kw,
+                    "'defer' requires a function or method call, e.g. "
+                    "'defer close(fd);' or 'defer conn.close();'");
+    expect(p, T_SEMI, "';'");
+
+    Stmt *s = new_stmt(ST_DEFER, kw->line);
+    s->as.defer_stmt.call = call;
+    return s;
+}
+
 /* select {
  *     case let v = chan_recv(ch) { ... }
  *     case chan_send(ch, v)      { ... }
@@ -1254,11 +1346,7 @@ static Stmt *parse_select_stmt(Parser *p) {
         Token *ck = expect(p, T_KW_CASE,
                            "'case' or 'default' inside 'select'");
         SelectCase sc;
-        sc.is_send = 0;
-        sc.bind = NULL;
-        sc.ch = NULL;
-        sc.val = NULL;
-        sc.body = NULL;
+        memset(&sc, 0, sizeof(sc));
         sc.line = ck->line;
 
         if (match(p, T_KW_LET)) {
@@ -1269,14 +1357,15 @@ static Stmt *parse_select_stmt(Parser *p) {
         }
 
         Expr *call = parse_expression(p);
-        if (call->kind != EX_CALL)
+        if (call->kind != EX_CALL || call->as.call.callee)
             parse_error(ck,
-                        "a 'select' arm must be 'chan_recv(ch)' or "
-                        "'chan_send(ch, v)'");
+                        "a 'select' arm must be 'chan_recv(ch)', "
+                        "'chan_send(ch, v)', 'after(ns)', or 'until(deadline)'");
         const char *fname = call->as.call.name;
         if (fname && !strcmp(fname, "chan_recv")) {
             if (call->as.call.nargs != 1)
                 parse_error(ck, "chan_recv() takes exactly one argument");
+            sc.kind = 0;
             sc.is_send = 0;
             sc.ch = call->as.call.args[0];
         } else if (fname && !strcmp(fname, "chan_send")) {
@@ -1285,13 +1374,30 @@ static Stmt *parse_select_stmt(Parser *p) {
                                 "the 'let'");
             if (call->as.call.nargs != 2)
                 parse_error(ck, "chan_send() takes exactly two arguments");
+            sc.kind = 1;
             sc.is_send = 1;
             sc.ch = call->as.call.args[0];
             sc.val = call->as.call.args[1];
+        } else if (fname && (!strcmp(fname, "after") || !strcmp(fname, "until"))) {
+            int is_until_arm = !strcmp(fname, "until");
+            if (sc.bind)
+                parse_error(ck,
+                            "a '%s' timeout arm binds nothing; drop the 'let'",
+                            fname);
+            if (call->as.call.nargs != 1)
+                parse_error(ck, "%s() takes exactly one argument", fname);
+            sc.kind = is_until_arm ? 3 : 2;
+            sc.is_send = 0;
+            sc.val = call->as.call.args[0];
         } else {
             parse_error(ck,
-                        "a 'select' arm must be 'chan_recv(ch)' or "
-                        "'chan_send(ch, v)'");
+                        "a 'select' arm must be 'chan_recv(ch)', "
+                        "'chan_send(ch, v)', 'after(ns)', or 'until(deadline)'");
+        }
+
+        if (check(p, T_IDENT) && !strcmp(peek(p)->text, "when")) {
+            advance(p);
+            sc.guard = parse_expression(p);
         }
 
         sc.body = parse_block(p, 0);
@@ -1314,11 +1420,58 @@ static Stmt *parse_select_stmt(Parser *p) {
     return s;
 }
 
+/* Normalize a parsed switch case label expression: `Enum.Variant(a, b)`
+ * and `pkg.Enum.Variant(a, b)` parse initially as EX_CALL / EX_METHOD;
+ * extract the bare variant label (`EX_IDENT` / `EX_FIELD`), binding names,
+ * and `has_parens`. Any expression arguments reject with a clear diagnostic. */
+static Expr *normalize_switch_case_label(Parser *p, Expr *label, Token *ck,
+                                         char ***bindings, int *nbindings,
+                                         int *has_parens) {
+    Expr **args = NULL;
+    int nargs = 0;
+    Expr *base = NULL;
+    if (label->kind == EX_CALL && !label->as.call.callee &&
+        strchr(label->as.call.name, '.')) {
+        args = label->as.call.args;
+        nargs = label->as.call.nargs;
+        base = new_expr(p, EX_IDENT, label->line);
+        base->as.ident.name = label->as.call.name;
+    } else if (label->kind == EX_METHOD && label->as.method.recv &&
+               label->as.method.recv->kind == EX_IDENT &&
+               strchr(label->as.method.recv->as.ident.name, '.')) {
+        args = label->as.method.args;
+        nargs = label->as.method.nargs;
+        base = new_expr(p, EX_FIELD, label->line);
+        base->as.field.base = label->as.method.recv;
+        base->as.field.name = label->as.method.name;
+    } else {
+        *has_parens = 0;
+        return label;
+    }
+    *has_parens = 1;
+    if (nargs > 0) {
+        char **b = (char **)xmalloc((size_t)nargs * sizeof(char *));
+        for (int i = 0; i < nargs; i++) {
+            Expr *a = args[i];
+            if (a->kind != EX_IDENT || strchr(a->as.ident.name, '.') ||
+                !strcmp(a->as.ident.name, "none") ||
+                !strcmp(a->as.ident.name, "nullptr"))
+                parse_error(ck,
+                            "switch pattern binding must be an identifier "
+                            "or '_'");
+            b[i] = a->as.ident.name;
+        }
+        *bindings = b;
+        *nbindings = nargs;
+    }
+    return base;
+}
+
 /* switch <scrut> { case v, ... { ... } ... default { ... } }
  * Labels are literal expressions (int/str/bool, unary-minus ints, or
- * Type.Variant); arbitrary expressions are rejected so every arm stays
- * a compile-time constant of the scrutinee's type. The scrutinee runs
- * exactly once. No fallthrough: exactly one arm runs. */
+ * Type.Variant[(bindings...)]); arbitrary expressions are rejected so every arm
+ * stays a compile-time constant/variant of the scrutinee's type. The scrutinee
+ * runs exactly once. No fallthrough: exactly one arm runs. */
 static Stmt *parse_switch_stmt(Parser *p) {
     Token *kw = advance(p); /* 'switch' */
     Expr *scrut = parse_expression(p);
@@ -1342,11 +1495,25 @@ static Stmt *parse_switch_stmt(Parser *p) {
         memset(&sc, 0, sizeof(sc));
         sc.line = ck->line;
         for (;;) {
-            Expr *label = parse_expression(p);
+            char **lb_binds = NULL;
+            int lb_nbinds = 0, lb_parens = 0;
+            Expr *label = normalize_switch_case_label(
+                p, parse_expression(p), ck, &lb_binds, &lb_nbinds, &lb_parens);
+            if ((sc.has_parens || lb_parens) && sc.nvals > 0)
+                parse_error(ck,
+                            "switch case with payload bindings cannot be "
+                            "combined with multiple labels");
+            if (lb_parens) {
+                sc.has_parens = 1;
+                sc.bindings = lb_binds;
+                sc.nbindings = lb_nbinds;
+            }
             sc.vals = (Expr **)xrealloc(sc.vals,
                                        (size_t)(sc.nvals + 1) * sizeof(Expr *));
             sc.vals[sc.nvals++] = label;
             if (!match(p, T_COMMA))
+                break;
+            if (check(p, T_LBRACE))
                 break;
         }
         if (sc.nvals == 0)
@@ -1401,11 +1568,25 @@ static Expr *parse_switch_expr(Parser *p) {
         memset(&sc, 0, sizeof(sc));
         sc.line = ck->line;
         for (;;) {
-            Expr *label = parse_expression(p);
+            char **lb_binds = NULL;
+            int lb_nbinds = 0, lb_parens = 0;
+            Expr *label = normalize_switch_case_label(
+                p, parse_expression(p), ck, &lb_binds, &lb_nbinds, &lb_parens);
+            if ((sc.has_parens || lb_parens) && sc.nvals > 0)
+                parse_error(ck,
+                            "switch case with payload bindings cannot be "
+                            "combined with multiple labels");
+            if (lb_parens) {
+                sc.has_parens = 1;
+                sc.bindings = lb_binds;
+                sc.nbindings = lb_nbinds;
+            }
             sc.vals = (Expr **)xrealloc(sc.vals,
                                        (size_t)(sc.nvals + 1) * sizeof(Expr *));
             sc.vals[sc.nvals++] = label;
             if (!match(p, T_COMMA))
+                break;
+            if (check(p, T_LBRACE))
                 break;
         }
         if (sc.nvals == 0)
@@ -1497,6 +1678,7 @@ static Stmt *parse_struct_decl(Parser *p, int is_pub, int is_gc) {
 
     char **fields = NULL;
     char **ftypes = NULL;
+    char **ftags = NULL;
     int n = 0;
     while (!check(p, T_RBRACE)) {
         if (check(p, T_EOF))
@@ -1504,10 +1686,15 @@ static Stmt *parse_struct_decl(Parser *p, int is_pub, int is_gc) {
         Token *f = expect(p, T_IDENT, "a field name");
         expect(p, T_COLON, "':' followed by a field type");
         const char *ty = parse_type_name(p);
+        char *tag = NULL;
+        if (check(p, T_TAG))
+            tag = xstrdup(advance(p)->text);
         fields = (char **)xrealloc(fields, (n + 1) * sizeof(char *));
         ftypes = (char **)xrealloc(ftypes, (n + 1) * sizeof(char *));
+        ftags = (char **)xrealloc(ftags, (n + 1) * sizeof(char *));
         fields[n] = f->text;
         ftypes[n] = xstrdup(ty);
+        ftags[n] = tag;
         n++;
         if (!match(p, T_COMMA))
             break;
@@ -1520,6 +1707,7 @@ static Stmt *parse_struct_decl(Parser *p, int is_pub, int is_gc) {
     s->as.struct_decl.is_gc = is_gc;
     s->as.struct_decl.fields = fields;
     s->as.struct_decl.ftypes = ftypes;
+    s->as.struct_decl.ftags = ftags;
     s->as.struct_decl.nfields = n;
     s->as.struct_decl.lts = lts;
     s->as.struct_decl.nlts = nlts;
@@ -1528,17 +1716,19 @@ static Stmt *parse_struct_decl(Parser *p, int is_pub, int is_gc) {
     return s;
 }
 
-/* enum Name { Variant [= N], ... } — a closed, i32-backed set of named
- * constants. Ordinals auto-increment ("previous + 1", starting at 0)
- * unless a variant gives one explicitly; duplicate variant names and
- * duplicate explicit ordinals are rejected later, in collect_enum_decls
- * (src/codegen/enum.c), which sees every enum in the package at once. */
+/* enum Name { Variant[(T1, T2)] [= N], ... } — a closed set of named
+ * constants or tagged variants. Unit-only enums stay i32-backed with
+ * auto-increment ordinals starting at 0; enums with any payload variant
+ * carry a tag + payload union and forbid explicit '= N' ordinals. */
 static Stmt *parse_enum_decl(Parser *p, int is_pub) {
     Token *kw = advance(p); /* 'enum' */
     Token *name = expect(p, T_IDENT, "an enum name");
     expect(p, T_LBRACE, "'{'");
 
     char **variants = NULL;
+    char ***v_types = NULL;
+    int *v_ntypes = NULL;
+    int has_payload = 0;
     int *has_explicit = NULL;
     long long *values = NULL;
     int n = 0;
@@ -1547,9 +1737,33 @@ static Stmt *parse_enum_decl(Parser *p, int is_pub) {
         if (check(p, T_EOF))
             parse_error(peek(p), "unexpected end of file inside enum");
         Token *v = expect(p, T_IDENT, "a variant name");
+        char **ptypes = NULL;
+        int nptypes = 0;
+        if (match(p, T_LPAREN)) {
+            if (check(p, T_RPAREN))
+                parse_error(peek(p),
+                            "variant '%s' has empty payload parentheses; "
+                            "omit '()' for a unit variant",
+                            v->text);
+            while (!check(p, T_RPAREN)) {
+                const char *ty = parse_type_name(p);
+                ptypes = (char **)xrealloc(ptypes,
+                                           (size_t)(nptypes + 1) * sizeof(char *));
+                ptypes[nptypes++] = xstrdup(ty);
+                if (!match(p, T_COMMA))
+                    break;
+            }
+            expect(p, T_RPAREN, "')' to close variant payload types");
+            has_payload = 1;
+        }
         long long val = next_ordinal;
         int explicit_val = 0;
         if (match(p, T_ASSIGN)) {
+            if (nptypes > 0)
+                parse_error(v,
+                            "enum variant '%s' cannot have both a payload "
+                            "and an explicit '= N' value",
+                            v->text);
             Token *lit = expect(p, T_INT, "an integer literal");
             if (lit->big_u64 || lit->int_val < 0)
                 parse_error(lit, "enum variant values must be a non-negative int32");
@@ -1557,9 +1771,13 @@ static Stmt *parse_enum_decl(Parser *p, int is_pub) {
             explicit_val = 1;
         }
         variants = (char **)xrealloc(variants, (n + 1) * sizeof(char *));
+        v_types = (char ***)xrealloc(v_types, (n + 1) * sizeof(char **));
+        v_ntypes = (int *)xrealloc(v_ntypes, (n + 1) * sizeof(int));
         has_explicit = (int *)xrealloc(has_explicit, (n + 1) * sizeof(int));
         values = (long long *)xrealloc(values, (n + 1) * sizeof(long long));
         variants[n] = v->text;
+        v_types[n] = ptypes;
+        v_ntypes[n] = nptypes;
         has_explicit[n] = explicit_val;
         values[n] = val;
         n++;
@@ -1573,6 +1791,9 @@ static Stmt *parse_enum_decl(Parser *p, int is_pub) {
     s->as.enum_decl.name = name->text;
     s->as.enum_decl.is_pub = is_pub;
     s->as.enum_decl.variants = variants;
+    s->as.enum_decl.v_types = v_types;
+    s->as.enum_decl.v_ntypes = v_ntypes;
+    s->as.enum_decl.has_payload = has_payload;
     s->as.enum_decl.has_explicit = has_explicit;
     s->as.enum_decl.values = values;
     s->as.enum_decl.nvariants = n;
@@ -1844,6 +2065,8 @@ static Stmt *parse_statement(Parser *p) {
         return parse_guard_stmt(p);
     case T_KW_SPAWN:
         return parse_spawn_stmt(p);
+    case T_KW_DEFER:
+        return parse_defer_stmt(p);
     case T_KW_RETURN:
         return parse_return_stmt(p);
     case T_KW_BREAK:
@@ -1960,6 +2183,8 @@ static int parse_type_params(Parser *p, char ***out) {
         names[n++] = t->text;
         if (!match(p, T_COMMA))
             break;
+        if (check(p, T_RBRACKET))
+            break;
     }
     expect(p, T_RBRACKET, "']' to close the type parameters");
     *out = names;
@@ -1981,6 +2206,8 @@ static int parse_lt_params(Parser *p, char ***out) {
         lts = (char **)xrealloc(lts, (size_t)(n + 1) * sizeof(char *));
         lts[n++] = t->text;
         if (!match(p, T_COMMA))
+            break;
+        if (check(p, T_GT))
             break;
     }
     expect(p, T_GT, "'>'");
@@ -2014,24 +2241,22 @@ static FuncDecl *parse_fn_decl(Parser *p, int is_extern) {
     f->ntparams = ntparams;
 
     int pcap = 0;
-    if (!check(p, T_RPAREN)) {
-        for (;;) {
-            Token *pname = expect(p, T_IDENT, "a parameter name");
-            expect(p, T_COLON, "':' followed by a type");
-            const char *pty = parse_type_name(p);
-            if (f->nparams == pcap) {
-                pcap = pcap ? pcap * 2 : 4;
-                f->params =
-                    (char **)xrealloc(f->params, pcap * sizeof(char *));
-                f->param_types =
-                    (char **)xrealloc(f->param_types, pcap * sizeof(char *));
-            }
-            f->params[f->nparams] = pname->text;
-            f->param_types[f->nparams] = xstrdup(pty);
-            f->nparams++;
-            if (!match(p, T_COMMA))
-                break;
+    while (!check(p, T_RPAREN)) {
+        Token *pname = expect(p, T_IDENT, "a parameter name");
+        expect(p, T_COLON, "':' followed by a type");
+        const char *pty = parse_type_name(p);
+        if (f->nparams == pcap) {
+            pcap = pcap ? pcap * 2 : 4;
+            f->params =
+                (char **)xrealloc(f->params, pcap * sizeof(char *));
+            f->param_types =
+                (char **)xrealloc(f->param_types, pcap * sizeof(char *));
         }
+        f->params[f->nparams] = pname->text;
+        f->param_types[f->nparams] = xstrdup(pty);
+        f->nparams++;
+        if (!match(p, T_COMMA))
+            break;
     }
     expect(p, T_RPAREN, "')'");
 
@@ -2042,7 +2267,10 @@ static FuncDecl *parse_fn_decl(Parser *p, int is_extern) {
         f->is_extern = 1;
         expect(p, T_SEMI, "';'");
     } else {
+        int saved_in_fn = p->in_function;
+        p->in_function = 1;
         f->body = parse_block(p, 1);
+        p->in_function = saved_in_fn;
     }
     f->toks = (struct Token *)p->toks;
     f->ntoks = p->count;

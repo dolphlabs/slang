@@ -3,12 +3,10 @@
 //
 //     import "websocket";
 //
-//     let r = websocket.dial("wss://example.com/live", deadline);
-//     guard let ws = r else let e = err_of(r) { panic(e); }
+//     guard let ws = websocket.dial("wss://example.com/live", deadline) else |e| { panic(e); }
 //     websocket.send_text(ws, "{\"subscribe\":\"prices\"}", deadline);
 //     while true {
-//         let mr = websocket.recv(ws, deadline);          // result[opt[Message], str]
-//         guard let got = mr else let e = err_of(mr) { break; }
+//         guard let got = websocket.recv(ws, deadline) else |e| { break; }   // result[opt[Message], str]
 //         guard let m = got else { continue; }            // the deadline passed
 //         if m.kind == websocket.Kind.Close { break; }
 //         handle(websocket.text(m));

@@ -17,8 +17,7 @@ fn close_cache(fd: i32) { net.close(fd); }
 fn alive(fd: i32) -> bool { return net.idle_alive(fd); }
 
 let p = pool.new(pool.options(64), dial_cache, close_cache, alive);
-let lr = pool.acquire(p, deadline);
-guard let lease = lr else let e = err_of(lr) { return; }   // "timeout"
+guard let lease = pool.acquire(p, deadline) else |e| { return; }   // "timeout"
 let _s = net.send(lease.v, b"version\r\n");
 pool.release(p, lease);        // pool.discard(p, lease) if it broke
 ```

@@ -2,8 +2,7 @@
 //
 //     import "uuid";
 //
-//     let r = uuid.v7();                    // result[str, str]
-//     guard let id = r else let e = err_of(r) { panic(e); }
+//     guard let id = uuid.v7() else |e| { panic(e); }   // result[str, str]
 //     uuid.v4()                             // result[str, str]: random
 //     uuid.is_valid(id)                     // true: canonical form only
 //     uuid.parse("{0190F4E2-...}")          // result[str, str]: canonical, or why not

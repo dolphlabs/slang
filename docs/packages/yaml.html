@@ -102,7 +102,7 @@ try { var t = localStorage.getItem("slang-theme");
 <span class="k">struct</span> Config { name: <span class="t">str</span>, db: Db }
 
 <span class="k">let</span> r: <span class="t">result</span>[Config, <span class="t">str</span>] = yaml.<span class="f">decode</span>(text);
-<span class="k">guard</span> <span class="k">let</span> cfg = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }   <span class="c">// &quot;yaml: line 4: ...&quot;</span>
+<span class="k">guard</span> <span class="k">let</span> cfg = r <span class="k">else</span> |e| { <span class="f">panic</span>(e); }   <span class="c">// &quot;yaml: line 4: ...&quot;</span>
 
 yaml.<span class="f">to_json</span>(text);              <span class="c">// result[str, str]: the stream&#x27;s one document</span>
 yaml.<span class="f">to_json_all</span>(text);          <span class="c">// result[[str], str]: every document (--- between them)</span>

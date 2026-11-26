@@ -102,8 +102,7 @@ try { var t = localStorage.getItem("slang-theme");
 <span class="k">import</span> <span class="s">&quot;log&quot;</span>;
 
 <span class="k">let</span> dl = <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">5000000000</span>);
-<span class="k">let</span> cr = redis.<span class="f">connect</span>(<span class="s">&quot;redis://:secret@cache.internal:6380/2&quot;</span>, dl);
-<span class="k">guard</span> <span class="k">let</span> c = cr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(cr) {
+<span class="k">guard</span> <span class="k">let</span> c = redis.<span class="f">connect</span>(<span class="s">&quot;redis://:secret@cache.internal:6380/2&quot;</span>, dl) <span class="k">else</span> |e| {
     log.<span class="f">error</span>(<span class="s">&quot;connect: &quot;</span> + e);
     <span class="b">exit</span>(<span class="n">1</span>);
 }

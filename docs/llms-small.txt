@@ -63,7 +63,8 @@ println(label);
 ```
 
 Semicolons end statements. No `var`, `const`, `null` or `nil`. Fixed-width
-ints: `i8..i64`, `u8..u64`; `f32`. Casts go through `as`.
+ints: `i8..i64`, `u8..u64`; `f32`. Casts go through `as`. Trailing commas are
+allowed in literals, calls, parameters, type/lifetime lists, and `case` labels.
 
 ## Lists, maps, bytes
 
@@ -113,13 +114,23 @@ gc struct Account {                      // heap object: shared by reference
 
 enum Status { Pending, Paid, Shipped }
 
+enum Shape {
+    Point,
+    Circle(float),
+    Rect(float, float),
+}
+
 struct Box[T] { v: T }
 
 fn first[T](xs: [T]) -> T { return xs[0]; }   // T is inferred at the call
 
 let p = Point { x: 1, y: 2 };            // every field, exactly once
 println(p.sum());
-let a = Account { id: 1, owner: "ada", tags: [] };
+let a = Account {
+    id: 1,
+    owner: "ada",
+    tags: ["admin",],
+};
 let alias = a;
 alias.owner = "grace";                   // a.owner is now "grace" too
 println(a.owner);
@@ -129,12 +140,20 @@ switch s {
     case Status.Pending { println("wait"); }
     case Status.Paid, Status.Shipped { println("done"); }
 }
+let sh = Shape.Rect(3.0, 4.0);
+let area = switch sh {
+    case Shape.Point { 0.0 }
+    case Shape.Circle(r) { 3.14 * r * r }
+    case Shape.Rect(w, h) { w * h }
+};
+println(area);
 println(Box { v: 41 }.v + 1);
 println(first(["a", "b"]));
 ```
 
 `pub` exports a function, type, method or constant from its package. A
-`switch` on an enum must cover every variant or have `default`.
+`switch` on an enum must cover every variant (binding payloads with
+`Variant(x, _)`) or have `default`.
 
 ## Errors: opt, result, guard let, ??
 
@@ -147,8 +166,7 @@ fn find(ids: [int], want: int) -> opt[int] {
 }
 
 fn parse_port(s: str) -> result[int, str] {
-    let r = to_int(s);
-    guard let port = r else let e = err_of(r) {
+    guard let port = to_int(s) else |e| {
         return err("PORT: " + e);
     }
     if port < 1 || port > 65535 {
@@ -167,7 +185,7 @@ println(port);
 let bad = parse_port("x");
 if let p = bad {                         // if let: handle both, carry on
     println(p);
-} else let e = err_of(bad) {
+} else |e| {
     println(e);                          // PORT: not a base-10 integer
 }
 ```
@@ -195,6 +213,11 @@ fn worker(jobs: chan[int], results: chan[int]) {
 }
 
 fn square(n: int) -> int { return n * n; }
+fn bump_locked(m: mutex, v: int) -> int {
+    mutex_lock(m);
+    defer mutex_unlock(m);
+    return v + 1;
+}
 
 let jobs: chan[int] = make_chan(16);
 let results: chan[int] = make_chan(16);
@@ -210,16 +233,15 @@ let r = join_wait(h);                        // result[int, str]; err if it pani
 println(r ?? -1);
 
 let m = make_mutex();
-mutex_lock(m);
-total += 1;                                  // no defer: unlock on every path
-mutex_unlock(m);
+total = bump_locked(m, total);               // defer unlocks before return
 ```
 
 `spawn f(args)` runs `f` on a green thread; arguments are evaluated first and
 nothing is captured. Blocking calls (`chan_recv`, `net.*`, `time.sleep`) park
 the task, not the OS thread, so there is no async/await. `select { case let v
-= chan_recv(a) { .. } case chan_send(b, x) { .. } default { .. } }` waits on
-several channels.
+= chan_recv(a) when open { .. } case chan_send(b, x) { .. } case after(ns) {
+.. } case until(dl) { .. } default { .. } }` waits on channels or deadlines;
+`when` skips an arm without evaluating its channel, value, or timeout.
 Waiting calls take an `until`, an absolute deadline:
 `until_of(time.mono() + ns)`, `until_never()`, `until_hit(u)` (passed?) and
 `until_min(a, b)` (the earlier; an `until` cannot be compared directly).
@@ -255,7 +277,7 @@ let u = User { name: "ada", age: 36, email: none };
 let text = json.encode(u);
 println(text);
 let r: result[User, str] = json.decode("{\"name\":\"bo\",\"age\":7}");
-guard let back = r else let e = err_of(r) {
+guard let back = r else |e| {
     println("decode: " + e);         // errors name the field
     exit(1);
 }
@@ -269,6 +291,9 @@ A package is a directory: its `.sl` files share one namespace. `import
 `slang.project` (`pkg name git <url> tag v1.2.0`, then `slangc get`). JSON
 works on `struct` and `gc struct`; the decode target comes from the annotation,
 and a `[T]` of a plain `struct` decodes into one buffer, not an object per item.
+Struct fields take Go-style tags: `` `json:"wireName,omitempty"` `` renames and
+omits empty values (`none`, `""`, `b""`, `[]`, `{}`, `false`, `0`), and
+`` `json:"-"` `` skips on encode and zero-initializes on decode.
 Package authors can add repeatable `exclude <dir>` lines to their own
 `slang.project` to omit non-runtime directories from consumers' package caches;
 a package must not import a directory it excludes.
@@ -387,7 +412,7 @@ with standard PHC strings; its native crypto calls require OpenSSL 3.2+.
 import "timez";
 
 let r = timez.utc(2026, 10, 13, 9, 30, 15, 0);    // result[Time, str]; err names the bad field
-guard let t = r else let e = err_of(r) { println(e); exit(1); }
+guard let t = r else |e| { println(e); exit(1); }
 println(t.rfc3339());                              // 2026-10-13T09:30:15Z
 println(t.http_date());                            // Tue, 13 Oct 2026 09:30:15 GMT
 println(t.date().add_months(4).iso());             // 2027-02-13 (end-of-month clamps)
@@ -434,7 +459,8 @@ println("ok");
 - `let xs = [];` or `let m = {};`: annotate, `let xs: [int] = [];`.
 - `m[k]` on a missing key panics: check `has(m, k)`.
 - A closure or lambda: write a top-level function and pass its state in.
-- `return` between `mutex_lock` and `mutex_unlock`: unlock first.
+- `return` between `mutex_lock` and `mutex_unlock`: use `defer mutex_unlock(m);` inside a `fn`.
+- `defer { ... }` or `defer` in a loop/top-level: `defer` takes a call/method inside a `fn`, never blocks/closures or loops (extract a helper `fn`).
 - A `guard` whose `else` falls through is rejected: leave the scope, or use
   `if let v = x { .. } else { .. }` when both paths continue.
 - `let v = chan_recv(c);` is `opt[T]`: unwrap with `guard let` or `??`.
