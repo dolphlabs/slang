@@ -1,0 +1,1 @@
+select: after() expects an integer or duration

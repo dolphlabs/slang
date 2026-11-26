@@ -456,7 +456,7 @@ static void sl_mutex_unlock(sl_mutex *m) {
     sl_rt_preempt_enable();
 }
 
-/* ---- select: wait on several channels at once -----------------------
+/* ---- select: wait on several channels (and/or timeout) at once --------
  *
  * One sl_sel_case per arm, built by the caller (generated C) alongside
  * an sl_waiter array of the same length. Both live on the selecting
@@ -478,13 +478,117 @@ static void sl_mutex_unlock(sl_mutex *m) {
  * it only has to vary, never to be exact. */
 
 typedef struct {
-    sl_chan *ch;
-    int is_send;
-    void *val;  /* recv: where to put the value; send: what to send */
-    int closed; /* recv result: the channel was closed and drained, so
-                   this arm fires with `none` rather than a value --
-                   the same convention chan_recv already uses */
+    sl_chan *ch;         /* channel (kind 0/1); NULL for timeout/disabled */
+    int kind;            /* 0 = recv, 1 = send, 2 = timeout (after/until) */
+    int enabled;         /* 0 = disabled via `when false` or `until_never()` */
+    long long deadline;  /* absolute mono-ns deadline when kind == 2 */
+    void *val;           /* recv: output slot; send: value ptr; timeout: NULL */
+    int closed;          /* recv result: channel closed & drained -> none */
 } sl_sel_case;
+
+typedef struct sl_sel_timer {
+    struct sl_sel_timer *next;
+    struct sl_select *sel;
+    long long deadline_ns;
+    int linked;
+} sl_sel_timer;
+
+static sl_sel_timer *sl_sel_timers = NULL;
+static pthread_mutex_t sl_sel_timer_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t sl_sel_timer_cond = PTHREAD_COND_INITIALIZER;
+static pthread_once_t sl_sel_timer_once = PTHREAD_ONCE_INIT;
+
+#define SL_SEL_TIMER_MAX_WAIT_NS 1000000000LL
+
+/* Background timer thread for `select` timeout arms (starts lazily on the
+ * first timed select that actually needs to park). Follows sl_time_thread's
+ * monotonic-delta re-derivation (portable across macOS without
+ * pthread_condattr_setclock) and acquires locks strictly in
+ * sl_sel_timer_mu -> sel->mu order (never held concurrently with ch->mu;
+ * sl_select_run never holds sel->mu when locking sl_sel_timer_mu). Holding
+ * sl_sel_timer_mu through sel->mu unlock / sl_task_resume guarantees
+ * sl_sel_timer_remove() cannot return into an unwinding frame while this
+ * thread still touches `sel`. */
+static void *sl_sel_timer_thread(void *arg) {
+    (void)arg;
+    pthread_mutex_lock(&sl_sel_timer_mu);
+    for (;;) {
+        long long now_ns = sl_now_ns();
+        while (sl_sel_timers && sl_sel_timers->deadline_ns <= now_ns) {
+            sl_sel_timer *tm = sl_sel_timers;
+            sl_sel_timers = tm->next;
+            tm->next = NULL;
+            tm->linked = 0;
+            sl_select *sel = tm->sel;
+            pthread_mutex_lock(&sel->mu);
+            if (!sel->woken) {
+                sel->woken = 1;
+                if (sel->parked) {
+                    sl_task *t = sel->task;
+                    pthread_mutex_unlock(&sel->mu);
+                    sl_task_resume(t);
+                    continue;
+                }
+            }
+            pthread_mutex_unlock(&sel->mu);
+        }
+        long long wait_ns = sl_sel_timers
+            ? sl_sel_timers->deadline_ns - now_ns : -1;
+        if (wait_ns < 0) {
+            pthread_cond_wait(&sl_sel_timer_cond, &sl_sel_timer_mu);
+            continue;
+        }
+        if (wait_ns > SL_SEL_TIMER_MAX_WAIT_NS)
+            wait_ns = SL_SEL_TIMER_MAX_WAIT_NS;
+        struct timespec rt;
+        clock_gettime(CLOCK_REALTIME, &rt);
+        long long target_ns = (long long)rt.tv_sec * 1000000000LL +
+                              rt.tv_nsec + wait_ns;
+        struct timespec abstime;
+        abstime.tv_sec = (time_t)(target_ns / 1000000000LL);
+        abstime.tv_nsec = (long)(target_ns % 1000000000LL);
+        pthread_cond_timedwait(&sl_sel_timer_cond, &sl_sel_timer_mu, &abstime);
+    }
+    return NULL;
+}
+
+static void sl_sel_timer_init(void) {
+    pthread_t th;
+    if (sl_rt_thread_spawn(&th, sl_sel_timer_thread, NULL) != 0) {
+        fprintf(stderr, "slang: failed to start select timer thread\n");
+        exit(1);
+    }
+    pthread_detach(th);
+}
+
+static void sl_sel_timer_add(sl_sel_timer *tm) {
+    pthread_once(&sl_sel_timer_once, sl_sel_timer_init);
+    pthread_mutex_lock(&sl_sel_timer_mu);
+    sl_sel_timer **pp = &sl_sel_timers;
+    while (*pp && (*pp)->deadline_ns <= tm->deadline_ns)
+        pp = &(*pp)->next;
+    int is_head = (pp == &sl_sel_timers);
+    tm->next = *pp;
+    *pp = tm;
+    tm->linked = 1;
+    if (is_head)
+        pthread_cond_signal(&sl_sel_timer_cond);
+    pthread_mutex_unlock(&sl_sel_timer_mu);
+}
+
+static void sl_sel_timer_remove(sl_sel_timer *tm) {
+    pthread_mutex_lock(&sl_sel_timer_mu);
+    if (tm->linked) {
+        sl_sel_timer **pp = &sl_sel_timers;
+        while (*pp && *pp != tm)
+            pp = &(*pp)->next;
+        if (*pp)
+            *pp = tm->next;
+        tm->next = NULL;
+        tm->linked = 0;
+    }
+    pthread_mutex_unlock(&sl_sel_timer_mu);
+}
 
 static _Atomic unsigned sl_sel_rr = 0;
 
@@ -494,7 +598,7 @@ static _Atomic unsigned sl_sel_rr = 0;
  * held. */
 static int sl_sel_try_locked(sl_sel_case *sc) {
     sl_chan *c = sc->ch;
-    if (sc->is_send) {
+    if (sc->kind == 1) {
         if (c->closed)
             return -1;
         if (c->count == c->cap)
@@ -522,15 +626,17 @@ static int sl_sel_try_locked(sl_sel_case *sc) {
     return 0;
 }
 
-/* One pass over every arm, starting at a rotating offset. Returns the
- * index that fired, or -1 for none; sets *bad on a send to a closed
- * channel. */
+/* One pass over every enabled channel arm, starting at a rotating offset.
+ * Returns the index that fired, or -1 for none; sets *bad on a send to a
+ * closed channel. */
 static int sl_sel_poll(sl_sel_case *cs, int n, int *bad) {
     unsigned start = atomic_fetch_add(&sl_sel_rr, 1u);
     int k;
     for (k = 0; k < n; k++) {
         int r;
         int i = (int)((start + (unsigned)k) % (unsigned)n);
+        if (!cs[i].enabled || cs[i].kind == 2)
+            continue;
         pthread_mutex_lock(&cs[i].ch->mu);
         r = sl_sel_try_locked(&cs[i]);
         pthread_mutex_unlock(&cs[i].ch->mu);
@@ -548,10 +654,12 @@ static void sl_sel_enqueue(sl_sel_case *cs, sl_waiter *nodes, int n,
                            struct sl_select *sel, sl_task *t) {
     int i;
     for (i = 0; i < n; i++) {
+        if (!cs[i].enabled || cs[i].kind == 2)
+            continue;
         nodes[i].task = t;
         nodes[i].sel = sel;
         pthread_mutex_lock(&cs[i].ch->mu);
-        if (cs[i].is_send)
+        if (cs[i].kind == 1)
             sl_wl_push(&cs[i].ch->send_waiters,
                        &cs[i].ch->send_waiters_tail, &nodes[i]);
         else
@@ -569,8 +677,10 @@ static void sl_sel_enqueue(sl_sel_case *cs, sl_waiter *nodes, int n,
 static void sl_sel_dequeue(sl_sel_case *cs, sl_waiter *nodes, int n) {
     int i;
     for (i = 0; i < n; i++) {
+        if (!cs[i].enabled || cs[i].kind == 2)
+            continue;
         pthread_mutex_lock(&cs[i].ch->mu);
-        if (cs[i].is_send)
+        if (cs[i].kind == 1)
             sl_wl_remove(&cs[i].ch->send_waiters,
                          &cs[i].ch->send_waiters_tail, &nodes[i]);
         else
@@ -582,32 +692,42 @@ static void sl_sel_dequeue(sl_sel_case *cs, sl_waiter *nodes, int n) {
 
 /* Returns the index of the arm that fired, or -1 for the default arm.
  * With no default and no arm ever becoming ready, this parks forever --
- * exactly like chan_recv on a channel nobody sends to.
- *
- * The second poll, after enqueueing, is not redundant: it is the whole
- * reason this terminates. A plain chan_recv holds c->mu continuously
- * from "is there a value" through "put me on the wait list" to the
- * park, so a sender cannot slip between the check and the sleep. A
- * select cannot do that -- it would have to hold N locks at once -- so
- * there is a real window between the first poll and the enqueue in
- * which a sender deposits a value, finds an empty wait list, wakes
- * nobody, and goes away. Parking after that window without looking
- * again loses the wakeup permanently: the value is sitting in the
- * buffer and no further send is coming. Once the nodes are on the
- * lists, a sender either sees them (and claims us) or landed before
- * them (and the second poll sees the value); it cannot fall between.
- *
- * Found by a hang, not by reading: 1 run in ~30 of tests/select
- * deadlocked with every worker idle in sl_worker_run_loop. */
+ * except if all arms are disabled (`when false` / `until_never`) and there
+ * is no default, which fails immediately instead of deadlocking forever. */
 static int sl_select_run(sl_sel_case *cs, sl_waiter *nodes, int n,
                          int has_default) {
+    int t_idx = -1, n_chan_enabled = 0;
+    long long t_deadline = 0;
+    for (int i = 0; i < n; i++) {
+        if (!cs[i].enabled)
+            continue;
+        if (cs[i].kind == 2) {
+            if (t_idx < 0 || cs[i].deadline < t_deadline) {
+                t_idx = i;
+                t_deadline = cs[i].deadline;
+            }
+        } else {
+            n_chan_enabled++;
+        }
+    }
+    if (n_chan_enabled == 0 && t_idx < 0) {
+        if (has_default)
+            return -1;
+        sl_rt_error("select: all arms disabled with no default", 0, 0);
+    }
+
     sl_select sel;
+    sl_sel_timer tm;
     int fired, bad_send = 0;
 
     pthread_mutex_init(&sel.mu, NULL);
     sel.woken = 0;
     sel.parked = 0;
     sel.task = NULL;
+    tm.next = NULL;
+    tm.sel = &sel;
+    tm.deadline_ns = t_deadline;
+    tm.linked = 0;
 
     /* Bracketed entry-to-every-return, the same rule chan and mutex
      * follow: this function parks, and the park transition is a live
@@ -615,17 +735,35 @@ static int sl_select_run(sl_sel_case *cs, sl_waiter *nodes, int n,
     sl_rt_preempt_disable();
     for (;;) {
         fired = sl_sel_poll(cs, n, &bad_send);
-        if (bad_send || fired >= 0 || has_default)
+        if (bad_send || fired >= 0)
             break;
+        if (t_idx >= 0 && sl_now_ns() >= t_deadline) {
+            fired = t_idx;
+            break;
+        }
+        if (has_default) {
+            fired = -1;
+            break;
+        }
 
         sel.task = sl_rt_cur();
         sl_sel_enqueue(cs, nodes, n, &sel, sel.task);
+        if (t_idx >= 0)
+            sl_sel_timer_add(&tm);
 
         fired = sl_sel_poll(cs, n, &bad_send);
         if (bad_send || fired >= 0) {
             /* Never parked, so no waker can be holding a resume for us;
              * sl_waiter_wake only resumes when `parked` is set. */
             sl_sel_dequeue(cs, nodes, n);
+            if (t_idx >= 0)
+                sl_sel_timer_remove(&tm);
+            break;
+        }
+        if (t_idx >= 0 && sl_now_ns() >= t_deadline) {
+            fired = t_idx;
+            sl_sel_dequeue(cs, nodes, n);
+            sl_sel_timer_remove(&tm);
             break;
         }
 
@@ -644,7 +782,9 @@ static int sl_select_run(sl_sel_case *cs, sl_waiter *nodes, int n,
         }
 
         sl_sel_dequeue(cs, nodes, n);
-        /* Safe to reset unlocked: every node is unlinked above, so no
+        if (t_idx >= 0)
+            sl_sel_timer_remove(&tm);
+        /* Safe to reset unlocked: every node/timer is unlinked above, so no
          * waker can still reach &sel. */
         sel.woken = 0;
         sel.parked = 0;

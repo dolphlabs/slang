@@ -1346,11 +1346,7 @@ static Stmt *parse_select_stmt(Parser *p) {
         Token *ck = expect(p, T_KW_CASE,
                            "'case' or 'default' inside 'select'");
         SelectCase sc;
-        sc.is_send = 0;
-        sc.bind = NULL;
-        sc.ch = NULL;
-        sc.val = NULL;
-        sc.body = NULL;
+        memset(&sc, 0, sizeof(sc));
         sc.line = ck->line;
 
         if (match(p, T_KW_LET)) {
@@ -1361,14 +1357,15 @@ static Stmt *parse_select_stmt(Parser *p) {
         }
 
         Expr *call = parse_expression(p);
-        if (call->kind != EX_CALL)
+        if (call->kind != EX_CALL || call->as.call.callee)
             parse_error(ck,
-                        "a 'select' arm must be 'chan_recv(ch)' or "
-                        "'chan_send(ch, v)'");
+                        "a 'select' arm must be 'chan_recv(ch)', "
+                        "'chan_send(ch, v)', 'after(ns)', or 'until(deadline)'");
         const char *fname = call->as.call.name;
         if (fname && !strcmp(fname, "chan_recv")) {
             if (call->as.call.nargs != 1)
                 parse_error(ck, "chan_recv() takes exactly one argument");
+            sc.kind = 0;
             sc.is_send = 0;
             sc.ch = call->as.call.args[0];
         } else if (fname && !strcmp(fname, "chan_send")) {
@@ -1377,13 +1374,30 @@ static Stmt *parse_select_stmt(Parser *p) {
                                 "the 'let'");
             if (call->as.call.nargs != 2)
                 parse_error(ck, "chan_send() takes exactly two arguments");
+            sc.kind = 1;
             sc.is_send = 1;
             sc.ch = call->as.call.args[0];
             sc.val = call->as.call.args[1];
+        } else if (fname && (!strcmp(fname, "after") || !strcmp(fname, "until"))) {
+            int is_until_arm = !strcmp(fname, "until");
+            if (sc.bind)
+                parse_error(ck,
+                            "a '%s' timeout arm binds nothing; drop the 'let'",
+                            fname);
+            if (call->as.call.nargs != 1)
+                parse_error(ck, "%s() takes exactly one argument", fname);
+            sc.kind = is_until_arm ? 3 : 2;
+            sc.is_send = 0;
+            sc.val = call->as.call.args[0];
         } else {
             parse_error(ck,
-                        "a 'select' arm must be 'chan_recv(ch)' or "
-                        "'chan_send(ch, v)'");
+                        "a 'select' arm must be 'chan_recv(ch)', "
+                        "'chan_send(ch, v)', 'after(ns)', or 'until(deadline)'");
+        }
+
+        if (check(p, T_IDENT) && !strcmp(peek(p)->text, "when")) {
+            advance(p);
+            sc.guard = parse_expression(p);
         }
 
         sc.body = parse_block(p, 0);

@@ -239,8 +239,9 @@ total = bump_locked(m, total);               // defer unlocks before return
 `spawn f(args)` runs `f` on a green thread; arguments are evaluated first and
 nothing is captured. Blocking calls (`chan_recv`, `net.*`, `time.sleep`) park
 the task, not the OS thread, so there is no async/await. `select { case let v
-= chan_recv(a) { .. } case chan_send(b, x) { .. } default { .. } }` waits on
-several channels.
+= chan_recv(a) when open { .. } case chan_send(b, x) { .. } case after(ns) {
+.. } case until(dl) { .. } default { .. } }` waits on channels or deadlines;
+`when` skips an arm without evaluating its channel, value, or timeout.
 Waiting calls take an `until`, an absolute deadline:
 `until_of(time.mono() + ns)`, `until_never()`, `until_hit(u)` (passed?) and
 `until_min(a, b)` (the earlier; an `until` cannot be compared directly).

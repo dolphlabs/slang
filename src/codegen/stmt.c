@@ -2588,60 +2588,140 @@ void gen_stmt(CG *cg, Stmt *s) {
         int i, nroots = 0;
         char **elems = (char **)xmalloc((size_t)n * sizeof(char *));
         StrBuf roots;
+        int ambient_mark = cg->ambient_count;
 
         emit_line(cg, "{");
         cg->indent++;
         for (i = 0; i < n; i++) {
             SelectCase *sc = &s->as.select_stmt.cases[i];
-            const char *ct = infer_type(cg, sc->ch);
-            if (!is_chan(ct))
-                cg_error(sc->line,
-                         "select: chan_%s() expects a chan (got %s)",
-                         sc->is_send ? "send" : "recv", ct);
-            elems[i] = chan_elem(ct);
-            char *ch = gen_expr(cg, sc->ch);
-            emit_line(cg, "sl_chan *_sl_selh%d_%d = %s;", id, i, ch);
-            emit_line(cg, "%s _sl_selv%d_%d;", ctype_of(cg, elems[i]), id,
-                      i);
-            if (sc->is_send) {
-                const char *saved = expect_push(cg, elems[i]);
-                const char *vt = infer_type(cg, sc->val);
-                char *v = gen_expr(cg, sc->val);
-                cg->expect = saved;
-                if (!value_assignable(elems[i], sc->val, vt))
+            elems[i] = NULL;
+            if (sc->guard) {
+                const char *gt = infer_type(cg, sc->guard);
+                if (strcmp(gt, "bool"))
                     cg_error(sc->line,
-                             "chan_send(): cannot send %s on a chan[%s]",
-                             vt, elems[i]);
-                v = maybe_cast(cg, elems[i], vt, v);
-                emit_line(cg, "_sl_selv%d_%d = %s;", id, i, v);
+                             "select 'when' guard must be a bool (got %s)", gt);
+                char *ge = gen_expr(cg, sc->guard);
+                emit_line(cg, "bool _sl_selen%d_%d = %s;", id, i, ge);
             } else {
-                /* Zeroed, not merely declared: a recv arm that fires
-                 * because the channel is CLOSED never writes this slot,
-                 * and it is named in the root array below. An
-                 * uninitialised pointer there would be a garbage root.
-                 * (sl_gc_mark tolerates NULL and non-GC addresses.) */
+                emit_line(cg, "bool _sl_selen%d_%d = true;", id, i);
+            }
+
+            if (sc->kind == 0 || sc->kind == 1) {
+                const char *ct = infer_type(cg, sc->ch);
+                if (!is_chan(ct))
+                    cg_error(sc->line,
+                             "select: chan_%s() expects a chan (got %s)",
+                             sc->is_send ? "send" : "recv", ct);
+                elems[i] = chan_elem(ct);
+                const char *vt = NULL;
+                if (sc->is_send) {
+                    const char *saved = expect_push(cg, elems[i]);
+                    vt = infer_type(cg, sc->val);
+                    cg->expect = saved;
+                    if (!value_assignable(elems[i], sc->val, vt))
+                        cg_error(sc->line,
+                                 "chan_send(): cannot send %s on a chan[%s]",
+                                 vt, elems[i]);
+                }
+                emit_line(cg, "sl_chan *_sl_selh%d_%d = NULL;", id, i);
+                emit_line(cg, "%s _sl_selv%d_%d;", ctype_of(cg, elems[i]), id,
+                          i);
                 emit_line(cg,
-                          "memset(&_sl_selv%d_%d, 0, "
-                          "sizeof(_sl_selv%d_%d));",
+                          "memset(&_sl_selv%d_%d, 0, sizeof(_sl_selv%d_%d));",
                           id, i, id, i);
+                if (sc->guard) {
+                    emit_line(cg, "if (_sl_selen%d_%d) {", id, i);
+                    cg->indent++;
+                }
+                char *ch = gen_expr(cg, sc->ch);
+                emit_line(cg, "_sl_selh%d_%d = %s;", id, i, ch);
+                ambient_push_value_roots(
+                    cg, xasprintf("_sl_selh%d_%d", id, i), ct);
+                if (sc->is_send) {
+                    const char *saved = expect_push(cg, elems[i]);
+                    char *v = gen_expr(cg, sc->val);
+                    cg->expect = saved;
+                    v = maybe_cast(cg, elems[i], vt, v);
+                    emit_line(cg, "_sl_selv%d_%d = %s;", id, i, v);
+                }
+                if (sc->guard) {
+                    cg->indent--;
+                    emit_line(cg, "}");
+                }
+                if (type_has_gc_roots(cg, elems[i]))
+                    ambient_push_value_roots(
+                        cg, xasprintf("_sl_selv%d_%d", id, i), elems[i]);
+            } else {
+                const char *vt = infer_type(cg, sc->val);
+                if (sc->kind == 2) {
+                    if (!is_int(vt) && strcmp(vt, "duration"))
+                        cg_error(sc->line,
+                                 "select: after() expects an integer or "
+                                 "duration in nanoseconds (got %s)",
+                                 vt);
+                } else {
+                    if (!is_until(vt))
+                        cg_error(sc->line,
+                                 "select: until() expects an until deadline "
+                                 "(got %s)",
+                                 vt);
+                }
+                emit_line(cg, "long long _sl_seld%d_%d = 0;", id, i);
+                if (sc->guard) {
+                    emit_line(cg, "if (_sl_selen%d_%d) {", id, i);
+                    cg->indent++;
+                }
+                char *v = gen_expr(cg, sc->val);
+                if (sc->kind == 2) {
+                    emit_line(cg, "long long _sl_sela%d_%d = (long long)(%s);",
+                              id, i, v);
+                    emit_line(cg,
+                              "_sl_seld%d_%d = _sl_sela%d_%d <= 0 ? 1LL "
+                              ": sl_now_ns() + _sl_sela%d_%d;",
+                              id, i, id, i, id, i);
+                } else {
+                    emit_line(cg, "_sl_seld%d_%d = (long long)(%s);", id, i, v);
+                    emit_line(cg,
+                              "if (_sl_seld%d_%d == 0) _sl_selen%d_%d = false;",
+                              id, i, id, i);
+                }
+                if (sc->guard) {
+                    cg->indent--;
+                    emit_line(cg, "}");
+                }
             }
         }
+        cg->ambient_count = ambient_mark;
+
         emit_line(cg, "sl_sel_case _sl_selc%d[%d];", id, n);
         emit_line(cg, "sl_waiter _sl_seln%d[%d];", id, n);
         for (i = 0; i < n; i++) {
             SelectCase *sc = &s->as.select_stmt.cases[i];
-            emit_line(cg, "_sl_selc%d[%d].ch = _sl_selh%d_%d;", id, i, id,
-                      i);
-            emit_line(cg, "_sl_selc%d[%d].is_send = %d;", id, i,
-                      sc->is_send);
-            emit_line(cg, "_sl_selc%d[%d].val = (void *)&_sl_selv%d_%d;",
+            int ck = sc->kind >= 2 ? 2 : sc->kind;
+            emit_line(cg, "_sl_selc%d[%d].kind = %d;", id, i, ck);
+            emit_line(cg, "_sl_selc%d[%d].enabled = _sl_selen%d_%d ? 1 : 0;",
                       id, i, id, i);
             emit_line(cg, "_sl_selc%d[%d].closed = 0;", id, i);
+            if (ck < 2) {
+                emit_line(cg, "_sl_selc%d[%d].ch = _sl_selh%d_%d;", id, i, id,
+                          i);
+                emit_line(cg, "_sl_selc%d[%d].deadline = 0;", id, i);
+                emit_line(cg, "_sl_selc%d[%d].val = (void *)&_sl_selv%d_%d;",
+                          id, i, id, i);
+            } else {
+                emit_line(cg, "_sl_selc%d[%d].ch = NULL;", id, i);
+                emit_line(cg, "_sl_selc%d[%d].deadline = _sl_seld%d_%d;", id, i,
+                          id, i);
+                emit_line(cg, "_sl_selc%d[%d].val = NULL;", id, i);
+            }
         }
 
         sb_init(&roots);
         int sel_wrote = 0;
         for (i = 0; i < n; i++) {
+            SelectCase *sc = &s->as.select_stmt.cases[i];
+            if (sc->kind >= 2)
+                continue;
             sb_append(&roots, sel_wrote++ ? ", " : "");
             sb_append(&roots, xasprintf("(void *)_sl_selh%d_%d", id, i));
             nroots++;
@@ -2660,11 +2740,20 @@ void gen_stmt(CG *cg, Stmt *s) {
                 append_named_gc_roots(cg, &roots, lname, &sel_wrote);
             }
         }
-        emit_line(cg, "void *_sl_selr%d[] = { %s };", id, roots.data);
-        emit_line(cg, "sl_safepoint _sl_selsp%d;", id);
-        emit_line(cg,
-                  "sl_rt_safepoint_enter_s(SL_SELF(), &_sl_selsp%d, _sl_selr%d, %d);",
-                  id, id, nroots);
+        if (nroots > 0) {
+            emit_line(cg, "void *_sl_selr%d[] = { %s };", id, roots.data);
+            emit_line(cg, "sl_safepoint _sl_selsp%d;", id);
+            emit_line(
+                cg,
+                "sl_rt_safepoint_enter_s(SL_SELF(), &_sl_selsp%d, _sl_selr%d, %d);",
+                id, id, nroots);
+        } else {
+            emit_line(cg, "sl_safepoint _sl_selsp%d;", id);
+            emit_line(
+                cg,
+                "sl_rt_safepoint_enter_s(SL_SELF(), &_sl_selsp%d, NULL, 0);",
+                id);
+        }
         emit_line(cg,
                   "int _sl_seli%d = sl_select_run(_sl_selc%d, "
                   "_sl_seln%d, %d, %d);",
