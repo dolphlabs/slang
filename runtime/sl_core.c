@@ -1303,6 +1303,23 @@ static void *sl_rt_sysalloc(size_t align, size_t size) {
     return r.out;
 }
 
+/* Run an extern fn trampoline on the current OS worker thread's stack
+ * (SL_RT_OS_STACK, or main's) instead of the task's 8 KB stack so C
+ * libraries with deep recursion or large stack frames cannot overflow
+ * the task guard page or corrupt the heap. The task stack stays unmoved
+ * (so ptr[T] arguments pointing into a task frame remain valid), and the
+ * preempt bracket prevents async preemption or worker migration while
+ * executing on this OS thread's native stack. */
+static void sl_rt_extern_call(void (*fn)(void *), void *arg) {
+    sl_rt_preempt_disable();
+    void *top = sl_rt_native_stack_top();
+    if (top)
+        sl_rt_call_on_stack(fn, arg, top);
+    else
+        fn(arg);
+    sl_rt_preempt_enable();
+}
+
 /* A slang function whose C frame is big is entered through a thin wrapper
  * that calls this first (see the frame guards in codegen and main.c).
  *
