@@ -1387,11 +1387,7 @@ void emit_spawn_trampolines(CG *cg) {
                            ? fn_sig_of_type(cg, s->fntype,
                                             "<function value>", 0)
                            : s->sig;
-        char *callee = s->fntype
-                           ? xstrdup("_sl_a->fn")
-                           : sig->is_extern
-                                 ? xstrdup(sig->name)
-                                 : mangle_sig(sig);
+        char *callee = s->fntype ? xstrdup("_sl_a->fn") : mangle_sig(sig);
 
         emit_line(cg, "typedef struct {");
         cg->indent++;
@@ -1532,6 +1528,8 @@ void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
     emit_line(cg, "#define SL_X_STR2(x) #x");
     emit_line(cg, "#define SL_X_STR(x) SL_X_STR2(x)");
     emit_line(cg, "#define SL_X_SYM(n) SL_X_STR(__USER_LABEL_PREFIX__) n");
+    const char **seen_ext = NULL;
+    int nseen_ext = 0, cap_ext = 0;
     /* plain functions (including `extern fn`) then methods, per package */
     while (func_cursor_next(cg, pkgs, npkgs, &fc, 1)) {
         FuncDecl *f = fc.fn;
@@ -1539,21 +1537,107 @@ void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
         StrBuf params;
         sb_init(&params);
         if (f->is_extern) {
-            /* no body defined here, so the real symbol just needs
-             * a matching prototype for the C compiler + linker;
-             * parameter names are irrelevant in a prototype */
-            if (sig->nparams == 0) {
-                sb_append(&params, "void");
-            } else {
-                for (int m = 0; m < sig->nparams; m++) {
-                    if (m)
-                        sb_append(&params, ", ");
-                    sb_append(&params, ctype_of(cg, sig->param_slang[m]));
+            int seen = 0;
+            for (int k = 0; k < nseen_ext; k++) {
+                if (!strcmp(seen_ext[k], f->name)) {
+                    seen = 1;
+                    break;
                 }
             }
-            emit_line(cg, "extern %s sl_x_%s(%s) __asm__(SL_X_SYM(\"%s\"));",
-                      sig->ret_slang ? ctype_of(cg, sig->ret_slang) : "void",
-                      f->name, params.data, f->name);
+            if (seen)
+                continue;
+            if (nseen_ext == cap_ext) {
+                cap_ext = cap_ext ? cap_ext * 2 : 16;
+                seen_ext = (const char **)xrealloc(
+                    seen_ext, (size_t)cap_ext * sizeof(char *));
+            }
+            seen_ext[nseen_ext++] = f->name;
+
+            /* Bind the raw C symbol under `sl_xraw_<name>` and wrap it in a
+             * stack-switching trampoline `sl_x_<name>` that runs on the OS
+             * worker stack via sl_rt_extern_call. Direct calls, function
+             * values, and `spawn` wrappers all target `sl_x_<name>`. */
+            StrBuf formal, forward;
+            sb_init(&formal);
+            sb_init(&forward);
+            if (sig->nparams == 0) {
+                sb_append(&params, "void");
+                sb_append(&formal, "void");
+            } else {
+                for (int m = 0; m < sig->nparams; m++) {
+                    const char *ct = ctype_of(cg, sig->param_slang[m]);
+                    if (m) {
+                        sb_append(&params, ", ");
+                        sb_append(&formal, ", ");
+                        sb_append(&forward, ", ");
+                    }
+                    sb_append(&params, ct);
+                    sb_append(&formal, ct);
+                    sb_putc(&formal, ' ');
+                    sb_append(&formal, xasprintf("_a%d", m));
+                    sb_append(&forward, xasprintf("_a->a%d", m));
+                }
+            }
+            const char *ret_c = sig->ret_slang
+                                    ? ctype_of(cg, sig->ret_slang)
+                                    : "void";
+            emit_line(cg, "extern %s sl_xraw_%s(%s) __asm__(SL_X_SYM(\"%s\"));",
+                      ret_c, f->name, params.data, f->name);
+            if (sig->nparams == 0 && !sig->ret_slang) {
+                emit_line(cg,
+                          "static __attribute__((unused)) void sl_xb_%s(void "
+                          "*_p) {",
+                          f->name);
+                cg->indent++;
+                emit_line(cg, "(void)_p;");
+                emit_line(cg, "sl_xraw_%s();", f->name);
+                cg->indent--;
+                emit_line(cg, "}");
+                emit_line(cg,
+                          "static __attribute__((unused)) void sl_x_%s(void) {",
+                          f->name);
+                cg->indent++;
+                emit_line(cg, "sl_rt_extern_call(sl_xb_%s, NULL);", f->name);
+                cg->indent--;
+                emit_line(cg, "}");
+            } else {
+                emit_line(cg, "typedef struct {");
+                cg->indent++;
+                for (int m = 0; m < sig->nparams; m++) {
+                    emit_line(cg, "%s a%d;",
+                              ctype_of(cg, sig->param_slang[m]), m);
+                }
+                if (sig->ret_slang)
+                    emit_line(cg, "%s ret;", ret_c);
+                cg->indent--;
+                emit_line(cg, "} sl_xa_%s;", f->name);
+                emit_line(cg,
+                          "static __attribute__((unused)) void sl_xb_%s(void "
+                          "*_p) {",
+                          f->name);
+                cg->indent++;
+                emit_line(cg, "sl_xa_%s *_a = (sl_xa_%s *)_p;", f->name,
+                          f->name);
+                if (sig->ret_slang)
+                    emit_line(cg, "_a->ret = sl_xraw_%s(%s);", f->name,
+                              forward.data);
+                else
+                    emit_line(cg, "sl_xraw_%s(%s);", f->name, forward.data);
+                cg->indent--;
+                emit_line(cg, "}");
+                emit_line(cg,
+                          "static __attribute__((unused)) %s sl_x_%s(%s) {",
+                          ret_c, f->name, formal.data);
+                cg->indent++;
+                emit_line(cg, "sl_xa_%s _a;", f->name);
+                for (int m = 0; m < sig->nparams; m++)
+                    emit_line(cg, "_a.a%d = _a%d;", m, m);
+                emit_line(cg, "sl_rt_extern_call(sl_xb_%s, &_a);", f->name);
+                if (sig->ret_slang)
+                    emit_line(cg, "return _a.ret;");
+                cg->indent--;
+                emit_line(cg, "}");
+            }
             any = 1;
             continue;
         }
@@ -1573,6 +1657,7 @@ void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
                   mangle_sig(sig), params.data);
         any = 1;
     }
+    free(seen_ext);
     if (any)
         emit_line(cg, "");
 }
