@@ -1,0 +1,27 @@
+primary
+42
+12
+12
+hello!
+fallback
+stmt:hello
+break-ok
+Point
+Circle(1.5)
+Rect(2, 5)
+Label("hi")
+42
+Wrapped(Label("wrapped"))
+Nested(some(7), err("oops"))
+Nested(none, ok(99))
+3
+2
+some(Label("opt-2"))
+none
+ok(Label("res-3"))
+worker:sp-7
+stress-last:t-399:800:tmp-399
+verify-tok:t-250:251
+verify-gcbox:lbl-250:box-250
+verify-holder:hs-250:h-250
+verify-map:m-399

@@ -184,12 +184,21 @@ static void scan_expr(CG *cg, Esc *esc, Expr *e, const char *name) {
     case EX_SWITCH:
         scan_expr(cg, esc, e->as.switch_expr.scrut, name);
         for (int i = 0; i < e->as.switch_expr.ncases; i++) {
-            for (int j = 0; j < e->as.switch_expr.cases[i].nvals; j++)
-                scan_expr(cg, esc, e->as.switch_expr.cases[i].vals[j],
-                          name);
-            if (ptr_result(e->as.switch_expr.cases[i].value, name))
+            SwitchExprCase *sc = &e->as.switch_expr.cases[i];
+            for (int j = 0; j < sc->nvals; j++)
+                scan_expr(cg, esc, sc->vals[j], name);
+            int shadowed = 0;
+            for (int k = 0; k < sc->nbindings; k++) {
+                if (!strcmp(sc->bindings[k], name)) {
+                    shadowed = 1;
+                    break;
+                }
+            }
+            if (shadowed)
+                continue;
+            if (ptr_result(sc->value, name))
                 mark_escape(esc, name);
-            scan_expr(cg, esc, e->as.switch_expr.cases[i].value, name);
+            scan_expr(cg, esc, sc->value, name);
         }
         if (e->as.switch_expr.def) {
             if (ptr_result(e->as.switch_expr.def, name))
@@ -387,10 +396,32 @@ static void walk_stmt(CG *cg, Esc *esc, Stmt *s) {
         return;
     case ST_SWITCH: {
         scan_expr_any(cg, esc, s->as.switch_stmt.scrut);
+        const char *st = infer_type(cg, s->as.switch_stmt.scrut);
+        EnumDef *ed = is_tagged_enum(cg, st) ? enum_find_canon(cg, st) : NULL;
         for (int i = 0; i < s->as.switch_stmt.ncases; i++) {
-            for (int j = 0; j < s->as.switch_stmt.cases[i].nvals; j++)
-                scan_expr_any(cg, esc, s->as.switch_stmt.cases[i].vals[j]);
-            walk_block(cg, esc, s->as.switch_stmt.cases[i].body);
+            SwitchCase *sc = &s->as.switch_stmt.cases[i];
+            for (int j = 0; j < sc->nvals; j++)
+                scan_expr_any(cg, esc, sc->vals[j]);
+            int pushed = 0;
+            int mark = esc->ncand;
+            if (ed && sc->nbindings > 0) {
+                var_scope_push(cg);
+                pushed = 1;
+                int vidx = (int)sc->vals[0]->as.int_lit.value;
+                for (int k = 0; k < sc->nbindings; k++) {
+                    if (!strcmp(sc->bindings[k], "_"))
+                        continue;
+                    const char *bt = ed->v_types[vidx][k];
+                    esc_push(esc, sc->bindings[k], NULL);
+                    var_redecl_check(cg, sc->bindings[k], sc->line);
+                    var_push(cg, sc->bindings[k], bt);
+                }
+            }
+            walk_block(cg, esc, sc->body);
+            if (pushed) {
+                var_scope_pop(cg);
+                esc->ncand = mark;
+            }
         }
         if (s->as.switch_stmt.def)
             walk_block(cg, esc, s->as.switch_stmt.def);

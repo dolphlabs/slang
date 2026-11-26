@@ -2730,15 +2730,29 @@ void gen_stmt(CG *cg, Stmt *s) {
                                : NULL;
         int *counts = ncases ? (int *)xmalloc(sizeof(int) * (size_t)ncases)
                              : NULL;
+        char ***binds = ncases ? (char ***)xmalloc(sizeof(char **) * (size_t)ncases)
+                               : NULL;
+        int *nbinds = ncases ? (int *)xmalloc(sizeof(int) * (size_t)ncases)
+                             : NULL;
+        int *hparens = ncases ? (int *)xmalloc(sizeof(int) * (size_t)ncases)
+                              : NULL;
         for (int i = 0; i < ncases; i++) {
             groups[i] = s->as.switch_stmt.cases[i].vals;
             counts[i] = s->as.switch_stmt.cases[i].nvals;
+            binds[i] = s->as.switch_stmt.cases[i].bindings;
+            nbinds[i] = s->as.switch_stmt.cases[i].nbindings;
+            hparens[i] = s->as.switch_stmt.cases[i].has_parens;
         }
-        switch_validate(cg, st, groups, counts, ncases,
+        switch_validate(cg, st, groups, counts, binds, nbinds, hparens, ncases,
                         s->as.switch_stmt.def != NULL, s->line);
         free(groups);
         free(counts);
+        free(binds);
+        free(nbinds);
+        free(hparens);
         int kind = switch_kind(cg, st);
+        int tagged = is_tagged_enum(cg, st);
+        EnumDef *ed = tagged ? enum_find_canon(cg, st) : NULL;
         int id = cg->tmp_id++;
         char *sv = gen_expr(cg, s->as.switch_stmt.scrut);
         char *svname = xasprintf("_sl_sv%d", id);
@@ -2749,15 +2763,19 @@ void gen_stmt(CG *cg, Stmt *s) {
         break_push(cg, 1, endname);
         cg->switch_depth++;
         for (int i = 0; i < ncases; i++) {
+            SwitchCase *sc = &s->as.switch_stmt.cases[i];
             char *cond = xstrdup("");
-            for (int j = 0; j < s->as.switch_stmt.cases[i].nvals; j++) {
-                Expr *lb = s->as.switch_stmt.cases[i].vals[j];
+            for (int j = 0; j < sc->nvals; j++) {
+                Expr *lb = sc->vals[j];
                 char *term = kind == 3
                                  ? xasprintf("!strcmp(%s, %s)", svname,
                                              c_string_literal(
                                                  lb->as.str_lit.value))
-                                 : xasprintf("%s == %s", svname,
-                                             switch_label_c_const(lb));
+                                 : tagged
+                                       ? xasprintf("%s.tag == %s", svname,
+                                                   switch_label_c_const(lb))
+                                       : xasprintf("%s == %s", svname,
+                                                   switch_label_c_const(lb));
                 cond = xasprintf("%s%s%s", cond, j ? " || " : "", term);
             }
             emit_line(cg, "%sif (%s) {", i ? "} else " : "", cond);
@@ -2765,7 +2783,21 @@ void gen_stmt(CG *cg, Stmt *s) {
             var_scope_push(cg);
             {
                 int from = cg->vars.count;
-                gen_block(cg, s->as.switch_stmt.cases[i].body);
+                if (tagged && sc->nbindings > 0) {
+                    int vidx = (int)sc->vals[0]->as.int_lit.value;
+                    for (int k = 0; k < sc->nbindings; k++) {
+                        const char *bn = sc->bindings[k];
+                        if (!strcmp(bn, "_"))
+                            continue;
+                        const char *bt = ed->v_types[vidx][k];
+                        var_redecl_check(cg, bn, sc->line);
+                        var_push(cg, bn, bt);
+                        emit_line(cg, "%s %s = %s.u.v%d._%d;",
+                                  ctype_of(cg, bt), sanitize_ident(bn), svname,
+                                  vidx, k);
+                    }
+                }
+                gen_block(cg, sc->body);
                 emit_scope_drops(cg, from);
             }
             var_scope_pop(cg);

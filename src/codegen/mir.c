@@ -948,6 +948,7 @@ static void lower_stmt(Lower *L, Stmt *s) {
          * arms and break-to-join exactly like if/else with n+1
          * branches. The scrutinee is evaluated once into a temp. */
         const char *st = infer_type(L->cg, s->as.switch_stmt.scrut);
+        EnumDef *ed = is_tagged_enum(L->cg, st) ? enum_find_canon(L->cg, st) : NULL;
         char *sv = fresh(L, st);
         emit_assign(L, pl_local(sv),
                     lower_rvalue(L, s->as.switch_stmt.scrut), s->line);
@@ -956,12 +957,12 @@ static void lower_stmt(Lower *L, Stmt *s) {
         MirDefer *kept = NULL;
         int nkept = 0;
         for (int i = 0; i < s->as.switch_stmt.ncases; i++) {
+            SwitchCase *sc = &s->as.switch_stmt.cases[i];
             int body = new_bb(L);
-            for (int j = 0; j < s->as.switch_stmt.cases[i].nvals; j++) {
+            for (int j = 0; j < sc->nvals; j++) {
                 int next = new_bb(L);
                 Expr *cmp = ex_bin("==", ex_ident(sv, s->line),
-                                   s->as.switch_stmt.cases[i].vals[j],
-                                   s->line);
+                                   sc->vals[j], s->line);
                 MirPlace *cond = lower_cond(L, cmp);
                 emit_if(L, cond, body, next, s->line);
                 L->cur = next;
@@ -971,7 +972,20 @@ static void lower_stmt(Lower *L, Stmt *s) {
             push_switch(L, join, base_n);
             var_scope_push(L->cg);
             L->block_depth++;
-            lower_block(L, s->as.switch_stmt.cases[i].body);
+            if (ed && sc->nbindings > 0) {
+                int vidx = (int)sc->vals[0]->as.int_lit.value;
+                for (int k = 0; k < sc->nbindings; k++) {
+                    if (!strcmp(sc->bindings[k], "_"))
+                        continue;
+                    const char *bt = ed->v_types[vidx][k];
+                    add_local(L, sc->bindings[k], bt);
+                    var_redecl_check(L->cg, sc->bindings[k], sc->line);
+                    var_push(L->cg, sc->bindings[k], bt);
+                    emit_assign(L, pl_local(sc->bindings[k]),
+                                rv_use(pl_local(sv), sc->line), sc->line);
+                }
+            }
+            lower_block(L, sc->body);
             L->block_depth--;
             var_scope_pop(L->cg);
             {
@@ -1024,6 +1038,7 @@ static MirRvalue *lower_switch_value(Lower *L, Expr *e) {
     /* Expression form: same if-ladder, but every arm assigns its
      * value into a shared result temp. */
     const char *st = infer_type(L->cg, e->as.switch_expr.scrut);
+    EnumDef *ed = is_tagged_enum(L->cg, st) ? enum_find_canon(L->cg, st) : NULL;
     const char *t = infer_type(L->cg, e);
     char *sv = fresh(L, st);
     emit_assign(L, pl_local(sv), lower_rvalue(L, e->as.switch_expr.scrut),
@@ -1031,20 +1046,40 @@ static MirRvalue *lower_switch_value(Lower *L, Expr *e) {
     char *tmp = fresh(L, t);
     int join = new_bb(L);
     for (int i = 0; i < e->as.switch_expr.ncases; i++) {
+        SwitchExprCase *sc = &e->as.switch_expr.cases[i];
         int body = new_bb(L);
-        for (int j = 0; j < e->as.switch_expr.cases[i].nvals; j++) {
+        for (int j = 0; j < sc->nvals; j++) {
             int next = new_bb(L);
-            Expr *cmp = ex_bin("==", ex_ident(sv, e->line),
-                               e->as.switch_expr.cases[i].vals[j], e->line);
+            Expr *cmp = ex_bin("==", ex_ident(sv, e->line), sc->vals[j],
+                               e->line);
             MirPlace *cond = lower_cond(L, cmp);
             emit_if(L, cond, body, next, e->line);
             L->cur = next;
         }
         L->cur = body;
         push_switch(L, join, L->ndefers);
-        emit_assign(L, pl_local(tmp),
-                    lower_rvalue(L, e->as.switch_expr.cases[i].value),
-                    e->line);
+        int pushed = 0;
+        if (ed && sc->nbindings > 0) {
+            var_scope_push(L->cg);
+            L->block_depth++;
+            pushed = 1;
+            int vidx = (int)sc->vals[0]->as.int_lit.value;
+            for (int k = 0; k < sc->nbindings; k++) {
+                if (!strcmp(sc->bindings[k], "_"))
+                    continue;
+                const char *bt = ed->v_types[vidx][k];
+                add_local(L, sc->bindings[k], bt);
+                var_redecl_check(L->cg, sc->bindings[k], sc->line);
+                var_push(L->cg, sc->bindings[k], bt);
+                emit_assign(L, pl_local(sc->bindings[k]),
+                            rv_use(pl_local(sv), sc->line), sc->line);
+            }
+        }
+        emit_assign(L, pl_local(tmp), lower_rvalue(L, sc->value), e->line);
+        if (pushed) {
+            L->block_depth--;
+            var_scope_pop(L->cg);
+        }
         pop_loop(L);
         emit_goto(L, join, e->line);
     }

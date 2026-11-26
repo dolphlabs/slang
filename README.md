@@ -344,7 +344,7 @@ guard let user = find(id) else {
 | `map[K]V`  | `sl_map *`  | insertion-ordered hash map     |
 | struct     | `sl_st_*`   | value record (copied)          |
 | `gc struct` | `sl_st_* *` | GC'd heap record (shared)     |
-| `enum`     | `int32_t`   | closed set of named constants (see below) |
+| `enum`     | `int32_t` or `sl_en_*` | unit variants (`int32_t`) or tagged union with payloads (see below) |
 | `opt[T]`   | `sl_opt_*`  | optional value: `some(v)` / `none`, held by value (no allocation) |
 | `result[T,E]` | `sl_res_*`  | fallible value: `ok(v)` / `err(e)`, held by value (no allocation) |
 | `duration` | `int64_t`   | nanosecond count (see `time`)  |
@@ -910,11 +910,41 @@ let r: result[orders.Status, str] = orders.Status.from_str("Shipped");
 An enum without `pub` is private to its package, like any other type.
 
 There is no per-variant wire label yet (`to_str`/JSON always use the
-declared name as written), no explicit backing-width syntax
-(`enum Name: i64 { ... }`), and no payload-carrying variants — enums
-here are a closed set of names, not a tagged union. Branching on one
-uses `switch`, which checks exhaustiveness: an enum switch without a
-`default` arm must list every variant.
+declared name as written) and no explicit backing-width syntax
+(`enum Name: i64 { ... }`).
+
+#### Tagged enums (variants with payloads)
+
+Variants may also carry typed payload values (`Variant(T1, T2)`). An enum
+with any payload variant is a tagged union by value (`tag` + payload); destructure
+it with `switch`, which checks exhaustiveness unless `default` is present:
+
+```slang
+enum Shape {
+    Point,
+    Circle(float),
+    Rect(float, float),
+    Label(str),
+}
+
+fn describe(s: Shape) -> str {
+    return switch s {
+        case Shape.Point { "point" }
+        case Shape.Circle(r) { "circle r=${r}" }
+        case Shape.Rect(w, _) { "rect w=${w}" }   // '_' ignores a field
+        case Shape.Label(text) { text }
+    };
+}
+
+let s = Shape.Rect(3.0, 4.0);
+println(describe(s));   // rect w=3
+println(inspect(s));    // Rect(3, 4)
+```
+
+Rules for tagged enums:
+- Explicit `= N` ordinals, `==`/`!=`, `as i32`, `from_int`/`from_str`, `to_str`/direct `println`, `map` keys, and direct `json.encode`/`json.decode` apply only to unit-only enums (convert tagged enums via `switch`).
+- Payload types must be copyable values (no `own`, `&`, `&mut`, `arena`, `link`, or `void`). For recursive variants, wrap the cycle in a `gc struct`.
+- Branching on one uses `switch`, which checks exhaustiveness: a `switch` without a `default` arm must cover every variant and bind or ignore (`_`) every payload field.
 
 #### Option / Result
 

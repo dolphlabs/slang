@@ -123,7 +123,11 @@ typedef struct {
     char *name;        /* simple name within its package */
     int is_pub;
     char **variants;   /* variant names, in declared order */
-    int32_t *values;   /* resolved ordinal per variant, parallel array */
+    char ***v_types;   /* canonical payload type names per variant, or NULL */
+    int *v_ntypes;     /* payload field count per variant (0 = unit variant) */
+    int has_payload;   /* 1 if any variant carries a payload */
+    int body_state;    /* 0 unvisited, 1 visiting, 2 emitted (cycle/topo sort) */
+    int32_t *values;   /* resolved ordinal/tag per variant, parallel array */
     int nvariants;
     int line;
 } EnumDef;
@@ -835,8 +839,9 @@ int value_assignable(const char *dst, Expr *src, const char *srct);
  * 4=enum, 0=not switchable. */
 int switch_kind(CG *cg, const char *t);
 int switch_validate(CG *cg, const char *scrut_t, Expr ***label_groups,
-                    int *group_counts, int ngroups, int has_default,
-                    int line);
+                    int *group_counts, char ***bindings_arr,
+                    int *nbindings_arr, int *has_parens_arr,
+                    int ngroups, int has_default, int line);
 char *switch_label_c_const(Expr *lb);
 const char *promote(const char *lt, const char *rt);
 char *maybe_cast(CG *cg, const char *dst, const char *src,
@@ -910,10 +915,15 @@ void generic_note_body(const char *what, int line);
 EnumDef *enum_find_canon(CG *cg, const char *canon);
 EnumDef *enum_find_in_pkg(CG *cg, const char *pkg, const char *name);
 int is_enum(CG *cg, const char *t);
+int is_tagged_enum(CG *cg, const char *t);
 char *mangle_enum(const char *canon);
 void collect_enum_decls(CG *cg, Package *pkgs, int npkgs);
+void canon_enum_payloads(CG *cg);
 void resolve_enum_refs(CG *cg, Package *pkgs, int npkgs);
 void resolve_enum_in_body(CG *cg, const char *pkg, FuncDecl *f);
+void emit_enum_fwd_decls(CG *cg);
+void emit_enum_body(CG *cg, EnumDef *ed, unsigned char *sstate, int line);
+void emit_value_dep(CG *cg, const char *t, unsigned char *sstate, int line);
 void emit_enum_tables(CG *cg);
 const char *ctype_of(CG *cg, const char *t);
 const char *ctype_defer_slot(CG *cg, const char *t);

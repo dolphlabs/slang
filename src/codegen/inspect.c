@@ -140,7 +140,12 @@ const char *inspect_fn(CG *cg, const char *t, int line) {
         free(tv);
         free(te);
     } else if (is_enum(cg, t)) {
-        /* leaf: needs its tables, but no further types */
+        EnumDef *ed = enum_find_canon(cg, t);
+        if (ed->has_payload) {
+            for (int v = 0; v < ed->nvariants; v++)
+                for (int f = 0; f < ed->v_ntypes[v]; f++)
+                    inspect_fn(cg, ed->v_types[v][f], line);
+        }
     } else {
         StructDef *sd = struct_find_canon(cg, t);
         if (!sd)
@@ -293,12 +298,45 @@ static void emit_inspect_body(CG *cg, InspectInst *it) {
         free(tv);
         free(te);
     } else if (is_enum(cg, t)) {
-        char *m = mangle_enum(t);
         EnumDef *ed = enum_find_canon(cg, t);
-        emit_line(cg, "sl_inspect_sb_append(out, sl_enum_name((int32_t)v, "
-                      "%s_names, %s_values, %d));",
-                  m, m, ed->nvariants);
-        free(m);
+        if (!ed->has_payload) {
+            char *m = mangle_enum(t);
+            emit_line(cg, "sl_inspect_sb_append(out, sl_enum_name((int32_t)v, "
+                          "%s_names, %s_values, %d));",
+                      m, m, ed->nvariants);
+            free(m);
+        } else {
+            emit_line(cg, "if (depth > SL_INSPECT_MAX_DEPTH) { "
+                          "sl_inspect_sb_append(out, \"...\"); return; }");
+            emit_line(cg, "switch (v.tag) {");
+            cg->indent++;
+            for (int i = 0; i < ed->nvariants; i++) {
+                emit_line(cg, "case %d: {", (int)ed->values[i]);
+                cg->indent++;
+                emit_line(cg, "sl_inspect_sb_append(out, \"%s\");",
+                          ed->variants[i]);
+                if (ed->v_ntypes[i] > 0) {
+                    emit_line(cg, "sl_inspect_sb_append(out, \"(\");");
+                    for (int f = 0; f < ed->v_ntypes[i]; f++) {
+                        if (f)
+                            emit_line(cg, "sl_inspect_sb_append(out, \", \");");
+                        char *acc = xasprintf("v.u.v%d._%d", i, f);
+                        char *s = inspect_append_stmt(cg, ed->v_types[i][f],
+                                                      acc, "out", "depth + 1");
+                        emit_line(cg, "%s", s);
+                        free(s);
+                        free(acc);
+                    }
+                    emit_line(cg, "sl_inspect_sb_append(out, \")\");");
+                }
+                emit_line(cg, "break;");
+                cg->indent--;
+                emit_line(cg, "}");
+            }
+            emit_line(cg, "default: break;");
+            cg->indent--;
+            emit_line(cg, "}");
+        }
     } else {
         StructDef *sd = struct_find_canon(cg, t);
         const char *acc = sd->is_gc ? "->" : ".";

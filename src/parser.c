@@ -1406,11 +1406,58 @@ static Stmt *parse_select_stmt(Parser *p) {
     return s;
 }
 
+/* Normalize a parsed switch case label expression: `Enum.Variant(a, b)`
+ * and `pkg.Enum.Variant(a, b)` parse initially as EX_CALL / EX_METHOD;
+ * extract the bare variant label (`EX_IDENT` / `EX_FIELD`), binding names,
+ * and `has_parens`. Any expression arguments reject with a clear diagnostic. */
+static Expr *normalize_switch_case_label(Parser *p, Expr *label, Token *ck,
+                                         char ***bindings, int *nbindings,
+                                         int *has_parens) {
+    Expr **args = NULL;
+    int nargs = 0;
+    Expr *base = NULL;
+    if (label->kind == EX_CALL && !label->as.call.callee &&
+        strchr(label->as.call.name, '.')) {
+        args = label->as.call.args;
+        nargs = label->as.call.nargs;
+        base = new_expr(p, EX_IDENT, label->line);
+        base->as.ident.name = label->as.call.name;
+    } else if (label->kind == EX_METHOD && label->as.method.recv &&
+               label->as.method.recv->kind == EX_IDENT &&
+               strchr(label->as.method.recv->as.ident.name, '.')) {
+        args = label->as.method.args;
+        nargs = label->as.method.nargs;
+        base = new_expr(p, EX_FIELD, label->line);
+        base->as.field.base = label->as.method.recv;
+        base->as.field.name = label->as.method.name;
+    } else {
+        *has_parens = 0;
+        return label;
+    }
+    *has_parens = 1;
+    if (nargs > 0) {
+        char **b = (char **)xmalloc((size_t)nargs * sizeof(char *));
+        for (int i = 0; i < nargs; i++) {
+            Expr *a = args[i];
+            if (a->kind != EX_IDENT || strchr(a->as.ident.name, '.') ||
+                !strcmp(a->as.ident.name, "none") ||
+                !strcmp(a->as.ident.name, "nullptr"))
+                parse_error(ck,
+                            "switch pattern binding must be an identifier "
+                            "or '_'");
+            b[i] = a->as.ident.name;
+        }
+        *bindings = b;
+        *nbindings = nargs;
+    }
+    return base;
+}
+
 /* switch <scrut> { case v, ... { ... } ... default { ... } }
  * Labels are literal expressions (int/str/bool, unary-minus ints, or
- * Type.Variant); arbitrary expressions are rejected so every arm stays
- * a compile-time constant of the scrutinee's type. The scrutinee runs
- * exactly once. No fallthrough: exactly one arm runs. */
+ * Type.Variant[(bindings...)]); arbitrary expressions are rejected so every arm
+ * stays a compile-time constant/variant of the scrutinee's type. The scrutinee
+ * runs exactly once. No fallthrough: exactly one arm runs. */
 static Stmt *parse_switch_stmt(Parser *p) {
     Token *kw = advance(p); /* 'switch' */
     Expr *scrut = parse_expression(p);
@@ -1434,7 +1481,19 @@ static Stmt *parse_switch_stmt(Parser *p) {
         memset(&sc, 0, sizeof(sc));
         sc.line = ck->line;
         for (;;) {
-            Expr *label = parse_expression(p);
+            char **lb_binds = NULL;
+            int lb_nbinds = 0, lb_parens = 0;
+            Expr *label = normalize_switch_case_label(
+                p, parse_expression(p), ck, &lb_binds, &lb_nbinds, &lb_parens);
+            if ((sc.has_parens || lb_parens) && sc.nvals > 0)
+                parse_error(ck,
+                            "switch case with payload bindings cannot be "
+                            "combined with multiple labels");
+            if (lb_parens) {
+                sc.has_parens = 1;
+                sc.bindings = lb_binds;
+                sc.nbindings = lb_nbinds;
+            }
             sc.vals = (Expr **)xrealloc(sc.vals,
                                        (size_t)(sc.nvals + 1) * sizeof(Expr *));
             sc.vals[sc.nvals++] = label;
@@ -1495,7 +1554,19 @@ static Expr *parse_switch_expr(Parser *p) {
         memset(&sc, 0, sizeof(sc));
         sc.line = ck->line;
         for (;;) {
-            Expr *label = parse_expression(p);
+            char **lb_binds = NULL;
+            int lb_nbinds = 0, lb_parens = 0;
+            Expr *label = normalize_switch_case_label(
+                p, parse_expression(p), ck, &lb_binds, &lb_nbinds, &lb_parens);
+            if ((sc.has_parens || lb_parens) && sc.nvals > 0)
+                parse_error(ck,
+                            "switch case with payload bindings cannot be "
+                            "combined with multiple labels");
+            if (lb_parens) {
+                sc.has_parens = 1;
+                sc.bindings = lb_binds;
+                sc.nbindings = lb_nbinds;
+            }
             sc.vals = (Expr **)xrealloc(sc.vals,
                                        (size_t)(sc.nvals + 1) * sizeof(Expr *));
             sc.vals[sc.nvals++] = label;
@@ -1631,17 +1702,19 @@ static Stmt *parse_struct_decl(Parser *p, int is_pub, int is_gc) {
     return s;
 }
 
-/* enum Name { Variant [= N], ... } — a closed, i32-backed set of named
- * constants. Ordinals auto-increment ("previous + 1", starting at 0)
- * unless a variant gives one explicitly; duplicate variant names and
- * duplicate explicit ordinals are rejected later, in collect_enum_decls
- * (src/codegen/enum.c), which sees every enum in the package at once. */
+/* enum Name { Variant[(T1, T2)] [= N], ... } — a closed set of named
+ * constants or tagged variants. Unit-only enums stay i32-backed with
+ * auto-increment ordinals starting at 0; enums with any payload variant
+ * carry a tag + payload union and forbid explicit '= N' ordinals. */
 static Stmt *parse_enum_decl(Parser *p, int is_pub) {
     Token *kw = advance(p); /* 'enum' */
     Token *name = expect(p, T_IDENT, "an enum name");
     expect(p, T_LBRACE, "'{'");
 
     char **variants = NULL;
+    char ***v_types = NULL;
+    int *v_ntypes = NULL;
+    int has_payload = 0;
     int *has_explicit = NULL;
     long long *values = NULL;
     int n = 0;
@@ -1650,9 +1723,33 @@ static Stmt *parse_enum_decl(Parser *p, int is_pub) {
         if (check(p, T_EOF))
             parse_error(peek(p), "unexpected end of file inside enum");
         Token *v = expect(p, T_IDENT, "a variant name");
+        char **ptypes = NULL;
+        int nptypes = 0;
+        if (match(p, T_LPAREN)) {
+            if (check(p, T_RPAREN))
+                parse_error(peek(p),
+                            "variant '%s' has empty payload parentheses; "
+                            "omit '()' for a unit variant",
+                            v->text);
+            while (!check(p, T_RPAREN)) {
+                const char *ty = parse_type_name(p);
+                ptypes = (char **)xrealloc(ptypes,
+                                           (size_t)(nptypes + 1) * sizeof(char *));
+                ptypes[nptypes++] = xstrdup(ty);
+                if (!match(p, T_COMMA))
+                    break;
+            }
+            expect(p, T_RPAREN, "')' to close variant payload types");
+            has_payload = 1;
+        }
         long long val = next_ordinal;
         int explicit_val = 0;
         if (match(p, T_ASSIGN)) {
+            if (nptypes > 0)
+                parse_error(v,
+                            "enum variant '%s' cannot have both a payload "
+                            "and an explicit '= N' value",
+                            v->text);
             Token *lit = expect(p, T_INT, "an integer literal");
             if (lit->big_u64 || lit->int_val < 0)
                 parse_error(lit, "enum variant values must be a non-negative int32");
@@ -1660,9 +1757,13 @@ static Stmt *parse_enum_decl(Parser *p, int is_pub) {
             explicit_val = 1;
         }
         variants = (char **)xrealloc(variants, (n + 1) * sizeof(char *));
+        v_types = (char ***)xrealloc(v_types, (n + 1) * sizeof(char **));
+        v_ntypes = (int *)xrealloc(v_ntypes, (n + 1) * sizeof(int));
         has_explicit = (int *)xrealloc(has_explicit, (n + 1) * sizeof(int));
         values = (long long *)xrealloc(values, (n + 1) * sizeof(long long));
         variants[n] = v->text;
+        v_types[n] = ptypes;
+        v_ntypes[n] = nptypes;
         has_explicit[n] = explicit_val;
         values[n] = val;
         n++;
@@ -1676,6 +1777,9 @@ static Stmt *parse_enum_decl(Parser *p, int is_pub) {
     s->as.enum_decl.name = name->text;
     s->as.enum_decl.is_pub = is_pub;
     s->as.enum_decl.variants = variants;
+    s->as.enum_decl.v_types = v_types;
+    s->as.enum_decl.v_ntypes = v_ntypes;
+    s->as.enum_decl.has_payload = has_payload;
     s->as.enum_decl.has_explicit = has_explicit;
     s->as.enum_decl.values = values;
     s->as.enum_decl.nvariants = n;
