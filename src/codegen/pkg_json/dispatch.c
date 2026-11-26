@@ -121,11 +121,60 @@ static JsonInst *json_reserve(CG *cg, const char *t) {
     return it;
 }
 
-/* Both struct kinds have codecs (fix-gc.md 2.1). A gc struct is decoded
- * into a fresh heap object and encoded through `->`; a value struct is
- * decoded straight into the caller's storage -- a local, or a list's or
- * map's slot -- and encoded through `.`, so `[Item]` of a value struct is
- * one buffer, not one object per item. */
+/* Struct field tag helpers. */
+static const char *json_wire_name(StructDef *sd, int i) {
+    return (sd->json_names && sd->json_names[i]) ? sd->json_names[i]
+                                                  : sd->fields[i];
+}
+
+static int json_is_skipped(StructDef *sd, int i) {
+    return sd->json_skip && sd->json_skip[i];
+}
+
+static int json_is_omitted(StructDef *sd, int i) {
+    return sd->json_omit && sd->json_omit[i];
+}
+
+static int json_is_omittable(const char *t) {
+    return is_opt(t) || is_str(t) || is_bytes(t) || is_arr(t) || is_map(t) ||
+           !strcmp(t, "bool") || is_int(t) || is_flt(t) ||
+           !strcmp(t, "duration");
+}
+
+static int json_has_zero_val(const char *t) {
+    return is_opt(t) || is_str(t) || is_bytes(t) || !strcmp(t, "bool") ||
+           is_int(t) || is_flt(t) || !strcmp(t, "duration");
+}
+
+static char *json_skip_zero_expr(CG *cg, const char *t) {
+    if (is_opt(t))
+        return xasprintf("(%s){ .has = false }", opt_cname(cg, opt_inner(t)));
+    if (is_str(t))
+        return xstrdup("\"\"");
+    if (is_bytes(t))
+        return xstrdup("(&sl_bytes_empty)");
+    if (!strcmp(t, "bool"))
+        return xstrdup("false");
+    if (is_flt(t))
+        return xstrdup("0.0");
+    return xstrdup("0");
+}
+
+static char *json_omit_cond(const char *t, const char *val) {
+    if (is_opt(t))
+        return xasprintf("(%s).has", val);
+    if (is_str(t))
+        return xasprintf("(%s)[0] != '\\0'", val);
+    if (is_bytes(t) || is_arr(t))
+        return xasprintf("(%s)->len > 0", val);
+    if (is_map(t))
+        return xasprintf("(%s)->count > 0", val);
+    if (!strcmp(t, "bool"))
+        return xasprintf("(%s)", val);
+    return xasprintf("(%s) != 0", val);
+}
+
+/* Both struct kinds have codecs (fix-gc.md 2.1). */
 static const char *json_field_sel(StructDef *sd) {
     return sd->is_gc ? "->" : ".";
 }
@@ -185,8 +234,11 @@ static void json_type_walk(CG *cg, const char *t, JsonWalk *w) {
     w->gray[me] = 1;
     if (sd->nfields > w->max_fields)
         w->max_fields = sd->nfields;
-    for (int i = 0; i < sd->nfields; i++)
+    for (int i = 0; i < sd->nfields; i++) {
+        if (json_is_skipped(sd, i))
+            continue;
         json_type_walk(cg, sd->ftypes[i], w);
+    }
     w->gray[me] = 0;
 }
 
@@ -252,7 +304,10 @@ static long long json_enc_hint_w(CG *cg, const char *t, int depth) {
     if (!sd) return 0;
     long long h = 2; /* the braces */
     for (int i = 0; i < sd->nfields; i++) {
-        h += (long long)strlen(sd->fields[i]) + 2 + 1 + 1; /* "name":, */
+        if (json_is_skipped(sd, i) || json_is_omitted(sd, i))
+            continue;
+        const char *wire = json_wire_name(sd, i);
+        h += (long long)strlen(wire) + 2 + 1 + 1; /* "name":, */
         h += json_enc_hint_w(cg, sd->ftypes[i], depth + 1);
     }
     return h;
@@ -299,8 +354,19 @@ const char *json_dec_fn(CG *cg, const char *t, int line) {
                      "cannot json.decode into type '%s': not representable "
                      "in JSON (rawptr, chan, and result aren't supported)",
                      t);
-        for (int i = 0; i < sd->nfields; i++)
-            json_dec_fn(cg, sd->ftypes[i], line);
+        for (int i = 0; i < sd->nfields; i++) {
+            const char *ft = sd->ftypes[i];
+            if (json_is_skipped(sd, i)) {
+                if (!json_has_zero_val(ft))
+                    cg_error(line,
+                             "cannot json.decode struct '%s': field '%s' has "
+                             "tag json:\"-\" and type '%s' has no zero value; "
+                             "wrap it in opt[%s]",
+                             sd->name, sd->fields[i], ft, ft);
+                continue;
+            }
+            json_dec_fn(cg, ft, line);
+        }
     }
     return it->dec_name;
 }
@@ -338,8 +404,18 @@ const char *json_enc_fn(CG *cg, const char *t, int line) {
                      "cannot json.encode type '%s': not representable in "
                      "JSON (rawptr, chan, and result aren't supported)",
                      t);
-        for (int i = 0; i < sd->nfields; i++)
-            json_enc_fn(cg, sd->ftypes[i], line);
+        for (int i = 0; i < sd->nfields; i++) {
+            const char *ft = sd->ftypes[i];
+            if (json_is_skipped(sd, i))
+                continue;
+            if (json_is_omitted(sd, i) && !json_is_omittable(ft))
+                cg_error(line,
+                         "cannot json.encode struct '%s': field '%s' has "
+                         "omitempty on non-omittable type '%s'; wrap it in "
+                         "opt[%s] or remove omitempty",
+                         sd->name, sd->fields[i], ft, ft);
+            json_enc_fn(cg, ft, line);
+        }
     }
     return it->enc_name;
 }
@@ -502,11 +578,24 @@ static void emit_json_dec_body(CG *cg, JsonInst *it) {
         else
             emit_line(cg, "%s *tmp = out; /* a value struct: the caller's "
                            "storage */", sname);
-        emit_line(cg, "sl_json_val *fv;");
+        int has_active = 0;
+        for (int i = 0; i < sd->nfields; i++)
+            if (!json_is_skipped(sd, i)) {
+                has_active = 1;
+                break;
+            }
+        if (has_active)
+            emit_line(cg, "sl_json_val *fv;");
         for (int i = 0; i < sd->nfields; i++) {
             const char *ft = sd->ftypes[i];
             const char *fname = sanitize_ident(sd->fields[i]);
-            emit_line(cg, "fv = sl_json_obj_get(v, \"%s\");", sd->fields[i]);
+            if (json_is_skipped(sd, i)) {
+                emit_line(cg, "tmp->%s = %s;", fname,
+                          json_skip_zero_expr(cg, ft));
+                continue;
+            }
+            const char *wire = json_wire_name(sd, i);
+            emit_line(cg, "fv = sl_json_obj_get(v, \"%s\");", wire);
             emit_line(cg, "if (!fv) {");
             cg->indent++;
             if (is_opt(ft)) {
@@ -520,8 +609,8 @@ static void emit_json_dec_body(CG *cg, JsonInst *it) {
             } else {
                 emit_line(cg,
                           "*err = sl_json_errf(\"missing required field "
-                          "'%s'\");",
-                          sd->fields[i]);
+                          "'%%s'\", \"%s\");",
+                          wire);
                 emit_line(cg, "return false;");
             }
             cg->indent--;
@@ -533,7 +622,7 @@ static void emit_json_dec_body(CG *cg, JsonInst *it) {
             emit_line(cg, "if (!%s(fv, &ftmp, err)) {", ffn);
             cg->indent++;
             emit_line(cg, "*err = sl_json_wrap_err(\"field '%s'\", *err);",
-                      sd->fields[i]);
+                      wire);
             emit_line(cg, "return false;");
             cg->indent--;
             emit_line(cg, "}");
@@ -661,30 +750,34 @@ static void emit_json_fast_body(CG *cg, JsonInst *it) {
                                   ? xasprintf("sl_gc_trace_%s", sname)
                                   : "NULL";
         emit_line(cg, "if (!sl_jd_open(p, '{')) return false;");
+        int *active = (int *)xmalloc(
+            sizeof(int) * (size_t)(sd->nfields ? sd->nfields : 1));
+        int nactive = 0;
         for (int i = 0; i < sd->nfields; i++) {
-            emit_line(cg, "%s f%d = %s;", ctype_of(cg, sd->ftypes[i]), i,
-                      json_zero_init(cg, sd->ftypes[i]));
-            emit_line(cg, "bool seen%d = false;", i);
+            if (json_is_skipped(sd, i)) {
+                emit_line(cg, "%s f%d = %s;", ctype_of(cg, sd->ftypes[i]), i,
+                          json_skip_zero_expr(cg, sd->ftypes[i]));
+            } else {
+                active[nactive++] = i;
+                emit_line(cg, "%s f%d = %s;", ctype_of(cg, sd->ftypes[i]), i,
+                          json_zero_init(cg, sd->ftypes[i]));
+                emit_line(cg, "bool seen%d = false;", i);
+            }
         }
         emit_line(cg, "if (!sl_jd_empty(p, '}')) {");
         cg->indent++;
-        if (sd->nfields) {
-            /* nx: the field expected next. Keys nearly always arrive in
-             * declaration order, so that one is tried first as a literal
-             * (sl_jd_key_is); anything else is scanned and compared
-             * against every field. The first occurrence of a key counts
-             * and a repeat is skipped, as the tree decoder's field lookup
-             * finds the first. */
+        if (nactive) {
+            /* nx: the active field expected next. */
             emit_line(cg, "int nx = 0;");
             emit_line(cg, "for (;;) {");
             cg->indent++;
             emit_line(cg, "int hit = -1;");
             emit_line(cg, "int r = 0;");
             emit_line(cg, "switch (nx) {");
-            for (int i = 0; i < sd->nfields; i++) {
-                const char *fn = sd->fields[i];
+            for (int k = 0; k < nactive; k++) {
+                const char *fn = json_wire_name(sd, active[k]);
                 emit_line(cg, "case %d: r = sl_jd_key_is(p, \"\\\"%s\\\"\", %d); break;",
-                          i, fn, (int)strlen(fn) + 2);
+                          k, fn, (int)strlen(fn) + 2);
             }
             emit_line(cg, "default: break;");
             emit_line(cg, "}");
@@ -698,30 +791,31 @@ static void emit_json_fast_body(CG *cg, JsonInst *it) {
             emit_line(cg, "const char *k;");
             emit_line(cg, "long long kn;");
             emit_line(cg, "if (!sl_jd_key(p, &k, &kn)) return false;");
-            for (int i = 0; i < sd->nfields; i++) {
-                const char *fn = sd->fields[i];
+            for (int k = 0; k < nactive; k++) {
+                const char *fn = json_wire_name(sd, active[k]);
                 emit_line(cg, "%sif (kn == %d && sl_jbytes_eq(k, \"%s\", %d)) hit = %d;",
-                          i ? "else " : "", (int)strlen(fn), fn,
-                          (int)strlen(fn), i);
+                          k ? "else " : "", (int)strlen(fn), fn,
+                          (int)strlen(fn), k);
             }
             cg->indent--;
             emit_line(cg, "}");
             emit_line(cg, "switch (hit) {");
-            for (int i = 0; i < sd->nfields; i++) {
-                emit_line(cg, "case %d:", i);
+            for (int k = 0; k < nactive; k++) {
+                int fi = active[k];
+                emit_line(cg, "case %d:", k);
                 cg->indent++;
-                emit_line(cg, "if (seen%d) {", i);
+                emit_line(cg, "if (seen%d) {", fi);
                 cg->indent++;
                 emit_line(cg, "if (!sl_jd_skip(p)) return false;");
                 cg->indent--;
                 emit_line(cg, "} else {");
                 cg->indent++;
                 emit_line(cg, "if (!%s(p, &f%d)) return false;",
-                          json_fast_dec_fn(cg, sd->ftypes[i]), i);
-                emit_line(cg, "seen%d = true;", i);
+                          json_fast_dec_fn(cg, sd->ftypes[fi]), fi);
+                emit_line(cg, "seen%d = true;", fi);
                 cg->indent--;
                 emit_line(cg, "}");
-                emit_line(cg, "nx = %d;", i + 1);
+                emit_line(cg, "nx = %d;", k + 1);
                 emit_line(cg, "break;");
                 cg->indent--;
             }
@@ -749,7 +843,8 @@ static void emit_json_fast_body(CG *cg, JsonInst *it) {
         emit_line(cg, "}");
         cg->indent--;
         emit_line(cg, "}");
-        for (int i = 0; i < sd->nfields; i++) {
+        for (int k = 0; k < nactive; k++) {
+            int i = active[k];
             const char *ft = sd->ftypes[i];
             if (is_opt(ft)) {
                 /* absent: none, like the tree decoder */
@@ -764,6 +859,7 @@ static void emit_json_fast_body(CG *cg, JsonInst *it) {
                 emit_line(cg, "if (!seen%d) return false;", i);
             }
         }
+        free(active);
         if (sd->is_gc) {
             emit_line(cg, "%s *s = (%s *)sl_gc_alloc(sizeof(%s), %s);",
                       sname, sname, sname, strace);
@@ -862,17 +958,38 @@ static void emit_json_enc_body(CG *cg, JsonInst *it) {
     } else {
         StructDef *sd = struct_find_canon(cg, t);
         emit_line(cg, "sl_json_sb_append(out, \"{\");");
-        for (int i = 0; i < sd->nfields; i++) {
-            if (i)
-                emit_line(cg, "sl_json_sb_append(out, \",\");");
-            const char *ft = sd->ftypes[i];
-            const char *fname = sanitize_ident(sd->fields[i]);
-            const char *ffn = json_enc_fn(cg, ft, 0);
-            char *val = xasprintf("v%s%s", json_field_sel(sd), fname);
-            char *arg = json_enc_arg(ft, val);
-            emit_line(cg, "sl_json_enc_str(\"%s\", out);", sd->fields[i]);
-            emit_line(cg, "sl_json_sb_append(out, \":\");");
-            emit_line(cg, "%s(%s, out);", ffn, arg);
+        int has_active = 0;
+        for (int i = 0; i < sd->nfields; i++)
+            if (!json_is_skipped(sd, i)) {
+                has_active = 1;
+                break;
+            }
+        if (!has_active) {
+            emit_line(cg, "(void)v;");
+        } else {
+            emit_line(cg, "int sep = 0;");
+            for (int i = 0; i < sd->nfields; i++) {
+                if (json_is_skipped(sd, i))
+                    continue;
+                const char *ft = sd->ftypes[i];
+                const char *fname = sanitize_ident(sd->fields[i]);
+                const char *wire = json_wire_name(sd, i);
+                const char *ffn = json_enc_fn(cg, ft, 0);
+                char *val = xasprintf("v%s%s", json_field_sel(sd), fname);
+                char *arg = json_enc_arg(ft, val);
+                if (json_is_omitted(sd, i)) {
+                    emit_line(cg, "if (%s) {", json_omit_cond(ft, val));
+                    cg->indent++;
+                }
+                emit_line(cg, "if (sep++) sl_json_sb_append(out, \",\");");
+                emit_line(cg, "sl_json_enc_str(\"%s\", out);", wire);
+                emit_line(cg, "sl_json_sb_append(out, \":\");");
+                emit_line(cg, "%s(%s, out);", ffn, arg);
+                if (json_is_omitted(sd, i)) {
+                    cg->indent--;
+                    emit_line(cg, "}");
+                }
+            }
         }
         emit_line(cg, "sl_json_sb_append(out, \"}\");");
     }

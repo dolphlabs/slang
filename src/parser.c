@@ -465,6 +465,9 @@ static Expr *parse_primary(Parser *p) {
         expect(p, T_RPAREN, "')'");
         return e;
     }
+    case T_TAG:
+        parse_error(tk, "struct tag is only allowed on a struct field");
+        break;
     default:
         parse_error(tk, "expected an expression but found %s%s",
                     token_type_name(tk->type), found_hint(p, tk, 0));
@@ -1590,6 +1593,7 @@ static Stmt *parse_struct_decl(Parser *p, int is_pub, int is_gc) {
 
     char **fields = NULL;
     char **ftypes = NULL;
+    char **ftags = NULL;
     int n = 0;
     while (!check(p, T_RBRACE)) {
         if (check(p, T_EOF))
@@ -1597,10 +1601,15 @@ static Stmt *parse_struct_decl(Parser *p, int is_pub, int is_gc) {
         Token *f = expect(p, T_IDENT, "a field name");
         expect(p, T_COLON, "':' followed by a field type");
         const char *ty = parse_type_name(p);
+        char *tag = NULL;
+        if (check(p, T_TAG))
+            tag = xstrdup(advance(p)->text);
         fields = (char **)xrealloc(fields, (n + 1) * sizeof(char *));
         ftypes = (char **)xrealloc(ftypes, (n + 1) * sizeof(char *));
+        ftags = (char **)xrealloc(ftags, (n + 1) * sizeof(char *));
         fields[n] = f->text;
         ftypes[n] = xstrdup(ty);
+        ftags[n] = tag;
         n++;
         if (!match(p, T_COMMA))
             break;
@@ -1613,6 +1622,7 @@ static Stmt *parse_struct_decl(Parser *p, int is_pub, int is_gc) {
     s->as.struct_decl.is_gc = is_gc;
     s->as.struct_decl.fields = fields;
     s->as.struct_decl.ftypes = ftypes;
+    s->as.struct_decl.ftags = ftags;
     s->as.struct_decl.nfields = n;
     s->as.struct_decl.lts = lts;
     s->as.struct_decl.nlts = nlts;

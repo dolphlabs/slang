@@ -123,7 +123,8 @@ typedef enum {
     T_DOTDOT,
     T_DOTDOTEQ,
     T_ARROW,
-    T_LIFETIME
+    T_LIFETIME,
+    T_TAG
 } TokenType;
 
 typedef struct {

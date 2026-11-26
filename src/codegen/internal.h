@@ -45,6 +45,10 @@ typedef struct {
     int is_gc;
     char **fields;
     const char **ftypes; /* canonical slang field types */
+    char **ftags;        /* raw struct tag per field, or NULL */
+    char **json_names;   /* wire name per field (defaults to fields[i]; NULL if skipped) */
+    int *json_omit;      /* 1 if omitempty */
+    int *json_skip;      /* 1 if json:"-" */
     int nfields;
     char **lts;
     int nlts;
@@ -71,6 +75,10 @@ typedef struct StructTmpl {
     int ntparams;
     char **fields;
     char **ftypes;       /* as written; never canonicalized */
+    char **ftags;        /* raw struct tag per field, or NULL */
+    char **json_names;   /* parsed wire name per field (NULL if skipped) */
+    int *json_omit;      /* 1 if omitempty */
+    int *json_skip;      /* 1 if json:"-" */
     int nfields;
     int line;
     /* `impl Box[T]`: the method declarations, as written. Each instance
@@ -1008,6 +1016,10 @@ void emit_runtime_file(CG *cg, const char *name);
 void emit_guardable_open(CG *cg, const char *ret, const char *name,
                          const char *params, const char *args);
 void emit_guardable_close(CG *cg);
+void parse_struct_field_tags(const char *sname, int line, char **fields,
+                             char **ftags, int nfields,
+                             char ***json_names_out, int **json_omit_out,
+                             int **json_skip_out);
 void emit_prelude(CG *cg);
 void sig_register_raw(CG *cg, Package *p, FuncDecl *f,
                              const char *method_of);

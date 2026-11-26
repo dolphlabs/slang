@@ -103,6 +103,175 @@ void sig_register_raw(CG *cg, Package *p, FuncDecl *f,
     f->sig_idx = cg->sigs.count;
 }
 
+/* Parse Go-style struct field tags (`json:"wire,omitempty"`, `json:"-"`,
+ * `json:"-,"`, plus ignored non-json key:"val" pairs) and reject
+ * malformed syntax, unknown options, or colliding wire names. */
+void parse_struct_field_tags(const char *sname, int line, char **fields,
+                             char **ftags, int nfields,
+                             char ***json_names_out, int **json_omit_out,
+                             int **json_skip_out) {
+    if (nfields <= 0) {
+        *json_names_out = NULL;
+        *json_omit_out = NULL;
+        *json_skip_out = NULL;
+        return;
+    }
+    char **jnames = (char **)xmalloc(sizeof(char *) * (size_t)nfields);
+    int *jomit = (int *)xmalloc(sizeof(int) * (size_t)nfields);
+    int *jskip = (int *)xmalloc(sizeof(int) * (size_t)nfields);
+    memset(jomit, 0, sizeof(int) * (size_t)nfields);
+    memset(jskip, 0, sizeof(int) * (size_t)nfields);
+
+    for (int i = 0; i < nfields; i++) {
+        jnames[i] = fields[i];
+        if (!ftags || !ftags[i])
+            continue;
+        const char *p = ftags[i];
+        int saw_json = 0;
+        while (*p) {
+            while (*p == ' ' || *p == '\t')
+                p++;
+            if (!*p)
+                break;
+            if (!isalpha((unsigned char)*p) && *p != '_')
+                cg_error(line,
+                         "invalid struct tag on field '%s.%s': expected "
+                         "key:\"value\" pair (e.g. `json:\"wire_name\"`)",
+                         sname, fields[i]);
+            const char *kstart = p;
+            while (isalnum((unsigned char)*p) || *p == '_' || *p == '-')
+                p++;
+            size_t klen = (size_t)(p - kstart);
+            char *key = (char *)xmalloc(klen + 1);
+            memcpy(key, kstart, klen);
+            key[klen] = '\0';
+            if (*p != ':')
+                cg_error(line,
+                         "invalid struct tag on field '%s.%s': expected ':' "
+                         "after key '%s' (e.g. `%s:\"value\"`)",
+                         sname, fields[i], key, key);
+            p++;
+            if (*p != '"')
+                cg_error(line,
+                         "invalid struct tag on field '%s.%s': expected '\"' "
+                         "after '%s:' (e.g. `%s:\"value\"`)",
+                         sname, fields[i], key, key);
+            p++;
+            char *val = (char *)xmalloc(strlen(p) + 1);
+            size_t vlen = 0;
+            while (*p && *p != '"') {
+                if ((unsigned char)*p < 0x20)
+                    cg_error(line,
+                             "invalid struct tag on field '%s.%s': control "
+                             "character inside tag value",
+                             sname, fields[i]);
+                if (*p == '\\') {
+                    p++;
+                    if (!*p)
+                        break;
+                }
+                val[vlen++] = *p++;
+            }
+            if (*p != '"')
+                cg_error(line,
+                         "invalid struct tag on field '%s.%s': unterminated "
+                         "quoted value in tag '%s'",
+                         sname, fields[i], key);
+            val[vlen] = '\0';
+            p++;
+            if (*p && *p != ' ' && *p != '\t')
+                cg_error(line,
+                         "invalid struct tag on field '%s.%s': expected space "
+                         "between tag pairs after '%s:\"...\"'",
+                         sname, fields[i], key);
+
+            if (!strcmp(key, "json")) {
+                if (saw_json)
+                    cg_error(line,
+                             "duplicate 'json' tag on field '%s.%s'",
+                             sname, fields[i]);
+                saw_json = 1;
+                if (!strcmp(val, "-")) {
+                    jskip[i] = 1;
+                    jnames[i] = NULL;
+                    jomit[i] = 0;
+                } else {
+                    const char *comma = strchr(val, ',');
+                    size_t nlen = comma ? (size_t)(comma - val) : strlen(val);
+                    if (nlen > 0) {
+                        for (size_t q = 0; q < nlen; q++) {
+                            unsigned char ch = (unsigned char)val[q];
+                            if (ch < 0x20 || ch == '"' || ch == '\\')
+                                cg_error(line,
+                                         "invalid json field name on '%s.%s': "
+                                         "contains unsupported character for "
+                                         "a JSON key",
+                                         sname, fields[i]);
+                        }
+                        char *wn = (char *)xmalloc(nlen + 1);
+                        memcpy(wn, val, nlen);
+                        wn[nlen] = '\0';
+                        jnames[i] = wn;
+                    }
+                    if (comma && comma[1] != '\0') {
+                        const char *op = comma + 1;
+                        for (;;) {
+                            const char *next = strchr(op, ',');
+                            size_t olen = next ? (size_t)(next - op) : strlen(op);
+                            char *opt = (char *)xmalloc(olen + 1);
+                            memcpy(opt, op, olen);
+                            opt[olen] = '\0';
+                            if (olen == 0) {
+                                cg_error(line,
+                                         "empty json tag option on field "
+                                         "'%s.%s' (supported: 'omitempty')",
+                                         sname, fields[i]);
+                            } else if (!strcmp(opt, "omitempty")) {
+                                if (jomit[i])
+                                    cg_error(line,
+                                             "duplicate 'omitempty' option in "
+                                             "json tag on field '%s.%s'",
+                                             sname, fields[i]);
+                                jomit[i] = 1;
+                            } else {
+                                cg_error(line,
+                                         "unknown json tag option '%s' on "
+                                         "field '%s.%s' (supported: "
+                                         "'omitempty', or use `json:\"-\"` "
+                                         "to skip)",
+                                         opt, sname, fields[i]);
+                            }
+                            free(opt);
+                            if (!next)
+                                break;
+                            op = next + 1;
+                        }
+                    }
+                }
+            }
+            free(key);
+            free(val);
+        }
+    }
+
+    for (int i = 0; i < nfields; i++) {
+        if (jskip[i])
+            continue;
+        for (int q = 0; q < i; q++) {
+            if (!jskip[q] && !strcmp(jnames[q], jnames[i]))
+                cg_error(line,
+                         "duplicate json field name '%s' in struct '%s' "
+                         "(used by fields '%s' and '%s'; rename one with "
+                         "`json:\"other\"`)",
+                         jnames[i], sname, fields[q], fields[i]);
+        }
+    }
+
+    *json_names_out = jnames;
+    *json_omit_out = jomit;
+    *json_skip_out = jskip;
+}
+
 /* Collect imports, structs, free functions, and methods from every
  * package, then canonicalize all stored type names. */
 void collect_decls(CG *cg, Package *pkgs, int npkgs) {
@@ -166,7 +335,11 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
             sd->is_gc = s->as.struct_decl.is_gc;
             sd->fields = s->as.struct_decl.fields;
             sd->ftypes = (const char **)s->as.struct_decl.ftypes;
+            sd->ftags = s->as.struct_decl.ftags;
             sd->nfields = s->as.struct_decl.nfields;
+            parse_struct_field_tags(sd->name, s->line, sd->fields, sd->ftags,
+                                    sd->nfields, &sd->json_names,
+                                    &sd->json_omit, &sd->json_skip);
             sd->lts = s->as.struct_decl.lts;
             sd->nlts = s->as.struct_decl.nlts;
             sd->line = s->line;

@@ -600,7 +600,21 @@ a number by `decimal.parse`'s rules, from the number's text and never
 through a float, also in C). `rawptr`, `chan[T]`, and
 `result[T,E]` can't appear anywhere in a decode/encode target type. A
 missing JSON key defaults an `opt[T]` field to `none`; for any other
-field type it's a decode error. Unknown JSON keys are ignored. Every
+field type it's a decode error. Unknown JSON keys are ignored. Struct
+fields support Go-style backtick tags for wire renaming, conditional
+omission, and skipping:
+
+- `` `json:"userId"` `` renames the JSON key on both `encode` and `decode`
+  (also used in decode error messages); `` `json:"-,"` `` uses a literal
+  `"-"` key.
+- `` `json:"userId,omitempty"` `` (or `` `json:",omitempty"` ``) omits the
+  field during `json.encode` when empty (`none`, `""`, `b""`, `[]`, `{}`,
+  `false`, or `0`).
+- `` `json:"-"` `` skips the field during `json.encode` and initializes it
+  to its zero value during `json.decode` (`none`, `""`, `b""`, `false`,
+  or `0`).
+
+Every
 decode error names where it happened, composed through nesting —
 `json.decode` on `{"addr":{"city":5}}` against the `Person` shape
 above fails with `field 'addr': field 'city': expected a string, got
