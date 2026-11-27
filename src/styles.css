@@ -970,6 +970,7 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 }
 .decisions dt { font-size: 15px; color: var(--muted); }
 .decisions dd { margin: 0; font-size: 15px; color: var(--ink); }
+.decision-links { display: flex; flex-wrap: wrap; gap: 18px; }
 
 @media (max-width: 900px) {
   .zokor-grid { grid-template-columns: minmax(0, 1fr); }

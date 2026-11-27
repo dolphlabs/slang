@@ -438,8 +438,14 @@ fn show_org(c: zokor.Ctx[App]) -> http.Response {
           <div><dt>{{zokor.q_input}}</dt><dd>{{zokor.a_input}}</dd></div>
           <div><dt>{{zokor.q_upload}}</dt><dd>{{zokor.a_upload}}</dd></div>
           <div><dt>{{zokor.q_ws}}</dt><dd>{{zokor.a_ws}}</dd></div>
+          <div><dt>{{zokor.q_arch}}</dt><dd>{{zokor.a_arch}}</dd></div>
+          <div><dt>{{zokor.q_lsp}}</dt><dd>{{zokor.a_lsp}}</dd></div>
         </dl>
-        <a class="text-link" href="https://github.com/dolphlabs/zokor">{{zokor.link}}</a>
+        <div class="decision-links">
+          <a class="text-link" href="https://github.com/dolphlabs/zokor">{{zokor.link}}</a>
+          <a class="text-link" href="https://github.com/dolphlabs/zokor_cli">{{zokor.cli_link}}</a>
+          <a class="text-link" href="https://github.com/dolphlabs/slang-analyser">{{zokor.lsp_link}}</a>
+        </div>
       </div>
     </div>
   </div>
