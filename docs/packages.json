@@ -1817,8 +1817,8 @@
       "name": "zokor",
       "kind": "framework",
       "category": "Web & Backend",
-      "version": "0.3.0",
-      "tag": "v0.3.0",
+      "version": "0.3.1",
+      "tag": "v0.3.1",
       "repo": "https://github.com/dolphlabs/zokor",
       "dir": "zokor",
       "summary": "Backend web framework for slang with routing, middleware, JSON envelopes, auth, OAuth/OIDC, WebSockets, and postgres helpers.",
@@ -1831,7 +1831,7 @@
         "postgres",
         "backend"
       ],
-      "pkg_line": "pkg zokor git https://github.com/dolphlabs/zokor.git tag v0.3.0 dir zokor"
+      "pkg_line": "pkg zokor git https://github.com/dolphlabs/zokor.git tag v0.3.1 dir zokor"
     },
     {
       "name": "amqp",
