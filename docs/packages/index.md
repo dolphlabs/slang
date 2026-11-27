@@ -2745,6 +2745,23 @@ tasks running, the caller included if it is one) and `workers` (OS
 threads running tasks). The counters are kept whether or not anything
 reads them, at a few atomic adds per collection; reading them is a few
 loads and one system call.
+
+For live task inspection and built-in profiling (`pprof`-style text
+endpoints and `SIGQUIT` task dumps):
+
+- `runtime.task_dump()` snapshots all running, runnable, and parked tasks
+  with task IDs, wait reasons (`chan recv`, `chan send`, `mutex`,
+  `select`, `join`, `sleep`, `net io`, `wait_idle`), and spawn `file.sl:line`.
+- `runtime.cpu_profile(duration_ms)` samples active workers at 100 Hz and
+  aggregates hotspots resolved to Slang function names and source lines.
+- `runtime.heap_profile()` formats GC/RSS totals and allocation hotspots
+  (sampled every 512 KB by default; tune or disable via
+  `SLANG_ALLOC_PROFILE_RATE`).
+- `runtime.pprof_text(path)` dispatches `/debug/pprof/`, `/debug/pprof/tasks`,
+  `/debug/pprof/heap`, `/debug/pprof/cpu?ms=500`, and `/debug/pprof/stats`
+  directly for HTTP debug routes.
+- Sending `SIGQUIT` (`kill -QUIT <pid>`) writes the live task dump to
+  stderr without terminating the process.
 #### `oidc`
 
 OAuth 2.0 and OpenID Connect for a client: sign users in with Google,
@@ -5139,14 +5156,14 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [outbox](packages/outbox.md) -- source package, 5 public items
 - [pg](packages/pg.md) -- source package, 58 public items
 - [pool](packages/pool.md) -- source package, 11 public items
-- [proc](packages/proc.md) -- compiler-provided, 12 public items
+- [proc](packages/proc.md) -- compiler-provided, 15 public items
 - [protobuf](packages/protobuf.md) -- source package, 40 public items
 - [proxyproto](packages/proxyproto.md) -- source package, 6 public items
 - [rand](packages/rand.md) -- source package, 15 public items
 - [redis](packages/redis.md) -- source package, 161 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
 - [resilience](packages/resilience.md) -- source package, 32 public items
-- [runtime](packages/runtime.md) -- source package, 2 public items
+- [runtime](packages/runtime.md) -- source package, 6 public items
 - [s3](packages/s3.md) -- source package, 23 public items
 - [sigv4](packages/sigv4.md) -- source package, 14 public items
 - [singleflight](packages/singleflight.md) -- source package, 7 public items

@@ -2,6 +2,7 @@
 #define _XOPEN_SOURCE 700
 #define _DARWIN_C_SOURCE
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>   /* sl_str_parse_f64 (sl_containers.c) checks ERANGE */
@@ -16,6 +17,20 @@
 #include <unistd.h>
 #include <sys/socket.h> /* shutdown(), for a split link (sl_link_free) */
 #include <time.h>
+
+#if defined(__SANITIZE_THREAD__) || defined(SL_RACE_BUILD)
+#define SL_TSAN 1
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define SL_TSAN 1
+#endif
+#endif
+#ifdef SL_TSAN
+#include <sanitizer/tsan_interface.h>
+#define SL_NO_TSAN __attribute__((no_sanitize("thread")))
+#else
+#define SL_NO_TSAN
+#endif
 
 /* ---- slang runtime ---- */
 
@@ -321,6 +336,13 @@ typedef struct sl_task {
      * ending the task. It points into this task's own stack, so
      * sl_task_grower_entry translates it with the safepoint chain. */
     struct sl_recover *recover;
+    unsigned long long task_id; /* monotonic ID assigned in sl_task_stack_init */
+    const char *spawn_at;       /* static literal "file.sl:line (fn)" or "main" */
+    _Atomic(const char *) wait_reason; /* static literal wait reason while parked */
+#ifdef SL_TSAN
+    void *tsan_fiber;
+    atomic_int tsan_switching;
+#endif
 } sl_task;
 
 /* A protected call's way back (sl_protect_run). `regs` is what
@@ -451,11 +473,18 @@ static _Atomic unsigned long long sl_sched_stat_preempt_async = 0;
    ABI's 16-byte alignment (sl_preempt_yield's probe). Must stay 0. */
 static _Atomic unsigned long long sl_sched_stat_preempt_misaligned = 0;
 
+static inline int sl_rt_env_flag(_Atomic int *slot, const char *name) {
+    int v = atomic_load_explicit(slot, memory_order_relaxed);
+    if (v < 0) {
+        v = getenv(name) ? 1 : 0;
+        atomic_store_explicit(slot, v, memory_order_relaxed);
+    }
+    return v;
+}
+
 static int sl_sched_stat_enabled(void) {
-    static int cached = -1;
-    if (cached < 0)
-        cached = getenv("SLANG_SCHED_STAT") ? 1 : 0;
-    return cached;
+    static _Atomic int cached = -1;
+    return sl_rt_env_flag(&cached, "SLANG_SCHED_STAT");
 }
 
 static void sl_sched_stat_dump(void) {
@@ -718,15 +747,22 @@ static _Atomic unsigned long sl_rt_async_epoch = 0;
  * flag). Paying that at -O0 to fix a bug that cannot occur at -O0
  * would be a straight loss, so the plain read stays there and the
  * barrier appears only where the hoist it defeats is possible. */
-#ifdef __OPTIMIZE__
-__attribute__((noinline))
+#if defined(__OPTIMIZE__) || defined(SL_TSAN)
+SL_NO_TSAN __attribute__((noinline))
 static sl_task *sl_rt_tls_read_current_task(void) {
     __asm__ __volatile__("" ::: "memory");
     sl_task *t = sl_rt_current_task;
     __asm__ __volatile__("" : "+r"(t) :: "memory");
     return t;
 }
+SL_NO_TSAN __attribute__((noinline))
+static void sl_rt_tls_set_current_task(sl_task *t) {
+    __asm__ __volatile__("" ::: "memory");
+    sl_rt_current_task = t;
+    __asm__ __volatile__("" ::: "memory");
+}
 #define SL_RT_TLS_CUR() sl_rt_tls_read_current_task()
+#define SL_RT_TLS_SET_CUR(t) sl_rt_tls_set_current_task((t))
 #else
 /* A macro, not a static inline wrapper: at -O0 clang does not inline
  * anything, so a wrapper function would still cost a real call per
@@ -734,6 +770,7 @@ static sl_task *sl_rt_tls_read_current_task(void) {
  * avoid. Expanding to the bare read makes the -O0 path byte-for-byte
  * what it was before this accessor existed. */
 #define SL_RT_TLS_CUR() (sl_rt_current_task)
+#define SL_RT_TLS_SET_CUR(t) (sl_rt_current_task = (t))
 #endif
 
 /* Defines fn() returning the calling OS thread's address of the
@@ -844,8 +881,8 @@ static inline void sl_rt_preempt_enable(void) {
  * emitted -- same ordering reason as sl_task itself above. */
 static _Thread_local void *sl_rt_native_rsp;
 
-#ifdef __OPTIMIZE__
-__attribute__((noinline))
+#if defined(__OPTIMIZE__) || defined(SL_TSAN)
+SL_NO_TSAN __attribute__((noinline))
 static void *sl_rt_tls_read_native_rsp(void) {
     __asm__ __volatile__("" ::: "memory");
     void *p = sl_rt_native_rsp;
@@ -855,6 +892,40 @@ static void *sl_rt_tls_read_native_rsp(void) {
 #define SL_RT_TLS_NATIVE_RSP() sl_rt_tls_read_native_rsp()
 #else
 #define SL_RT_TLS_NATIVE_RSP() (sl_rt_native_rsp)
+#endif
+
+#ifdef SL_TSAN
+static _Thread_local void *sl_rt_native_fiber;
+SL_NO_TSAN __attribute__((noinline))
+static void *sl_rt_tls_read_native_fiber(void) {
+    __asm__ __volatile__("" ::: "memory");
+    void *p = sl_rt_native_fiber;
+    __asm__ __volatile__("" : "+r"(p) :: "memory");
+    return p;
+}
+SL_NO_TSAN __attribute__((noinline))
+static void sl_rt_tls_set_native_fiber(void *p) {
+    __asm__ __volatile__("" ::: "memory");
+    sl_rt_native_fiber = p;
+    __asm__ __volatile__("" ::: "memory");
+}
+#define SL_RT_TLS_NATIVE_FIBER() sl_rt_tls_read_native_fiber()
+#define SL_TSAN_ACQUIRE(t) __tsan_acquire((t))
+#define SL_TSAN_RELEASE(t) __tsan_release((t))
+#define SL_TSAN_SWITCH_TO_TASK(t) do { \
+    sl_rt_tls_set_native_fiber(__tsan_get_current_fiber()); \
+    __tsan_switch_to_fiber((t)->tsan_fiber, __tsan_switch_to_fiber_no_sync); \
+    __tsan_acquire((t)); \
+} while (0)
+#define SL_TSAN_SWITCH_TO_NATIVE(t) do { \
+    __tsan_release((t)); \
+    __tsan_switch_to_fiber(SL_RT_TLS_NATIVE_FIBER(), __tsan_switch_to_fiber_no_sync); \
+} while (0)
+#else
+#define SL_TSAN_ACQUIRE(t) ((void)(t))
+#define SL_TSAN_RELEASE(t) ((void)(t))
+#define SL_TSAN_SWITCH_TO_TASK(t) ((void)(t))
+#define SL_TSAN_SWITCH_TO_NATIVE(t) ((void)(t))
 #endif
 
 static inline void sl_rt_gc_checkin(void); /* runtime_gc.c, forward here */
@@ -872,7 +943,131 @@ static void sl_task_park(pthread_mutex_t *held_mu); /* runtime_pool.c,
     real in RUNTIME_POOL, emitted last. */
 static void sl_task_resume(sl_task *t); /* runtime_pool.c, forward here,
     same reason. */
+static inline void sl_task_set_wait(sl_task *t, const char *reason) {
+    if (t)
+        atomic_store_explicit(&t->wait_reason, reason, memory_order_relaxed);
+}
+
+static inline const char *sl_task_get_wait(sl_task *t) {
+    return t ? atomic_load_explicit(&t->wait_reason, memory_order_relaxed)
+             : NULL;
+}
+
 static void sl_task_resume_local(sl_task *t); /* runtime_pool.c, the same */
+
+/* Profiling symbol table populated once by main() in generated C. Uses a
+ * generic function pointer type in the static table so PIC/PIE relocations
+ * compile cleanly under C11 -Wall -Wextra without object-cast warnings. */
+typedef void (*sl_fn_ptr)(void);
+typedef struct sl_fn_sym {
+    sl_fn_ptr addr;
+    const char *name;
+    const char *loc;
+} sl_fn_sym;
+static const sl_fn_sym *sl_prof_syms = NULL;
+static size_t sl_prof_nsyms = 0;
+static uintptr_t sl_preempt_text_lo = 0;
+static uintptr_t sl_preempt_text_hi = 0;
+
+typedef struct sl_prof_sym_entry {
+    uintptr_t addr;
+    const char *name;
+    const char *loc;
+} sl_prof_sym_entry;
+static sl_prof_sym_entry *sl_prof_sorted = NULL;
+static size_t sl_prof_sorted_n = 0;
+static pthread_once_t sl_prof_sort_once = PTHREAD_ONCE_INIT;
+
+static int sl_prof_sym_cmp(const void *a, const void *b) {
+    uintptr_t x = ((const sl_prof_sym_entry *)a)->addr;
+    uintptr_t y = ((const sl_prof_sym_entry *)b)->addr;
+    return (x > y) - (x < y);
+}
+
+static void sl_prof_sort_init(void) {
+    if (!sl_prof_syms || sl_prof_nsyms == 0)
+        return;
+    sl_prof_sym_entry *arr = (sl_prof_sym_entry *)malloc(
+        sl_prof_nsyms * sizeof(*arr));
+    if (!arr)
+        return;
+    for (size_t i = 0; i < sl_prof_nsyms; i++) {
+        arr[i].addr = (uintptr_t)sl_prof_syms[i].addr;
+        arr[i].name = sl_prof_syms[i].name;
+        arr[i].loc = sl_prof_syms[i].loc;
+    }
+    qsort(arr, sl_prof_nsyms, sizeof(*arr), sl_prof_sym_cmp);
+    sl_prof_sorted = arr;
+    sl_prof_sorted_n = sl_prof_nsyms;
+}
+
+static void sl_prof_lookup_pc(uintptr_t pc, const char **out_name,
+                              const char **out_loc) {
+    pthread_once(&sl_prof_sort_once, sl_prof_sort_init);
+    if (pc && sl_prof_sorted && sl_prof_sorted_n > 0) {
+        if (sl_preempt_text_hi > sl_preempt_text_lo &&
+            (pc < sl_preempt_text_lo || pc >= sl_preempt_text_hi)) {
+            *out_name = "<native>";
+            *out_loc = "external";
+            return;
+        }
+        size_t lo = 0, hi = sl_prof_sorted_n;
+        while (lo < hi) {
+            size_t mid = lo + (hi - lo) / 2;
+            if (sl_prof_sorted[mid].addr <= pc)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        if (lo > 0) {
+            const sl_prof_sym_entry *e = &sl_prof_sorted[lo - 1];
+            if (pc - e->addr < 65536) {
+                *out_name = e->name;
+                *out_loc = e->loc ? e->loc : "?";
+                return;
+            }
+        }
+    }
+    *out_name = "<runtime>";
+    *out_loc = "runtime";
+}
+
+typedef struct {
+    char *data;
+    size_t len;
+    size_t cap;
+} sl_pbuf;
+
+static void sl_pbuf_printf(sl_pbuf *b, const char *fmt, ...)
+    __attribute__((format(printf, 2, 3)));
+
+static void sl_pbuf_printf(sl_pbuf *b, const char *fmt, ...) {
+    va_list ap, ap2;
+    va_start(ap, fmt);
+    va_copy(ap2, ap);
+    int need = vsnprintf(NULL, 0, fmt, ap);
+    va_end(ap);
+    if (need < 0) {
+        va_end(ap2);
+        return;
+    }
+    size_t want = b->len + (size_t)need + 1;
+    if (want > b->cap) {
+        size_t ncap = b->cap ? b->cap : 512;
+        while (ncap < want) ncap *= 2;
+        char *nb = (char *)realloc(b->data, ncap);
+        if (!nb) {
+            va_end(ap2);
+            return;
+        }
+        b->data = nb;
+        b->cap = ncap;
+    }
+    vsnprintf(b->data + b->len, (size_t)need + 1, fmt, ap2);
+    va_end(ap2);
+    b->len += (size_t)need;
+}
+
 static sl_task *sl_rt_idle_waiters, *sl_rt_idle_waiters_tail;
 
 static void sl_rt_idle_wl_push(sl_task *t) {
@@ -932,7 +1127,9 @@ static void sl_rt_wait_idle(void) {
         atomic_fetch_add(&sl_rt_idle_spawned_waiters, 1);
     while (atomic_load(&sl_rt_active_spawns) >
            atomic_load(&sl_rt_idle_spawned_waiters)) {
-        sl_rt_idle_wl_push(sl_rt_cur());
+        sl_task *wself = sl_rt_cur();
+        sl_task_set_wait(wself, "wait_idle");
+        sl_rt_idle_wl_push(wself);
         sl_task_park(&sl_rt_idle_mu);
         pthread_mutex_lock(&sl_rt_idle_mu);
     }
@@ -1038,7 +1235,9 @@ static void sl_cpu_detect(void) {
  * instead, and slangc raises its frame-guard limit to half this margin: a
  * frame the guard does not cover still fits. Memory per task is no concern
  * in a build that is never deployed. */
-#ifdef SL_DEV_BUILD
+#if defined(SL_TSAN)
+#define SL_TASK_INITIAL_STACK_SIZE 262144
+#elif defined(SL_DEV_BUILD)
 #define SL_TASK_INITIAL_STACK_SIZE 32768
 #else
 #define SL_TASK_INITIAL_STACK_SIZE 8192
@@ -1135,28 +1334,28 @@ static void (*sl_rt_tick_hook)(void) = NULL;
 #define SL_ASYNC_STOP 0
 #endif
 
-static long long sl_preempt_quantum_ns(void) {
-    static long long cached = -1;
-    if (cached < 0) {
-        const char *e = getenv("SLANG_PREEMPT_QUANTUM_MS");
-        long long ms = e ? atoll(e) : 10;
+static inline long long sl_rt_env_ms_ns(_Atomic long long *slot,
+                                          const char *name, long long def_ms) {
+    long long v = atomic_load_explicit(slot, memory_order_relaxed);
+    if (v < 0) {
+        const char *e = getenv(name);
+        long long ms = e ? atoll(e) : def_ms;
         if (ms < 1) ms = 1;
         if (ms > 1000) ms = 1000;
-        cached = ms * 1000000LL;
+        v = ms * 1000000LL;
+        atomic_store_explicit(slot, v, memory_order_relaxed);
     }
-    return cached;
+    return v;
+}
+
+static long long sl_preempt_quantum_ns(void) {
+    static _Atomic long long cached = -1;
+    return sl_rt_env_ms_ns(&cached, "SLANG_PREEMPT_QUANTUM_MS", 10);
 }
 
 static long long sl_preempt_tick_ns(void) {
-    static long long cached = -1;
-    if (cached < 0) {
-        const char *e = getenv("SLANG_PREEMPT_TICK_MS");
-        long long ms = e ? atoll(e) : 2;
-        if (ms < 1) ms = 1;
-        if (ms > 1000) ms = 1000;
-        cached = ms * 1000000LL;
-    }
-    return cached;
+    static _Atomic long long cached = -1;
+    return sl_rt_env_ms_ns(&cached, "SLANG_PREEMPT_TICK_MS", 2);
 }
 
 #define SL_PREEMPT_QUANTUM_NS (sl_preempt_quantum_ns())
@@ -1264,6 +1463,9 @@ static void sl_rt_need_stack(size_t want) {
  * rsp onto another. The 256 bytes skipped are slack below the saved
  * context block, not needed by the ABI. */
 static void *sl_rt_native_stack_top(void) {
+#ifdef SL_TSAN
+    return NULL;
+#endif
     sl_task *t = sl_rt_cur();
     if (!t || !t->stack_base || !sl_rt_on_task_stack(t))
         return NULL;
@@ -1566,6 +1768,7 @@ static void sl_rt_fail(const char *msg, const char *at, const char *detail) {
         if (t->join)
             sl_join_fail(t->join, loc);
         sl_rt_active_spawns_dec();
+        SL_TSAN_SWITCH_TO_NATIVE(t);
         sl_ctx_switch(&t->rsp, SL_RT_TLS_NATIVE_RSP());
         fprintf(stderr,
                 "slang: internal error: task resumed after panic "

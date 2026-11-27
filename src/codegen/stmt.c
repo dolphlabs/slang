@@ -2951,9 +2951,11 @@ void gen_stmt(CG *cg, Stmt *s) {
         }
         cg->ambient_count = ambient_mark;
         move_consume(cg, call);
+        char *spawn_loc = spawn_loc_literal(s->file, s->line,
+                                            sft ? "<fn>" : name);
         emit_line(cg, "sl_rt_active_spawns_inc();");
-        emit_line(cg, "sl_task_submit_copy(%s_entry, &_sl_sa%d, sizeof(_sl_sa%d), sl_gc_trace_%s);",
-                  shape->tname, id, id, shape->sname);
+        emit_line(cg, "sl_task_submit_copy(%s_entry, &_sl_sa%d, sizeof(_sl_sa%d), sl_gc_trace_%s, %s);",
+                  shape->tname, id, id, shape->sname, spawn_loc);
         cg->indent--;
         emit_line(cg, "}");
         break;

@@ -13937,6 +13937,29 @@
           "sig": "proc.runtime_stats() -> [int]"
         },
         {
+          "name": "task_dump",
+          "params": [],
+          "ret": "str",
+          "tls": false,
+          "sig": "proc.task_dump() -> str"
+        },
+        {
+          "name": "cpu_profile",
+          "params": [
+            "int"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "proc.cpu_profile(int) -> str"
+        },
+        {
+          "name": "heap_profile",
+          "params": [],
+          "ret": "str",
+          "tls": false,
+          "sig": "proc.heap_profile() -> str"
+        },
+        {
           "name": "kill",
           "params": [
             "int",
@@ -16125,7 +16148,7 @@
           "sig": "struct Stats",
           "doc": "",
           "file": "stdlib/runtime/runtime.sl",
-          "line": 17
+          "line": 18
         },
         {
           "name": "stats",
@@ -16133,7 +16156,39 @@
           "sig": "fn stats() -> Stats",
           "doc": "",
           "file": "stdlib/runtime/runtime.sl",
-          "line": 30
+          "line": 31
+        },
+        {
+          "name": "task_dump",
+          "decl": "fn",
+          "sig": "fn task_dump() -> str",
+          "doc": "Snapshot all live tasks (running, runnable, parked) with IDs, wait reasons, and spawn file/line locations.",
+          "file": "stdlib/runtime/runtime.sl",
+          "line": 42
+        },
+        {
+          "name": "cpu_profile",
+          "decl": "fn",
+          "sig": "fn cpu_profile(duration_ms: int) -> str",
+          "doc": "Sample running worker PCs at 100 Hz for `duration_ms` (clamped to 10..60000 ms) and format hotspots mapped to Slang functions/lines.",
+          "file": "stdlib/runtime/runtime.sl",
+          "line": 48
+        },
+        {
+          "name": "heap_profile",
+          "decl": "fn",
+          "sig": "fn heap_profile() -> str",
+          "doc": "Format GC/memory summary plus sampled allocation hotspots (defaults to 1 sample per 512 KB allocated; override via SLANG_ALLOC_PROFILE_RATE).",
+          "file": "stdlib/runtime/runtime.sl",
+          "line": 54
+        },
+        {
+          "name": "pprof_text",
+          "decl": "fn",
+          "sig": "fn pprof_text(path: str) -> result[str, str]",
+          "doc": "Text handler for HTTP /debug/pprof endpoints: /debug/pprof, /debug/pprof/ /debug/pprof/tasks /debug/pprof/heap /debug/pprof/cpu[?ms=500] /debug/pprof/stats",
+          "file": "stdlib/runtime/runtime.sl",
+          "line": 64
         }
       ]
     },

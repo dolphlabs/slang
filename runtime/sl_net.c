@@ -115,10 +115,8 @@ static inline unsigned sl_reactor_shard_for(int fd) {
 }
 
 static int sl_reactor_stat_enabled(void) {
-    static int cached = -1;
-    if (cached < 0)
-        cached = getenv("SLANG_REACTOR_STAT") ? 1 : 0;
-    return cached;
+    static _Atomic int cached = -1;
+    return sl_rt_env_flag(&cached, "SLANG_REACTOR_STAT");
 }
 
 static void sl_reactor_shard_count(unsigned shard, int wake) {
@@ -813,6 +811,7 @@ static int sl_reactor_wait_epoch(int fd, int rw, int abort_on_shutdown,
                                           memory_order_relaxed);
         }
     }
+    sl_task_set_wait(sl_reactor_self, "net io");
     sl_task_park(&wq->mu);
     sl_reactor_self->io_deadline_ns = 0;
     int sl_reactor_wait_closed = sl_reactor_self->wait_closed;

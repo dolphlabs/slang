@@ -56,6 +56,9 @@ ok: 2 passed (190us)
   tests cannot be run (a `test_` function with parameters, say). A package
   with no test files exits 0 and says so.
 - `--keep` keeps the generated runner and prints where it is.
+- `--race` (or `SLANG_RACE=1`) builds with ThreadSanitizer
+  (`-fsanitize=thread`) to detect data races across concurrent `spawn`
+  tasks, in both `slangc test --race` and `slangc --race` / `slangc --run --race`.
 
 ---
 

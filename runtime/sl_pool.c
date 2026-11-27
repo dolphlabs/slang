@@ -518,7 +518,7 @@ static void sl_task_submit(void (*entry)(void *), void *arg) {
 static void sl_task_submit_copy_to(void (*entry)(void *), const void *src,
                                    size_t n,
                                    void (*trace)(void *, void (*)(void *)),
-                                   int wake) {
+                                   int wake, const char *spawn_at) {
     sl_task *t = sl_task_grab();
     if (n <= sizeof(t->entry_arg_store)) {
         memcpy(t->entry_arg_store, src, n);
@@ -534,6 +534,7 @@ static void sl_task_submit_copy_to(void (*entry)(void *), const void *src,
         t->entry_arg_owned = 1;
     }
     t->entry_arg_trace = trace;
+    t->spawn_at = spawn_at;
     sl_task_stack_init(t, entry, t->entry_arg);
     sl_rt_preempt_disable();
     sl_runq_ready_to(t, wake);
@@ -544,9 +545,10 @@ static void sl_task_submit_copy_to(void (*entry)(void *), const void *src,
 }
 
 static void sl_task_submit_copy(void (*entry)(void *), const void *src,
-                               size_t n,
-                               void (*trace)(void *, void (*)(void *))) {
-    sl_task_submit_copy_to(entry, src, n, trace, 1);
+                                size_t n,
+                                void (*trace)(void *, void (*)(void *)),
+                                const char *spawn_at) {
+    sl_task_submit_copy_to(entry, src, n, trace, 1, spawn_at);
 }
 
 /* A spawn whose join_wait is the very next thing its task does
@@ -560,7 +562,7 @@ static void sl_task_submit_copy_joined(void (*entry)(void *),
                                        const void *src, size_t n,
                                        void (*trace)(void *,
                                                      void (*)(void *))) {
-    sl_task_submit_copy_to(entry, src, n, trace, 0);
+    sl_task_submit_copy_to(entry, src, n, trace, 0, NULL);
 }
 
 /* Tier 11 fourth slice: generic park/resume primitives -- the pieces
@@ -612,12 +614,25 @@ static void sl_task_park(pthread_mutex_t *held_mu) {
         ps->head->parked_prev = t;
     ps->head = t;
     t->on_parked = 1;
+#ifdef SL_TSAN
+    /* Unlock held_mu on t->tsan_fiber (the same fiber that locked it) so
+       TSan preserves mutex lockset tracking; tsan_switching blocks run-loop
+       dispatch until sl_worker_after_switch finishes saving t->rsp. */
+    t->park_mu = NULL;
+    t->parked = 1;
+    atomic_store_explicit(&t->tsan_switching, 1, memory_order_release);
+    pthread_mutex_unlock(&ps->mu);
+    if (held_mu) pthread_mutex_unlock(held_mu);
+    SL_TSAN_SWITCH_TO_NATIVE(t);
+#else
     pthread_mutex_unlock(&ps->mu);
     t->park_mu = held_mu;
     t->parked = 1;
+#endif
     sl_ctx_switch(&t->rsp, SL_RT_TLS_NATIVE_RSP());
     /* resumes here once re-submitted (sl_task_resume) and re-switched-
        into by some worker */
+    sl_task_set_wait(t, NULL);
     sl_rt_preempt_enable();
 }
 
@@ -722,6 +737,7 @@ static void sl_task_yield_now(void) {
     if (sl_sched_stat_enabled())
         atomic_fetch_add_explicit(&sl_sched_stat_preempt_yield, 1,
                                   memory_order_relaxed);
+    SL_TSAN_SWITCH_TO_NATIVE(t);
     sl_ctx_switch(&t->rsp, SL_RT_TLS_NATIVE_RSP());
     /* resumes here once some worker's run loop dispatches this task
        again -- run_start_ns is reset fresh by that dispatch (see
@@ -738,6 +754,7 @@ static void sl_task_yield_now(void) {
  * main's top-level task can now park exactly like any spawned task
  * can. */
 static void sl_worker_after_switch(sl_task *t) {
+    SL_TSAN_ACQUIRE(t);
     if (t->preempted) {
         /* Tier 11 seventh slice: t's sl_ctx_switch has already safely
          * completed by the time we're running here (this IS the code
@@ -754,11 +771,12 @@ static void sl_worker_after_switch(sl_task *t) {
            after which another worker may already be running t. */
         t->gc_minor_stamp = atomic_load_explicit(&sl_gc_minors_done,
                                                  memory_order_relaxed);
+        SL_TSAN_RELEASE(t);
         sl_runq_stripe_push(t); /* raw stripe push, no bracket -- same
             reason as the old sl_runq_push_raw call here: sl_rt_current_task
             is deliberately still t, and a bracket would decrement freed
             memory after another worker finishes t. Native stack vetoed. */
-        sl_rt_current_task = &sl_rt_task_storage; /* the LAST thing this
+        SL_RT_TLS_SET_CUR(&sl_rt_task_storage); /* the LAST thing this
             branch does, and deliberately not a dereference of t: after
             the push above, t may already be running, finished, and freed
             on another worker. */
@@ -774,16 +792,20 @@ static void sl_worker_after_switch(sl_task *t) {
                                                  memory_order_relaxed);
         pthread_mutex_t *mu = t->park_mu;
         t->park_mu = NULL;
-        sl_rt_current_task = &sl_rt_task_storage; /* MUST happen before
+        SL_RT_TLS_SET_CUR(&sl_rt_task_storage); /* MUST happen before
             the unlock below, not after: the registry's task_slot
             dereferences through sl_rt_current_task at any time,
             including immediately after mu is unlocked and some OTHER
             thread could already be resuming t. */
         if (mu) pthread_mutex_unlock(mu);
+#ifdef SL_TSAN
+        SL_TSAN_RELEASE(t);
+        atomic_store_explicit(&t->tsan_switching, 0, memory_order_release);
+#endif
         return;
     }
     sl_gc_flush_task(t);
-    sl_rt_current_task = &sl_rt_task_storage; /* MUST happen before
+    SL_RT_TLS_SET_CUR(&sl_rt_task_storage); /* MUST happen before
         the release below, not after -- same reasoning as the parked
         case above. */
     sl_task_release(t);
@@ -960,8 +982,13 @@ static void sl_worker_run_loop(long slot_idx) {
             t = sl_runq_pop_blocking(&sl_global_runq);
             now = sl_rt_monotonic_ns(); /* it may have slept */
         }
-        if (t) sl_rt_current_task = t;
         if (!t) break; /* shutdown */
+#ifdef SL_TSAN
+        while (atomic_load_explicit(&t->tsan_switching, memory_order_acquire) != 0)
+            sched_yield();
+        SL_TSAN_ACQUIRE(t);
+#endif
+        SL_RT_TLS_SET_CUR(t);
         if (sl_sched_stat_enabled())
             atomic_fetch_add_explicit(&sl_sched_stat_dispatch, 1,
                                       memory_order_relaxed);
@@ -972,6 +999,11 @@ static void sl_worker_run_loop(long slot_idx) {
          * this stint, never a stale one from before the last switch-out. */
         if (!inherited)
             chain_start = now;
+#ifdef SL_TSAN
+        sl_pool_slot_occupy(occ, t);
+        SL_TSAN_SWITCH_TO_TASK(t);
+        t->run_start_ns = chain_start;
+#else
         t->run_start_ns = chain_start;
         /* Tier 11 eighth slice: publish t as this slot's occupant right
          * where run_start_ns is already reset -- a fresh submit, a
@@ -982,6 +1014,8 @@ static void sl_worker_run_loop(long slot_idx) {
          * thread (a different thread entirely) before any signal based
          * on seeing it could land. */
         sl_pool_slot_occupy(occ, t);
+        SL_TSAN_SWITCH_TO_TASK(t);
+#endif
         sl_ctx_switch(&sl_rt_native_rsp, t->rsp);
         /* resumes here once t either finishes or parks */
         /* Tier 11 eighth slice: .cur cleared BEFORE sl_worker_after_switch,
@@ -1245,7 +1279,7 @@ static void sl_fatal_handler(int sig, siginfo_t *si, void *uctx_raw) {
 }
 
 static void sl_rt_install_fatal_handlers(void) {
-#if defined(__SANITIZE_ADDRESS__)
+#if defined(__SANITIZE_ADDRESS__) || defined(SL_TSAN)
     return;
 #elif defined(__has_feature)
 #if __has_feature(address_sanitizer)
@@ -1309,8 +1343,32 @@ static void sl_rt_install_fatal_handlers(void) {
  * again. Go applies the same rule (async preemption only at Go code
  * PCs). Set once by sl_preempt_install_handlers, before the handler can
  * run. */
-static uintptr_t sl_preempt_text_lo = 0;
-static uintptr_t sl_preempt_text_hi = 0;
+static int sl_uctx_pc_sp(ucontext_t *uctx, uintptr_t *out_pc,
+                         uintptr_t *out_sp) {
+#if defined(__APPLE__) && defined(__x86_64__)
+    *out_pc = (uintptr_t)uctx->uc_mcontext->__ss.__rip;
+    *out_sp = (uintptr_t)uctx->uc_mcontext->__ss.__rsp;
+    return 1;
+#elif defined(__APPLE__) && defined(__aarch64__)
+    *out_pc = (uintptr_t)__darwin_arm_thread_state64_get_pc(
+        uctx->uc_mcontext->__ss);
+    *out_sp = (uintptr_t)uctx->uc_mcontext->__ss.__sp;
+    return 1;
+#elif defined(__linux__) && defined(__x86_64__)
+    *out_pc = (uintptr_t)uctx->uc_mcontext.gregs[REG_RIP];
+    *out_sp = (uintptr_t)uctx->uc_mcontext.gregs[REG_RSP];
+    return 1;
+#elif defined(__linux__) && defined(__aarch64__)
+    *out_pc = (uintptr_t)uctx->uc_mcontext.pc;
+    *out_sp = (uintptr_t)uctx->uc_mcontext.sp;
+    return 1;
+#else
+    (void)uctx;
+    *out_pc = 0;
+    *out_sp = 0;
+    return 0;
+#endif
+}
 
 static void sl_preempt_text_range_init(void) {
 #if defined(__APPLE__)
@@ -1340,22 +1398,9 @@ static void sl_preempt_handler(int sig, siginfo_t *si, void *uctx_raw) {
        permanently skip this task forever, silently going dormant for
        the rest of the run rather than just missing this one attempt. */
     ucontext_t *uctx = (ucontext_t *)uctx_raw;
-#if defined(__APPLE__) && defined(__x86_64__)
-    uintptr_t pc0 = (uintptr_t)uctx->uc_mcontext->__ss.__rip;
-    uintptr_t sp0 = (uintptr_t)uctx->uc_mcontext->__ss.__rsp;
-#elif defined(__APPLE__) && defined(__aarch64__)
-    uintptr_t pc0 = (uintptr_t)__darwin_arm_thread_state64_get_pc(uctx->uc_mcontext->__ss);
-    uintptr_t sp0 = (uintptr_t)uctx->uc_mcontext->__ss.__sp;
-#elif defined(__linux__) && defined(__x86_64__)
-    uintptr_t pc0 = (uintptr_t)uctx->uc_mcontext.gregs[REG_RIP];
-    uintptr_t sp0 = (uintptr_t)uctx->uc_mcontext.gregs[REG_RSP];
-#elif defined(__linux__) && defined(__aarch64__)
-    uintptr_t pc0 = (uintptr_t)uctx->uc_mcontext.pc;
-    uintptr_t sp0 = (uintptr_t)uctx->uc_mcontext.sp;
-#else
-    (void)uctx;
-    return;
-#endif
+    uintptr_t pc0 = 0, sp0 = 0;
+    if (!sl_uctx_pc_sp(uctx, &pc0, &sp0))
+        return;
     if (sp0 < (uintptr_t)t->stack_base ||
         sp0 >= (uintptr_t)t->stack_base + t->stack_size) {
         return; /* not genuinely running on t's own stack right now --
@@ -1465,6 +1510,289 @@ static int sl_pool_slot_in_bracket(int slot) {
  * it never drives a task and never touches a GC-scanned field, only
  * plain atomics on sl_pool_slots and sl_task.async_preempt_pending/
  * run_start_ns. */
+/* ---- task dumps, SIGQUIT handler, and built-in CPU profiler ---- */
+
+typedef struct {
+    unsigned long long id;
+    int state; /* 0 = running, 1 = runnable, 2 = parked */
+    int worker;
+    const char *wait_reason;
+    const char *spawn_at;
+} sl_task_snap;
+
+static void sl_task_snap_push(sl_task_snap **arr, size_t *n, size_t *cap,
+                              sl_task_snap s) {
+    if (*n == *cap) {
+        size_t ncap = *cap ? *cap * 2 : 128;
+        sl_task_snap *na = (sl_task_snap *)realloc(*arr, ncap * sizeof(*na));
+        if (!na) return;
+        *arr = na;
+        *cap = ncap;
+    }
+    (*arr)[(*n)++] = s;
+}
+
+static void sl_rt_format_tasks(char **out_buf, size_t *out_len) {
+    size_t cap = 128, n = 0;
+    sl_task_snap *snaps = (sl_task_snap *)malloc(cap * sizeof(*snaps));
+    size_t n_running = 0, n_runnable = 0, n_parked = 0;
+    if (snaps) {
+        for (int i = 0; i <= SL_POOL_MAIN_SLOT; i++) {
+            if (i >= sl_pool_nworkers && i < SL_POOL_MAIN_SLOT)
+                continue;
+            pthread_mutex_lock(&sl_pool_slots[i].mu);
+            sl_task *t = atomic_load_explicit(&sl_pool_slots[i].cur,
+                                              memory_order_acquire);
+            if (t) {
+                sl_task_snap s;
+                s.id = t->task_id;
+                s.state = 0;
+                s.worker = i;
+                s.wait_reason = NULL;
+                s.spawn_at = t->spawn_at ? t->spawn_at : "<task>";
+                sl_task_snap_push(&snaps, &n, &cap, s);
+                n_running++;
+            }
+            pthread_mutex_unlock(&sl_pool_slots[i].mu);
+        }
+        for (int s = 0; s < SL_RUNQ_STRIPES; s++) {
+            pthread_mutex_lock(&sl_runq_stripes[s].mu);
+            for (sl_task *t = sl_runq_stripes[s].head; t; t = t->runq_link) {
+                sl_task_snap sn;
+                sn.id = t->task_id;
+                sn.state = 1;
+                sn.worker = -1;
+                sn.wait_reason = NULL;
+                sn.spawn_at = t->spawn_at ? t->spawn_at : "<task>";
+                sl_task_snap_push(&snaps, &n, &cap, sn);
+                n_runnable++;
+            }
+            pthread_mutex_unlock(&sl_runq_stripes[s].mu);
+        }
+        for (int s = 0; s < SL_PARKED_SHARDS; s++) {
+            pthread_mutex_lock(&sl_parked[s].mu);
+            for (sl_task *t = sl_parked[s].head; t; t = t->parked_next) {
+                sl_task_snap sn;
+                const char *wr = sl_task_get_wait(t);
+                sn.id = t->task_id;
+                sn.state = 2;
+                sn.worker = -1;
+                sn.wait_reason = wr ? wr : "parked";
+                sn.spawn_at = t->spawn_at ? t->spawn_at : "<task>";
+                sl_task_snap_push(&snaps, &n, &cap, sn);
+                n_parked++;
+            }
+            pthread_mutex_unlock(&sl_parked[s].mu);
+        }
+    }
+
+    sl_pbuf b = {0};
+    sl_pbuf_printf(
+        &b,
+        "# tasks: %zu (running=%zu, runnable=%zu, parked=%zu, workers=%ld)\n",
+        n, n_running, n_runnable, n_parked, sl_pool_nworkers);
+    for (size_t i = 0; i < n; i++) {
+        const sl_task_snap *s = &snaps[i];
+        if (s->state == 0) {
+            if (s->worker == SL_POOL_MAIN_SLOT)
+                sl_pbuf_printf(&b, "task #%llu [running on main] %s\n",
+                               s->id, s->spawn_at);
+            else
+                sl_pbuf_printf(&b, "task #%llu [running on worker %d] %s\n",
+                               s->id, s->worker, s->spawn_at);
+        } else if (s->state == 1) {
+            sl_pbuf_printf(&b, "task #%llu [runnable] %s\n",
+                           s->id, s->spawn_at);
+        } else {
+            sl_pbuf_printf(&b, "task #%llu [parked: %s] %s\n",
+                           s->id, s->wait_reason, s->spawn_at);
+        }
+    }
+    free(snaps);
+    *out_buf = b.data;
+    *out_len = b.len;
+}
+
+static void sl_rt_dump_tasks_to_fd(int fd) {
+    char *buf = NULL;
+    size_t len = 0;
+    sl_rt_format_tasks(&buf, &len);
+    if (!buf) return;
+    size_t off = 0;
+    while (off < len) {
+        ssize_t w = write(fd, buf + off, len - off);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        off += (size_t)w;
+    }
+    free(buf);
+}
+
+static _Atomic int sl_sigquit_pending = 0;
+
+static void sl_sigquit_handler(int sig) {
+    (void)sig;
+    atomic_store_explicit(&sl_sigquit_pending, 1, memory_order_release);
+}
+
+static void sl_sigquit_install(void) {
+#if defined(__SANITIZE_ADDRESS__) || defined(SL_TSAN)
+    return;
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+    return;
+#endif
+#endif
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = sl_sigquit_handler;
+    sa.sa_flags = SA_RESTART;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGQUIT, &sa, NULL);
+}
+
+#define SL_PROF_RING_MAX 8192
+
+typedef struct {
+    uintptr_t pc;
+    const char *spawn_at;
+} sl_prof_sample;
+
+typedef struct {
+    const char *name;
+    const char *loc;
+    const char *spawn_at;
+    size_t count;
+} sl_prof_bucket;
+
+static sl_prof_sample sl_prof_ring[SL_PROF_RING_MAX];
+static _Atomic size_t sl_prof_ring_n = 0;
+static _Atomic int sl_prof_active = 0;
+static pthread_mutex_t sl_prof_cpu_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_once_t sl_prof_sig_once = PTHREAD_ONCE_INIT;
+
+static void sl_prof_sig_handler(int sig, siginfo_t *si, void *uctx_raw) {
+    (void)sig; (void)si;
+    if (!atomic_load_explicit(&sl_prof_active, memory_order_acquire))
+        return;
+    uintptr_t pc = 0, sp = 0;
+    sl_uctx_pc_sp((ucontext_t *)uctx_raw, &pc, &sp);
+    size_t idx = atomic_fetch_add_explicit(&sl_prof_ring_n, 1,
+                                           memory_order_relaxed);
+    if (idx < SL_PROF_RING_MAX) {
+        sl_task *t = sl_rt_current_task;
+        const char *sa = (t && t != &sl_rt_task_storage) ? t->spawn_at : NULL;
+        sl_prof_ring[idx].pc = pc;
+        sl_prof_ring[idx].spawn_at = sa;
+    }
+}
+
+static void sl_prof_sig_init(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = sl_prof_sig_handler;
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESTART;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGPROF, &sa, NULL);
+}
+
+static int sl_prof_bucket_cmp(const void *a, const void *b) {
+    size_t x = ((const sl_prof_bucket *)a)->count;
+    size_t y = ((const sl_prof_bucket *)b)->count;
+    return (x < y) - (x > y);
+}
+
+static void sl_prof_cpu_sample(long long duration_ms, char **out_buf,
+                               size_t *out_len) {
+    if (duration_ms < 10) duration_ms = 10;
+    if (duration_ms > 60000) duration_ms = 60000;
+#if defined(__SANITIZE_ADDRESS__) || defined(SL_TSAN)
+    sl_pbuf b = {0};
+    sl_pbuf_printf(&b, "# cpu profile: unavailable under sanitizer\n");
+    *out_buf = b.data;
+    *out_len = b.len;
+    return;
+#else
+    pthread_mutex_lock(&sl_prof_cpu_mu);
+    pthread_once(&sl_prof_sig_once, sl_prof_sig_init);
+    atomic_store_explicit(&sl_prof_ring_n, 0, memory_order_relaxed);
+    atomic_store_explicit(&sl_prof_active, 1, memory_order_release);
+
+    pthread_t self = pthread_self();
+    long long end_ns = sl_rt_monotonic_ns() + duration_ms * 1000000LL;
+    struct timespec step = {0, 10000000L}; /* 10 ms = 100 Hz */
+    while (sl_rt_monotonic_ns() < end_ns) {
+        for (int i = 0; i <= SL_POOL_MAIN_SLOT; i++) {
+            if (i >= sl_pool_nworkers && i < SL_POOL_MAIN_SLOT)
+                continue;
+            pthread_mutex_t *slot_mu = &sl_pool_slots[i].mu;
+            pthread_mutex_lock(slot_mu);
+            sl_task *cur = atomic_load_explicit(&sl_pool_slots[i].cur,
+                                                memory_order_acquire);
+            pthread_t tid = atomic_load_explicit(&sl_pool_slots[i].tid,
+                                                 memory_order_acquire);
+            pthread_mutex_unlock(slot_mu);
+            if (cur && !pthread_equal(tid, self))
+                pthread_kill(tid, SIGPROF);
+        }
+        nanosleep(&step, NULL);
+    }
+
+    atomic_store_explicit(&sl_prof_active, 0, memory_order_release);
+    size_t raw_n = atomic_load_explicit(&sl_prof_ring_n, memory_order_acquire);
+    if (raw_n > SL_PROF_RING_MAX) raw_n = SL_PROF_RING_MAX;
+
+    sl_prof_bucket *buckets = (sl_prof_bucket *)calloc(
+        raw_n ? raw_n : 1, sizeof(*buckets));
+    size_t nb = 0;
+    if (buckets) {
+        for (size_t i = 0; i < raw_n; i++) {
+            const char *name = NULL, *loc = NULL;
+            sl_prof_lookup_pc(sl_prof_ring[i].pc, &name, &loc);
+            const char *sa = sl_prof_ring[i].spawn_at
+                                 ? sl_prof_ring[i].spawn_at
+                                 : "main";
+            size_t found = nb;
+            for (size_t j = 0; j < nb; j++) {
+                if (buckets[j].name == name && buckets[j].loc == loc &&
+                    buckets[j].spawn_at == sa) {
+                    found = j;
+                    break;
+                }
+            }
+            if (found == nb) {
+                buckets[nb].name = name;
+                buckets[nb].loc = loc;
+                buckets[nb].spawn_at = sa;
+                buckets[nb].count = 1;
+                nb++;
+            } else {
+                buckets[found].count++;
+            }
+        }
+        if (nb > 1)
+            qsort(buckets, nb, sizeof(*buckets), sl_prof_bucket_cmp);
+    }
+    pthread_mutex_unlock(&sl_prof_cpu_mu);
+
+    sl_pbuf b = {0};
+    sl_pbuf_printf(&b, "# cpu profile: %lldms, %zu samples (100 Hz)\n",
+                   duration_ms, raw_n);
+    for (size_t i = 0; i < nb; i++) {
+        double pct = raw_n ? (100.0 * (double)buckets[i].count / (double)raw_n)
+                           : 0.0;
+        sl_pbuf_printf(&b, "%.1f%%  %zu  %s (%s) [task %s]\n", pct,
+                       buckets[i].count, buckets[i].name, buckets[i].loc,
+                       buckets[i].spawn_at);
+    }
+    free(buckets);
+    *out_buf = b.data;
+    *out_len = b.len;
+#endif
+}
+
 static void *sl_preempt_ticker_thread(void *arg) {
     (void)arg;
     for (;;) {
@@ -1473,6 +1801,12 @@ static void *sl_preempt_ticker_thread(void *arg) {
         interval.tv_sec = (time_t)(tick / 1000000000LL);
         interval.tv_nsec = (long)(tick % 1000000000LL);
         nanosleep(&interval, NULL);
+        if (atomic_exchange_explicit(&sl_sigquit_pending, 0,
+                                     memory_order_acq_rel)) {
+            sl_rt_dump_tasks_to_fd(STDERR_FILENO);
+            if (getenv("SLANG_SIGQUIT_EXIT"))
+                _exit(0);
+        }
         if (sl_rt_tick_hook)
             sl_rt_tick_hook();
         if (atomic_load_explicit(&sl_global_runq_count, memory_order_relaxed) == 0)
@@ -1565,6 +1899,9 @@ static void sl_preempt_install_handlers(void) {
 }
 
 static void sl_preempt_ticker_start(void) {
+#ifdef SL_TSAN
+    return;
+#endif
     sl_preempt_install_handlers();
     pthread_t th;
     if (sl_rt_thread_spawn(&th, sl_preempt_ticker_thread, NULL) != 0) {
@@ -1813,7 +2150,9 @@ static void sl_pool_start(void) {
     sl_cpu_detect();
 
     signal(SIGPIPE, SIG_IGN);
+    sl_preempt_text_range_init();
     sl_rt_install_fatal_handlers();
+    sl_sigquit_install();
     /* the main thread runs tasks too (sl_worker_run_loop(-1)) */
     sl_rt_install_altstack();
 
@@ -1851,6 +2190,8 @@ static void sl_pool_start(void) {
     /* The ticker locks every slot's mutex, used or not; main's too. */
     for (int i = 0; i <= SL_POOL_MAIN_SLOT; i++)
         pthread_mutex_init(&sl_pool_slots[i].mu, NULL);
+    atomic_store_explicit(&sl_pool_slots[SL_POOL_MAIN_SLOT].tid,
+                          pthread_self(), memory_order_release);
     /* main registered with the GC before its runnext index existed */
     sl_rt_gc_reg.pool_slot = SL_POOL_MAIN_SLOT;
 

@@ -3899,6 +3899,23 @@ tasks running, the caller included if it is one) and `workers` (OS
 threads running tasks). The counters are kept whether or not anything
 reads them, at a few atomic adds per collection; reading them is a few
 loads and one system call.
+
+For live task inspection and built-in profiling (`pprof`-style text
+endpoints and `SIGQUIT` task dumps):
+
+- `runtime.task_dump()` snapshots all running, runnable, and parked tasks
+  with task IDs, wait reasons (`chan recv`, `chan send`, `mutex`,
+  `select`, `join`, `sleep`, `net io`, `wait_idle`), and spawn `file.sl:line`.
+- `runtime.cpu_profile(duration_ms)` samples active workers at 100 Hz and
+  aggregates hotspots resolved to Slang function names and source lines.
+- `runtime.heap_profile()` formats GC/RSS totals and allocation hotspots
+  (sampled every 512 KB by default; tune or disable via
+  `SLANG_ALLOC_PROFILE_RATE`).
+- `runtime.pprof_text(path)` dispatches `/debug/pprof/`, `/debug/pprof/tasks`,
+  `/debug/pprof/heap`, `/debug/pprof/cpu?ms=500`, and `/debug/pprof/stats`
+  directly for HTTP debug routes.
+- Sending `SIGQUIT` (`kill -QUIT <pid>`) writes the live task dump to
+  stderr without terminating the process.
 #### `oidc`
 
 OAuth 2.0 and OpenID Connect for a client: sign users in with Google,
@@ -6500,6 +6517,9 @@ ok: 2 passed (190us)
   tests cannot be run (a `test_` function with parameters, say). A package
   with no test files exits 0 and says so.
 - `--keep` keeps the generated runner and prints where it is.
+- `--race` (or `SLANG_RACE=1`) builds with ThreadSanitizer
+  (`-fsanitize=thread`) to detect data races across concurrent `spawn`
+  tasks, in both `slangc test --race` and `slangc --race` / `slangc --run --race`.
 
 ## C interop
 
@@ -6889,9 +6909,11 @@ What this means in practice:
   cost follows the nursery, not the heap: about 0.8ms per minor whether a
   program keeps 20k or a million long-lived objects. Majors sweep
   everything and promote what they keep.
-- Both kinds sweep in parallel: the threads stopped for a collection take
-  a share of the heap's pages each, instead of waiting while one thread
-  sweeps them all. `SLANG_GC_STAT` counts the joins (`sweep_helps`).
+- Both kinds mark and sweep in parallel: the threads stopped for a
+  collection share root scanning, steal queued subgraphs via the
+  mark donation pool when a single root dominates a large heap
+  (`mark_steals` in `SLANG_GC_STAT=1`), and take a share of the heap's
+  pages to sweep (`sweep_helps`, `mark_helps`, `major_mark_helps`).
 - A list or map whose elements hold no pointer -- numbers, `bool`, enums,
   and value structs made only of those -- is never traced at all: a
   table of a million ints costs a collection nothing to keep.
@@ -6900,12 +6922,17 @@ What this means in practice:
   or map costs each minor only what was added since the previous one.
   Updating an existing map key is the exception: its position is not
   recorded, so the next minor traces that whole map.
+- `SLANG_GC_PERCENT=n` tunes major-collection headroom like Go's `GOGC`
+  (default `100`; `off` or `<= 0` disables ratio-triggered majors).
+  `SLANG_GC_MEMLIMIT_MB=n` sets a soft live-heap cap that tightens the
+  major threshold as retained memory approaches `n` MB (clamped safely
+  above a 1 MB / `live/16` floor to prevent thrashing).
 - `SLANG_GC_STAT=1` prints collection counts and pause times at exit
-  (`minor_pause_ns_total` for the minors).
-  `SLANG_GC_THRESHOLD_KB=n` collects every n KB instead, with no pacing:
-  for tests, since a rooting bug only shows when a collection lands at
-  the one safepoint where an object is unrooted. `SLANG_GC_NURSERY_KB=n`
-  does the same for minors.
+  (`minor_pause_ns_total` for the minors, `mark_steals` for work-sharing
+  transfers). `SLANG_GC_THRESHOLD_KB=n` collects every n KB instead,
+  with no pacing: for tests, since a rooting bug only shows when a
+  collection lands at the one safepoint where an object is unrooted.
+  `SLANG_GC_NURSERY_KB=n` does the same for minors.
 - `SLANG_GC_VERIFY_MINOR=1` checks every minor against a full mark and
   reports any live young object it missed, with the kind of old
   container holding it -- a store with no write barrier. It prints

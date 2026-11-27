@@ -122,6 +122,44 @@ static _Atomic int sl_gc_collect_minor_pending = 0;
  * pattern as SLANG_GC_THRESHOLD_KB: a fixed threshold for tests so a
  * low value forces a minor collection on nearly every allocation. */
 static int sl_gc_threshold_fixed = 0;
+/* SLANG_GC_PERCENT (default 100, "off"/<=0 disables ratio pacing) and
+ * SLANG_GC_MEMLIMIT_MB (default 0 disables the soft heap limit). Parsed
+ * once under sl_gc_mu at first thread registration. */
+static long sl_gc_percent = 100;
+static size_t sl_gc_memlimit_bytes = 0;
+static int sl_gc_pacing_init_done = 0;
+
+/* Compute next major GC promotion threshold from surviving live_bytes,
+ * SLANG_GC_PERCENT, and optional soft memory limit. */
+static size_t sl_gc_compute_threshold(size_t live_bytes, long gc_percent,
+                                      size_t memlimit_bytes) {
+    size_t floor = (size_t)8 * 1024 * 1024;
+    size_t target;
+    if (gc_percent < 0) {
+        target = SIZE_MAX / 2;
+    } else {
+        size_t pct = (size_t)gc_percent;
+        size_t max_safe = (SIZE_MAX / 2) / (pct ? pct : 1);
+        if (live_bytes / 100 > max_safe) {
+            target = SIZE_MAX / 2;
+        } else {
+            size_t scaled = (live_bytes / 100) * pct +
+                            ((live_bytes % 100) * pct) / 100;
+            target = scaled > floor ? scaled : floor;
+        }
+    }
+    if (memlimit_bytes > 0) {
+        size_t min_headroom = (size_t)1024 * 1024;
+        size_t headroom = (live_bytes >= memlimit_bytes)
+                              ? (live_bytes / 16)
+                              : (memlimit_bytes - live_bytes);
+        if (headroom < min_headroom)
+            headroom = min_headroom;
+        if (target > headroom)
+            target = headroom;
+    }
+    return target;
+}
 static _Atomic unsigned long long sl_gc_stat_survived = 0;
 static _Atomic unsigned long long sl_gc_stat_allocated_cycle = 0;
 
@@ -141,10 +179,8 @@ static _Atomic unsigned long long sl_gc_stat_promoted = 0;
 static _Atomic unsigned long long sl_gc_stat_pause_buckets[SL_GC_STAT_BUCKETS];
 
 static int sl_gc_stat_enabled(void) {
-    static int cached = -1;
-    if (cached < 0)
-        cached = getenv("SLANG_GC_STAT") ? 1 : 0;
-    return cached;
+    static _Atomic int cached = -1;
+    return sl_rt_env_flag(&cached, "SLANG_GC_STAT");
 }
 
 static void sl_gc_stat_pause(long long ns, size_t marked, size_t swept) {
@@ -249,6 +285,8 @@ static _Atomic unsigned long long sl_gc_stat_sweep_helps = 0;
 static _Atomic unsigned long long sl_gc_stat_mark_helps = 0;
 /* Of those, threads that joined a major's mark. */
 static _Atomic unsigned long long sl_gc_stat_major_mark_helps = 0;
+/* Chunks stolen from the parallel-mark work-sharing donation pool. */
+static _Atomic unsigned long long sl_gc_stat_mark_steals = 0;
 
 static void sl_gc_stat_dump(void) {
     if (!sl_gc_stat_enabled())
@@ -310,6 +348,9 @@ static void sl_gc_stat_dump(void) {
             atomic_load_explicit(&sl_gc_stat_sweep_helps,
                                  memory_order_relaxed),
             atomic_load_explicit(&sl_gc_stat_mark_helps,
+                                 memory_order_relaxed));
+    fprintf(stderr, "slang-gc-stat mark_steals=%llu\n",
+            atomic_load_explicit(&sl_gc_stat_mark_steals,
                                  memory_order_relaxed));
 }
 
@@ -526,7 +567,7 @@ static void sl_gc_register_thread(void) {
      * is exactly what makes it safe for a future worker pool to
      * reassign sl_rt_current_task freely. */
     memset(&sl_rt_task_storage, 0, sizeof(sl_rt_task_storage));
-    sl_rt_current_task = &sl_rt_task_storage;
+    SL_RT_TLS_SET_CUR(&sl_rt_task_storage);
     sl_rt_gc_reg.task_slot = &sl_rt_current_task;
     sl_rt_gc_reg.blocked_ptr = &sl_rt_gc_blocked;
     sl_rt_gc_reg.acked_cycle_ptr = &sl_rt_gc_acked_cycle;
@@ -556,6 +597,32 @@ static void sl_gc_register_thread(void) {
                                   (size_t)nv * 1024, memory_order_relaxed);
             sl_gc_nursery_fixed = 1;
         }
+    }
+    if (!sl_gc_pacing_init_done) {
+        sl_gc_pacing_init_done = 1;
+        const char *pct_s = getenv("SLANG_GC_PERCENT");
+        if (pct_s && *pct_s) {
+            if (strcmp(pct_s, "off") == 0 || strcmp(pct_s, "OFF") == 0) {
+                sl_gc_percent = -1;
+            } else {
+                char *end = NULL;
+                long p = strtol(pct_s, &end, 10);
+                if (end != pct_s)
+                    sl_gc_percent = p <= 0 ? -1 : p;
+            }
+        }
+        const char *ml_s = getenv("SLANG_GC_MEMLIMIT_MB");
+        if (ml_s && *ml_s) {
+            long ml = strtol(ml_s, NULL, 10);
+            if (ml > 0) {
+                size_t max_mb = (SIZE_MAX / 2) / (1024 * 1024);
+                size_t m = (size_t)ml > max_mb ? max_mb : (size_t)ml;
+                sl_gc_memlimit_bytes = m * 1024 * 1024;
+            }
+        }
+        if (!sl_gc_threshold_fixed)
+            sl_gc_threshold = sl_gc_compute_threshold(0, sl_gc_percent,
+                                                      sl_gc_memlimit_bytes);
     }
     pthread_mutex_unlock(&sl_gc_mu);
 }
@@ -1090,10 +1157,8 @@ static _Atomic unsigned long long sl_gc_class_stat_hits = 0;
 static _Atomic unsigned long long sl_gc_class_stat_over = 0;
 
 static int sl_gc_class_stat_enabled(void) {
-    static int cached = -1;
-    if (cached < 0)
-        cached = getenv("SLANG_GC_CLASS_STAT") ? 1 : 0;
-    return cached;
+    static _Atomic int cached = -1;
+    return sl_rt_env_flag(&cached, "SLANG_GC_CLASS_STAT");
 }
 
 static void sl_gc_class_stat_dump(void) {
@@ -2386,6 +2451,135 @@ static void sl_gc_for_each_obj(void (*fn)(sl_gc_obj *h, void *ctx),
  * minor frees while the owner still uses it. Making collections likely
  * at that point (an allocation-entry yield tried for fix-gc.md 1.1) made
  * the verifier catch exactly that: young leaves held by old maps. */
+#define SL_PROF_ALLOC_SLOTS 512
+
+typedef struct {
+    uintptr_t pc;
+    const char *name;
+    const char *loc;
+    const char *spawn_at;
+    unsigned long long bytes;
+    unsigned long long allocs;
+} sl_prof_alloc_entry;
+
+static sl_prof_alloc_entry sl_prof_alloc_tab[SL_PROF_ALLOC_SLOTS];
+static pthread_mutex_t sl_prof_alloc_mu = PTHREAD_MUTEX_INITIALIZER;
+static _Atomic long long sl_prof_alloc_rate_val = -1;
+static _Thread_local long long sl_prof_alloc_rem = -1;
+
+static long long sl_prof_alloc_rate_get(void) {
+    long long r = atomic_load_explicit(&sl_prof_alloc_rate_val,
+                                       memory_order_relaxed);
+    if (r < 0) {
+        const char *e = getenv("SLANG_ALLOC_PROFILE_RATE");
+        if (e && e[0]) {
+            r = atoll(e);
+            if (r < 0) r = 0;
+        } else {
+            r = 512LL * 1024LL;
+        }
+        atomic_store_explicit(&sl_prof_alloc_rate_val, r,
+                              memory_order_relaxed);
+    }
+    return r;
+}
+
+__attribute__((noinline))
+static void sl_prof_alloc_record(size_t sample_bytes, uintptr_t pc) {
+    const char *name = NULL, *loc = NULL;
+    sl_prof_lookup_pc(pc, &name, &loc);
+    sl_task *cur = SL_RT_TLS_CUR();
+    const char *sa = (cur && cur->spawn_at) ? cur->spawn_at : "main";
+    uintptr_t key = (uintptr_t)name ^ (uintptr_t)loc ^ (uintptr_t)sa;
+    pthread_mutex_lock(&sl_prof_alloc_mu);
+    unsigned h = (unsigned)((key ^ (key >> 16)) % SL_PROF_ALLOC_SLOTS);
+    for (int i = 0; i < SL_PROF_ALLOC_SLOTS; i++) {
+        sl_prof_alloc_entry *e =
+            &sl_prof_alloc_tab[(h + (unsigned)i) % SL_PROF_ALLOC_SLOTS];
+        if (!e->allocs) {
+            e->pc = pc;
+            e->name = name;
+            e->loc = loc;
+            e->spawn_at = sa;
+            e->bytes = sample_bytes;
+            e->allocs = 1;
+            pthread_mutex_unlock(&sl_prof_alloc_mu);
+            return;
+        }
+        if (e->name == name && e->loc == loc && e->spawn_at == sa) {
+            e->bytes += sample_bytes;
+            e->allocs += 1;
+            pthread_mutex_unlock(&sl_prof_alloc_mu);
+            return;
+        }
+    }
+    pthread_mutex_unlock(&sl_prof_alloc_mu);
+}
+
+static int sl_prof_alloc_cmp(const void *a, const void *b) {
+    unsigned long long x = ((const sl_prof_alloc_entry *)a)->bytes;
+    unsigned long long y = ((const sl_prof_alloc_entry *)b)->bytes;
+    return (x < y) - (x > y);
+}
+
+static void sl_prof_heap_format(long nworkers, long long rss_bytes,
+                                long long rss_peak_bytes, char **out_buf,
+                                size_t *out_len) {
+    sl_prof_alloc_entry *snap =
+        (sl_prof_alloc_entry *)malloc(SL_PROF_ALLOC_SLOTS * sizeof(*snap));
+    size_t n = 0;
+    unsigned long long total_bytes = 0;
+    if (snap) {
+        pthread_mutex_lock(&sl_prof_alloc_mu);
+        for (int i = 0; i < SL_PROF_ALLOC_SLOTS; i++) {
+            if (sl_prof_alloc_tab[i].allocs > 0) {
+                snap[n++] = sl_prof_alloc_tab[i];
+                total_bytes += sl_prof_alloc_tab[i].bytes;
+            }
+        }
+        pthread_mutex_unlock(&sl_prof_alloc_mu);
+        if (n > 1)
+            qsort(snap, n, sizeof(snap[0]), sl_prof_alloc_cmp);
+    }
+
+    unsigned long long majors = atomic_load_explicit(&sl_gc_rt_majors,
+                                                     memory_order_relaxed);
+    unsigned long long minors = atomic_load_explicit(&sl_gc_minors_done,
+                                                     memory_order_relaxed);
+    unsigned long long ptot = atomic_load_explicit(&sl_gc_rt_pause_ns_total,
+                                                   memory_order_relaxed);
+    unsigned long long pmax = atomic_load_explicit(&sl_gc_rt_pause_ns_max,
+                                                   memory_order_relaxed);
+    unsigned long long live = atomic_load_explicit(&sl_gc_rt_live_bytes,
+                                                   memory_order_relaxed);
+    size_t newb = atomic_load_explicit(&sl_gc_bytes_since_collect,
+                                       memory_order_relaxed);
+    long long tasks = atomic_load_explicit(&sl_rt_active_spawns,
+                                           memory_order_relaxed);
+
+    sl_pbuf b = {0};
+    sl_pbuf_printf(
+        &b,
+        "# heap profile: live=%llu new=%zu majors=%llu minors=%llu "
+        "pause_total_ns=%llu pause_max_ns=%llu rss=%lld rss_peak=%lld "
+        "tasks=%lld workers=%ld\n",
+        live, newb, majors, minors, ptot, pmax, rss_bytes, rss_peak_bytes,
+        tasks, nworkers);
+    for (size_t i = 0; i < n; i++) {
+        double pct = total_bytes
+                         ? (100.0 * (double)snap[i].bytes / (double)total_bytes)
+                         : 0.0;
+        sl_pbuf_printf(&b, "%llu bytes (%.1f%%)  %llu samples  %s (%s) [task %s]\n",
+                       snap[i].bytes, pct, snap[i].allocs, snap[i].name,
+                       snap[i].loc, snap[i].spawn_at);
+    }
+    free(snap);
+    if (!b.data)
+        sl_pbuf_printf(&b, "# heap profile: empty\n");
+    *out_buf = b.data;
+    *out_len = b.len;
+}
+
 /* zero: clear the payload. Every caller but sl_gc_alloc_leaf_uninit's. */
 __attribute__((always_inline))
 static inline void *sl_gc_alloc_impl(size_t n,
@@ -2439,6 +2633,24 @@ static inline void *sl_gc_alloc_impl(size_t n,
         sl_gc_nursery_fixed) {
         sl_gc_publish_delta(st->unpub);
         st->unpub = 0;
+    }
+    {
+        long long rate = sl_prof_alloc_rate_get();
+        if (rate > 0) {
+            if (sl_prof_alloc_rem < 0) {
+                sl_prof_alloc_record(total,
+                                     (uintptr_t)__builtin_return_address(0));
+                sl_prof_alloc_rem = rate;
+            } else {
+                sl_prof_alloc_rem -= (long long)total;
+                if (sl_prof_alloc_rem <= 0) {
+                    long long sampled = rate - sl_prof_alloc_rem;
+                    sl_prof_alloc_record((size_t)sampled,
+                                         (uintptr_t)__builtin_return_address(0));
+                    sl_prof_alloc_rem = rate;
+                }
+            }
+        }
     }
     sl_rt_preempt_enable();
     return (void *)(h + 1);
@@ -2671,10 +2883,52 @@ static void (*const sl_gc_mark_minor_fns[SL_GC_MARK_SLOTS])(void *) = {
     sl_gc_mark_minor_s3, sl_gc_mark_minor_s4, sl_gc_mark_minor_s5,
     sl_gc_mark_minor_s6, sl_gc_mark_minor_s7};
 
+/* Parallel-mark work-sharing donation pool (R4 Step 3): when one worker's
+ * work list grows past SL_GC_MPOOL_DONATE_MIN while parallel marking is
+ * active, half of it (capped at SL_GC_MPOOL_CHUNK_MAX) is donated to a
+ * pre-allocated flat buffer so idle mark helpers steal subgraphs without
+ * waiting on a single root thread. */
+#define SL_GC_MPOOL_DONATE_MIN 256
+#define SL_GC_MPOOL_CHUNK_MAX  512
+#define SL_GC_MPOOL_MAX_CHUNKS (SL_GC_MARK_SLOTS * 4)
+
+static pthread_mutex_t sl_gc_mpool_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  sl_gc_mpool_cv = PTHREAD_COND_INITIALIZER;
+static void **sl_gc_mpool_mem = NULL;
+static size_t sl_gc_mpool_cnt[SL_GC_MPOOL_MAX_CHUNKS];
+static _Atomic size_t sl_gc_mpool_n = 0;
+static int sl_gc_mpool_active = 0;
+static int sl_gc_mpool_done = 0;
+static int sl_gc_mark_parallel_active = 0;
+
+static void sl_gc_mpool_donate(sl_gc_marker *ms) {
+    if (!sl_gc_mark_parallel_active || ms->wl_n < SL_GC_MPOOL_DONATE_MIN)
+        return;
+    if (atomic_load_explicit(&sl_gc_mpool_n, memory_order_relaxed) >=
+        SL_GC_MPOOL_MAX_CHUNKS / 2)
+        return;
+    pthread_mutex_lock(&sl_gc_mpool_mu);
+    size_t pn = atomic_load_explicit(&sl_gc_mpool_n, memory_order_relaxed);
+    if (pn < SL_GC_MPOOL_MAX_CHUNKS && ms->wl_n >= SL_GC_MPOOL_DONATE_MIN) {
+        size_t take = ms->wl_n / 2;
+        if (take > SL_GC_MPOOL_CHUNK_MAX)
+            take = SL_GC_MPOOL_CHUNK_MAX;
+        memcpy(sl_gc_mpool_mem + pn * SL_GC_MPOOL_CHUNK_MAX,
+               ms->wl + (ms->wl_n - take), take * sizeof(void *));
+        sl_gc_mpool_cnt[pn] = take;
+        ms->wl_n -= take;
+        atomic_store_explicit(&sl_gc_mpool_n, pn + 1, memory_order_release);
+        pthread_cond_signal(&sl_gc_mpool_cv);
+    }
+    pthread_mutex_unlock(&sl_gc_mpool_mu);
+}
+
 /* Trace everything on slot ms's work list with `mark`, which must be one
  * of that slot's own functions. */
 static void sl_gc_drain(sl_gc_marker *ms, void (*mark)(void *)) {
     while (ms->wl_n > 0) {
+        if (sl_gc_mark_parallel_active && ms->wl_n >= SL_GC_MPOOL_DONATE_MIN)
+            sl_gc_mpool_donate(ms);
         void *p = ms->wl[--ms->wl_n];
         sl_gc_obj *h = (sl_gc_obj *)p - 1;
         if (h->trace) h->trace(p, mark);
@@ -2688,6 +2942,8 @@ static void sl_gc_mark_slots_release(void) {
         sl_gc_mslots[i].wl = NULL;
         sl_gc_mslots[i].wl_n = sl_gc_mslots[i].wl_cap = 0;
     }
+    free(sl_gc_mpool_mem);
+    sl_gc_mpool_mem = NULL;
 }
 
 /* Tier 11 eighth slice: the conservative half of the mark phase --
@@ -2778,10 +3034,8 @@ static void sl_gc_scan_conservative(uintptr_t lo, uintptr_t hi,
  * per-page counters match their listed headers. Slow (quadratic in
  * places), like SLANG_GC_VERIFY_MINOR, and off unless asked. */
 static int sl_gc_page_debug_enabled(void) {
-    static int cached = -1;
-    if (cached < 0)
-        cached = getenv("SLANG_GC_PAGE_DEBUG") ? 1 : 0;
-    return cached;
+    static _Atomic int cached = -1;
+    return sl_rt_env_flag(&cached, "SLANG_GC_PAGE_DEBUG");
 }
 
 static void sl_gc_page_check_free(sl_gc_page *pg) {
@@ -3410,17 +3664,60 @@ static int sl_gc_mark_job_full = 0;
  * parked tasks at ~1.3 us each, far past this. */
 #define SL_GC_MARK_PARALLEL_MIN 64
 
+/* Parallel major marks pay off whenever either many root tasks exist or a
+ * real heap sits behind even a single root (work-sharing pool splits its
+ * transitive graph across stopped workers). */
+static int sl_gc_major_worth_parallel(void) {
+    if (sl_gc_root_units_n >= SL_GC_MARK_PARALLEL_MIN)
+        return 1;
+    if (atomic_load_explicit(&sl_gc_rt_live_bytes, memory_order_relaxed) >=
+        (unsigned long long)256 * 1024)
+        return 1;
+    size_t total_pages = 0;
+    for (sl_gc_thread *gt = sl_gc_threads; gt; gt = gt->next) {
+        total_pages += (size_t)gt->state_ptr->npages;
+        if (total_pages >= 8)
+            return 1;
+    }
+    size_t nold = 0;
+    for (sl_gc_obj *o = sl_gc_old; o; o = o->next) {
+        if (++nold >= 256)
+            return 1;
+    }
+    return 0;
+}
+
 /* Run the open mark job's units: split between threads when there are
- * enough of them, else on the collector alone. */
-static void sl_gc_mark_units(void) {
-    if (sl_gc_root_units_n + sl_gc_mark_nrem < SL_GC_MARK_PARALLEL_MIN) {
+ * enough root units (or a major heap worth sharing), else serially. */
+static void sl_gc_mark_units(int nsnap) {
+    int run_parallel = (nsnap > 1) &&
+                       (sl_gc_mark_job_full
+                            ? sl_gc_major_worth_parallel()
+                            : (sl_gc_root_units_n + sl_gc_mark_nrem >=
+                               SL_GC_MARK_PARALLEL_MIN));
+    if (!run_parallel) {
+        sl_gc_mark_parallel_active = 0;
         atomic_store_explicit(&sl_gc_job_next, 0, memory_order_relaxed);
         sl_gc_mark_job_run(0);
         return;
     }
+    if (!sl_gc_mpool_mem) {
+        sl_gc_mpool_mem = (void **)malloc((size_t)SL_GC_MPOOL_MAX_CHUNKS *
+                                          SL_GC_MPOOL_CHUNK_MAX *
+                                          sizeof(void *));
+        if (!sl_gc_mpool_mem) {
+            fprintf(stderr, "slang: out of memory\n");
+            exit(1);
+        }
+    }
+    atomic_store_explicit(&sl_gc_mpool_n, 0, memory_order_relaxed);
+    sl_gc_mpool_active = 1;
+    sl_gc_mpool_done = 0;
+    sl_gc_mark_parallel_active = 1;
     sl_gc_job_open_as(SL_GC_JOB_MARK, SL_GC_MARK_SLOTS);
     sl_gc_mark_job_run(0);
     int joined = sl_gc_job_close();
+    sl_gc_mark_parallel_active = 0;
     if (sl_gc_mark_job_full && joined > 1 && sl_gc_stat_enabled())
         atomic_fetch_add_explicit(&sl_gc_stat_major_mark_helps,
                                   (unsigned long long)(joined - 1),
@@ -3431,13 +3728,24 @@ static void sl_gc_mark_job_run(int slot) {
     sl_gc_marker *ms = &sl_gc_mslots[slot];
     sl_gc_markfn_t mark = sl_gc_mark_job_full ? sl_gc_mark_fns[slot]
                                               : sl_gc_mark_minor_fns[slot];
+    int parallel = sl_gc_mark_parallel_active;
+    if (parallel) {
+        pthread_mutex_lock(&sl_gc_mpool_mu);
+        if (sl_gc_mpool_done) {
+            pthread_mutex_unlock(&sl_gc_mpool_mu);
+            return;
+        }
+        if (slot != 0)
+            sl_gc_mpool_active++;
+        pthread_mutex_unlock(&sl_gc_mpool_mu);
+    }
     size_t ntask = sl_gc_root_units_n;
     size_t total = ntask + sl_gc_mark_nrem;
     for (;;) {
         size_t i = atomic_fetch_add_explicit(&sl_gc_job_next, SL_GC_MARK_CHUNK,
                                              memory_order_relaxed);
         if (i >= total)
-            return;
+            break;
         size_t e = i + SL_GC_MARK_CHUNK < total ? i + SL_GC_MARK_CHUNK : total;
         for (; i < e; i++) {
             if (i < ntask)
@@ -3448,6 +3756,55 @@ static void sl_gc_mark_job_run(int slot) {
                                      mark);
         }
         sl_gc_drain(ms, mark);
+    }
+    if (!parallel)
+        return;
+    if (ms->wl_cap < SL_GC_MPOOL_CHUNK_MAX) {
+        void **nwl = (void **)realloc(ms->wl,
+                                      SL_GC_MPOOL_CHUNK_MAX * sizeof(void *));
+        if (!nwl) {
+            fprintf(stderr, "slang: out of memory\n");
+            exit(1);
+        }
+        ms->wl = nwl;
+        ms->wl_cap = SL_GC_MPOOL_CHUNK_MAX;
+    }
+    pthread_mutex_lock(&sl_gc_mpool_mu);
+    for (;;) {
+        size_t pn = atomic_load_explicit(&sl_gc_mpool_n, memory_order_relaxed);
+        if (pn > 0) {
+            size_t idx = pn - 1;
+            size_t take = sl_gc_mpool_cnt[idx];
+            memcpy(ms->wl, sl_gc_mpool_mem + idx * SL_GC_MPOOL_CHUNK_MAX,
+                   take * sizeof(void *));
+            ms->wl_n = take;
+            atomic_store_explicit(&sl_gc_mpool_n, idx, memory_order_release);
+            if (sl_gc_stat_enabled())
+                atomic_fetch_add_explicit(&sl_gc_stat_mark_steals, 1,
+                                          memory_order_relaxed);
+            pthread_mutex_unlock(&sl_gc_mpool_mu);
+            sl_gc_drain(ms, mark);
+            pthread_mutex_lock(&sl_gc_mpool_mu);
+            continue;
+        }
+        if (sl_gc_mpool_done) {
+            pthread_mutex_unlock(&sl_gc_mpool_mu);
+            return;
+        }
+        if (--sl_gc_mpool_active == 0) {
+            sl_gc_mpool_done = 1;
+            pthread_cond_broadcast(&sl_gc_mpool_cv);
+            pthread_mutex_unlock(&sl_gc_mpool_mu);
+            return;
+        }
+        while (atomic_load_explicit(&sl_gc_mpool_n, memory_order_relaxed) == 0 &&
+               !sl_gc_mpool_done)
+            pthread_cond_wait(&sl_gc_mpool_cv, &sl_gc_mpool_mu);
+        if (sl_gc_mpool_done) {
+            pthread_mutex_unlock(&sl_gc_mpool_mu);
+            return;
+        }
+        sl_gc_mpool_active++;
     }
 }
 
@@ -3460,7 +3817,7 @@ static void sl_gc_minor_mark(sl_gc_thread **snap, int nsnap, size_t rem_n) {
         sl_gc_mslots[i].wl_n = 0;
     sl_gc_root_units_build(snap, nsnap, 1);
     sl_gc_mark_nrem = rem_n;
-    sl_gc_mark_units();
+    sl_gc_mark_units(nsnap);
     sl_gc_rem_harvest_n = 0;
     for (int i = 0; i < SL_GC_MARK_SLOTS; i++) {
         sl_gc_rem_orphan_append(sl_gc_mslots[i].keep, sl_gc_mslots[i].keep_n);
@@ -3469,18 +3826,15 @@ static void sl_gc_minor_mark(sl_gc_thread **snap, int nsnap, size_t rem_n) {
 }
 
 /* A major's mark: the same root units, with each participant's full
- * mark, split the same way (todo.md R4, parallel mark step 4). A major
- * traces the whole live heap, often from a few roots, so a thread that
- * reaches a large structure drains it alone: no slower than marking it
- * serially. Majors that a stopped thread joined count in
- * sl_gc_stat_major_mark_helps. */
+ * mark, split the same way (todo.md R4, parallel mark steps 3-4). Majors
+ * that a stopped thread joined count in sl_gc_stat_major_mark_helps. */
 static void sl_gc_major_mark(sl_gc_thread **snap, int nsnap) {
     for (int i = 0; i < SL_GC_MARK_SLOTS; i++)
         sl_gc_mslots[i].wl_n = 0;
     sl_gc_root_units_build(snap, nsnap, 0); /* a major never skips */
     sl_gc_mark_nrem = 0;
     sl_gc_mark_job_full = 1;
-    sl_gc_mark_units();
+    sl_gc_mark_units(nsnap);
     sl_gc_mark_job_full = 0;
 }
 
@@ -3500,10 +3854,8 @@ static void sl_gc_major_mark(sl_gc_thread **snap, int nsnap) {
  * and missed objects; the suite runs the GC-bearing tests under it and
  * requires missed=0. Diagnostic only: it roughly doubles minor cost. */
 static int sl_gc_verify_minor_enabled(void) {
-    static int cached = -1;
-    if (cached < 0)
-        cached = getenv("SLANG_GC_VERIFY_MINOR") ? 1 : 0;
-    return cached;
+    static _Atomic int cached = -1;
+    return sl_rt_env_flag(&cached, "SLANG_GC_VERIFY_MINOR");
 }
 
 /* All four under sl_gc_mu: only a collection touches them. */
@@ -3776,8 +4128,11 @@ static void sl_gc_collect_minor_real(void) {
         size_t prev = atomic_fetch_add_explicit(&sl_gc_bytes_since_collect,
                                                 promoted_bytes,
                                                 memory_order_relaxed);
-        if (prev + promoted_bytes >= sl_gc_threshold ||
-            ++sl_gc_minors_since_major >= SL_GC_MAJOR_EVERY)
+        int over_ratio = promoted_bytes >= sl_gc_threshold ||
+                         prev >= sl_gc_threshold - promoted_bytes;
+        if (over_ratio ||
+            (sl_gc_percent >= 0 &&
+             ++sl_gc_minors_since_major >= SL_GC_MAJOR_EVERY))
             atomic_store_explicit(&sl_gc_collect_pending, 1,
                                    memory_order_release);
     }
@@ -3927,10 +4282,9 @@ static void sl_gc_collect(void) {
      * followed a heap that GROWS: 8MB forever re-marked an ever-larger
      * live set, which pacing by live bytes avoids. */
     sl_gc_minors_since_major = 0;
-    if (!sl_gc_threshold_fixed) {
-        size_t floor = 8 * 1024 * 1024;
-        sl_gc_threshold = live_bytes > floor ? live_bytes : floor;
-    }
+    if (!sl_gc_threshold_fixed)
+        sl_gc_threshold = sl_gc_compute_threshold(live_bytes, sl_gc_percent,
+                                                  sl_gc_memlimit_bytes);
     if (stat_on) {
         sl_gc_ph_mark(&pc, SL_GC_PH_TAIL);
         sl_gc_stat_phases(&pc, 1);
