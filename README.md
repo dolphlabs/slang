@@ -72,6 +72,41 @@ make docs            # rebuild the documentation site
 Tests live in `*_test.sl` files and run with `slangc test` — covered in
 the Testing section.
 
+## The golden path: backend services
+
+For backend services, **slang** (`slangc`) pairs with
+[**zokor**](https://github.com/dolphlabs/zokor) (framework),
+[**zokor_cli**](https://github.com/dolphlabs/zokor_cli) (`zokor` CLI), and
+[**slanganalyser**](https://github.com/dolphlabs/slang-analyser) (LSP) as
+one cohesive stack — NestJS/Rails developer velocity plus architecture
+enforcement, compiled to a single native binary:
+
+```sh
+# 1. Install compiler, zokor CLI, and editor LSP
+# slangc:   https://github.com/dolphlabs/slang/releases
+# zokor:    curl -fsSL https://raw.githubusercontent.com/dolphlabs/zokor_cli/main/install.sh | sh
+# lsp:      VS Code/Cursor `dolphlabs.slang-analyser`, or `cargo install --path crates/slanganalyser`
+
+# 2. Scaffold a layered service and iterate with live reloads
+zokor newcomp billing --db pg
+cd billing
+slangc get
+zokor watch            # uses fast SLANG_DEV=1 rebuilds
+
+# 3. Grow features, enforce architecture rules, and test
+zokor add feature invoices --entity invoice
+zokor add route invoices POST /invoices create_invoice
+zokor check --json     # verifies layer boundaries, pure domain, config, and zokor.rules
+slangc test .
+
+# 4. Ship a standalone native binary
+slangc main.sl -o billing
+```
+
+`slanganalyser` discovers the workspace from `slang.project` and gives
+VS Code, Cursor, Windsurf, and Neovim live diagnostics, completion, hover,
+goto-definition, inlay hints, and formatting alongside `zokor check`.
+
 ### Starting a project
 
 ```sh
