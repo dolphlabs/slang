@@ -93,7 +93,7 @@ static SSL_CTX *sl_tls_client_ctx_raw(const char *ca_path, char *why, size_t n) 
     return ctx;
 }
 
-static sl_res_rawptr_str *sl_net_tls_server_ctx(const char *cert_path,
+SL_API sl_res_rawptr_str *sl_net_tls_server_ctx(const char *cert_path,
                                                 const char *key_path) {
     sl_rt_need_fat_stack();
     char why[256];
@@ -104,7 +104,7 @@ static sl_res_rawptr_str *sl_net_tls_server_ctx(const char *cert_path,
     return sl_net_ok_rawptr(ctx);
 }
 
-static sl_res_rawptr_str *sl_net_tls_client_ctx(const char *ca_path) {
+SL_API sl_res_rawptr_str *sl_net_tls_client_ctx(const char *ca_path) {
     sl_rt_need_fat_stack();
     char why[256];
     sl_rt_preempt_disable();
@@ -228,7 +228,7 @@ static char *sl_tls_check_client(SSL *ssl) {
     return NULL;
 }
 
-static sl_res_rawptr_str *sl_net_tls_accept(int lfd, void *ctxv) {
+SL_API sl_res_rawptr_str *sl_net_tls_accept(int lfd, void *ctxv) {
     sl_rt_need_fat_stack();
     int cfd;
     for (;;) {
@@ -307,12 +307,12 @@ static sl_res_rawptr_str *sl_net_tls_dial_u(const char *host, int port,
     return r;
 }
 
-static sl_res_rawptr_str *sl_net_tls_dial(const char *host, int port,
+SL_API sl_res_rawptr_str *sl_net_tls_dial(const char *host, int port,
                                           void *ctxv) {
     return sl_net_tls_dial_u(host, port, ctxv, 0);
 }
 
-static sl_res_rawptr_str *sl_net_tls_dial_until(const char *host, int port,
+SL_API sl_res_rawptr_str *sl_net_tls_dial_until(const char *host, int port,
                                                 void *ctxv, sl_until u) {
     return sl_net_tls_dial_u(host, port, ctxv, u);
 }
@@ -335,14 +335,14 @@ static sl_res_rawptr_str *sl_net_tls_upgrade_u(int fd, const char *host,
     return sl_tls_client_on_fd(fd, host, ctxv, u);
 }
 
-static sl_res_rawptr_str *sl_net_tls_upgrade(int fd, const char *host,
+SL_API sl_res_rawptr_str *sl_net_tls_upgrade(int fd, const char *host,
                                              void *ctxv) {
     return sl_net_tls_upgrade_u(fd, host, ctxv, 0);
 }
 
 /* tls_upgrade with a deadline on the handshake: "timeout" when it passes,
  * the fd still the caller's to close, as for any failure. */
-static sl_res_rawptr_str *sl_net_tls_upgrade_until(int fd, const char *host,
+SL_API sl_res_rawptr_str *sl_net_tls_upgrade_until(int fd, const char *host,
                                                    void *ctxv, sl_until u) {
     return sl_net_tls_upgrade_u(fd, host, ctxv, u);
 }
@@ -369,11 +369,11 @@ static sl_res_i32_str *sl_net_tls_send_u(void *sslv, sl_bytes *data,
     return sl_net_ok_i32((int32_t)data->len);
 }
 
-static sl_res_i32_str *sl_net_tls_send(void *sslv, sl_bytes *data) {
+SL_API sl_res_i32_str *sl_net_tls_send(void *sslv, sl_bytes *data) {
     return sl_net_tls_send_u(sslv, data, 0);
 }
 
-static sl_res_i32_str *sl_net_tls_send_until(void *sslv, sl_bytes *data,
+SL_API sl_res_i32_str *sl_net_tls_send_until(void *sslv, sl_bytes *data,
                                              sl_until u) {
     return sl_net_tls_send_u(sslv, data, u);
 }
@@ -420,12 +420,12 @@ static sl_res_int_str *sl_net_tls_send_file_u(void *sslv, int file,
     return sl_sendfile_ok(sent);
 }
 
-static sl_res_int_str *sl_net_tls_send_file(void *sslv, int file,
+SL_API sl_res_int_str *sl_net_tls_send_file(void *sslv, int file,
                                             long long off, long long count) {
     return sl_net_tls_send_file_u(sslv, file, off, count, 0);
 }
 
-static sl_res_int_str *sl_net_tls_send_file_until(void *sslv, int file,
+SL_API sl_res_int_str *sl_net_tls_send_file_until(void *sslv, int file,
                                                   long long off,
                                                   long long count, sl_until u) {
     return sl_net_tls_send_file_u(sslv, file, off, count, u);
@@ -464,11 +464,11 @@ static sl_res_bytes_str *sl_net_tls_recv_u(void *sslv, int max, sl_until u) {
     }
 }
 
-static sl_res_bytes_str *sl_net_tls_recv(void *sslv, int max) {
+SL_API sl_res_bytes_str *sl_net_tls_recv(void *sslv, int max) {
     return sl_net_tls_recv_u(sslv, max, 0);
 }
 
-static sl_res_bytes_str *sl_net_tls_recv_until(void *sslv, int max,
+SL_API sl_res_bytes_str *sl_net_tls_recv_until(void *sslv, int max,
                                                sl_until u) {
     return sl_net_tls_recv_u(sslv, max, u);
 }
@@ -490,7 +490,7 @@ static void sl_tls_copy_verify(SSL_CTX *dst, SSL_CTX *src) {
     SSL_CTX_set_session_cache_mode(dst, SSL_CTX_get_session_cache_mode(src));
 }
 
-static sl_res_bool_str *sl_net_tls_ctx_require_client(void *ctxv,
+SL_API sl_res_bool_str *sl_net_tls_ctx_require_client(void *ctxv,
                                                       const char *ca_path) {
     sl_rt_need_fat_stack();
     SSL_CTX *ctx = (SSL_CTX *)ctxv;
@@ -514,7 +514,7 @@ static sl_res_bool_str *sl_net_tls_ctx_require_client(void *ctxv,
     return sl_net_ok_bool(true);
 }
 
-static sl_res_bool_str *sl_net_tls_ctx_use_cert(void *ctxv, const char *cert,
+SL_API sl_res_bool_str *sl_net_tls_ctx_use_cert(void *ctxv, const char *cert,
                                                const char *key) {
     sl_rt_need_fat_stack();
     SSL_CTX *ctx = (SSL_CTX *)ctxv;
@@ -552,7 +552,7 @@ static int sl_tls_sni_cb(SSL *ssl, int *ad, void *arg) {
     return SSL_TLSEXT_ERR_OK;
 }
 
-static sl_res_bool_str *sl_net_tls_ctx_add_sni(void *ctxv, const char *host,
+SL_API sl_res_bool_str *sl_net_tls_ctx_add_sni(void *ctxv, const char *host,
                                               const char *cert,
                                               const char *key) {
     sl_rt_need_fat_stack();
@@ -583,7 +583,7 @@ static sl_res_bool_str *sl_net_tls_ctx_add_sni(void *ctxv, const char *host,
     return sl_net_ok_bool(true);
 }
 
-static bool sl_net_tls_idle_alive(void *sslv) {
+SL_API bool sl_net_tls_idle_alive(void *sslv) {
     SSL *ssl = (SSL *)sslv;
     if (!ssl) return false;
     int fd = SSL_get_fd(ssl);
@@ -595,7 +595,7 @@ static bool sl_net_tls_idle_alive(void *sslv) {
     return sl_net_idle_alive(fd);
 }
 
-static void sl_net_tls_close(void *sslv) {
+SL_API void sl_net_tls_close(void *sslv) {
     sl_rt_need_fat_stack();
     SSL *ssl = (SSL *)sslv;
     int fd = SSL_get_fd(ssl);
@@ -662,7 +662,7 @@ static int sl_alpn_select_cb(SSL *ssl, const unsigned char **out,
 
 /* Offer a protocol list on a CLIENT context, or advertise one on a
  * SERVER context. The list is owned by the context for its lifetime. */
-static sl_res_bool_str *sl_net_tls_ctx_alpn(void *ctxv, const char *protos) {
+SL_API sl_res_bool_str *sl_net_tls_ctx_alpn(void *ctxv, const char *protos) {
     SSL_CTX *ctx = (SSL_CTX *)ctxv;
     if (!ctx) return sl_net_err_bool("nil TLS context");
     if (!protos || !protos[0]) return sl_net_err_bool("empty protocol list");
@@ -689,7 +689,7 @@ static sl_res_bool_str *sl_net_tls_ctx_alpn(void *ctxv, const char *protos) {
 /* The protocol actually negotiated on a connection, or "" if the peer
  * offered none or nothing overlapped. Callers branch on this to decide
  * whether to speak h2 or fall back to HTTP/1.1. */
-static const char *sl_net_tls_alpn(void *sslv) {
+SL_API const char *sl_net_tls_alpn(void *sslv) {
     SSL *ssl = (SSL *)sslv;
     if (!ssl) return sl_strdup("");
     const unsigned char *p = NULL;
@@ -752,7 +752,7 @@ static sl_bytes *sl_tls_peer_bytes(unsigned char *buf, size_t len) {
     return b;
 }
 
-static sl_bytes *sl_net_tls_peer_certs(void *sslv) {
+SL_API sl_bytes *sl_net_tls_peer_certs(void *sslv) {
     if (!sslv)
         return sl_bytes_new(NULL, 0);
     sl_rt_need_fat_stack();
@@ -967,7 +967,7 @@ static void sl_link_tls_free(sl_link *l) {
     sl_rt_preempt_enable();
 }
 
-static sl_res_int_fault sl_link_tls_accept(sl_link *l, void *ctxv,
+SL_API sl_res_int_fault sl_link_tls_accept(sl_link *l, void *ctxv,
                                            sl_until u) {
     sl_rt_need_fat_stack();
     if (!l || !l->live)

@@ -3,13 +3,13 @@
 
 /* ---- time: monotonic + wall clock; duration is nanoseconds ---- */
 
-static long long sl_time_mono(void) {
+SL_API long long sl_time_mono(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
 }
 
-static long long sl_time_wall(void) {
+SL_API long long sl_time_wall(void) {
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
@@ -157,7 +157,7 @@ static void sl_hd_current(char out[32]) {
  * Returns off + 29 whether or not it fit, the probe/fill contract of
  * http's put_* helpers: a zero-length probe wire counts, a real one
  * writes. */
-static long long sl_time_put_http_date(sl_wire w, long long off) {
+SL_API long long sl_time_put_http_date(sl_wire w, long long off) {
     /* the probe pass sizes with a zero-length wire: no clock read */
     if (off >= 0 && off <= w.len && w.len - off >= SL_HD_LEN) {
         char d[32];
@@ -168,7 +168,7 @@ static long long sl_time_put_http_date(sl_wire w, long long off) {
 }
 
 /* time.http_date(): the same 29 bytes as a str. */
-static char *sl_time_http_date(void) {
+SL_API char *sl_time_http_date(void) {
     char d[32];
     sl_hd_current(d);
     char *out = (char *)sl_gc_alloc_leaf_uninit(SL_HD_LEN + 1, NULL);
@@ -266,7 +266,7 @@ static void *sl_time_thread(void *arg) {
  * this one) is created, so this thread inherits the blocked mask
  * automatically. See sl_pool_start's own comment (runtime_pool.c)
  * for the full reasoning. */
-static void sl_time_start(void) {
+SL_API void sl_time_start(void) {
     pthread_t th;
     if (sl_rt_thread_spawn(&th, sl_time_thread, NULL) != 0) {
         fprintf(stderr, "slang: failed to start timer thread\n");
@@ -274,7 +274,7 @@ static void sl_time_start(void) {
     }
 }
 
-static void sl_time_sleep(long long ns) {
+SL_API void sl_time_sleep(long long ns) {
     /* Tier 11 eighth slice: bracketed entry-to-return -- see
      * sl_chan_send/recv's own identical bracket and comment
      * (runtime_core.c) for the exact hazard this closes: sl_time_insert

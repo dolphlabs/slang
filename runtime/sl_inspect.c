@@ -18,11 +18,13 @@
  * safe, and an interruption mid-call with a later task migration
  * abandoned the lock and crashed a later unrelated snprintf. */
 
+/* SL_DEV_DECL_BEGIN */
 typedef struct { char *data; long long len, cap; } sl_inspect_sb;
 
 #define SL_INSPECT_MAX_DEPTH 8
+/* SL_DEV_DECL_END */
 
-static void sl_inspect_sb_init(sl_inspect_sb *sb) {
+SL_API void sl_inspect_sb_init(sl_inspect_sb *sb) {
     sb->data = NULL;
     sb->len = 0;
     sb->cap = 0;
@@ -44,20 +46,20 @@ static void sl_inspect_sb_append_n(sl_inspect_sb *sb, const char *s,
     sb->data[sb->len] = 0;
 }
 
-static void sl_inspect_sb_append(sl_inspect_sb *sb, const char *s) {
+SL_API void sl_inspect_sb_append(sl_inspect_sb *sb, const char *s) {
     sl_inspect_sb_append_n(sb, s, (long long)strlen(s));
 }
 
 /* Hands the built text to the caller as a GC str. An empty inspection
  * (only possible for a zero-length... in practice never, but cheap to
  * be total) still returns a valid empty string, never NULL. */
-static char *sl_inspect_sb_finish(sl_inspect_sb *sb) {
+SL_API char *sl_inspect_sb_finish(sl_inspect_sb *sb) {
     if (!sb->data)
         return sl_strdup("");
     return sb->data;
 }
 
-static void sl_inspect_i64(sl_inspect_sb *out, long long v) {
+SL_API void sl_inspect_i64(sl_inspect_sb *out, long long v) {
     sl_rt_preempt_disable();
     char buf[32];
     snprintf(buf, sizeof(buf), "%lld", v);
@@ -65,7 +67,7 @@ static void sl_inspect_i64(sl_inspect_sb *out, long long v) {
     sl_inspect_sb_append(out, buf);
 }
 
-static void sl_inspect_u64(sl_inspect_sb *out, unsigned long long v) {
+SL_API void sl_inspect_u64(sl_inspect_sb *out, unsigned long long v) {
     sl_rt_preempt_disable();
     char buf[32];
     snprintf(buf, sizeof(buf), "%llu", v);
@@ -73,7 +75,7 @@ static void sl_inspect_u64(sl_inspect_sb *out, unsigned long long v) {
     sl_inspect_sb_append(out, buf);
 }
 
-static void sl_inspect_f64(sl_inspect_sb *out, double v) {
+SL_API void sl_inspect_f64(sl_inspect_sb *out, double v) {
     sl_rt_preempt_disable();
     char buf[64];
     sl_fmt_f64(buf, sizeof(buf), v);
@@ -81,7 +83,7 @@ static void sl_inspect_f64(sl_inspect_sb *out, double v) {
     sl_inspect_sb_append(out, buf);
 }
 
-static void sl_inspect_f32(sl_inspect_sb *out, float v) {
+SL_API void sl_inspect_f32(sl_inspect_sb *out, float v) {
     sl_rt_preempt_disable();
     char buf[64];
     sl_fmt_f32(buf, sizeof(buf), v);
@@ -89,7 +91,7 @@ static void sl_inspect_f32(sl_inspect_sb *out, float v) {
     sl_inspect_sb_append(out, buf);
 }
 
-static void sl_inspect_bool(sl_inspect_sb *out, bool v) {
+SL_API void sl_inspect_bool(sl_inspect_sb *out, bool v) {
     sl_inspect_sb_append(out, v ? "true" : "false");
 }
 
@@ -97,7 +99,7 @@ static void sl_inspect_bool(sl_inspect_sb *out, bool v) {
  * string shows as "" (visible, not invisible) and a string holding
  * digits never reads as a number. A NULL pointer (never produced by
  * live code, but cheap to be total over) renders as "". */
-static void sl_inspect_str(sl_inspect_sb *out, const char *s) {
+SL_API void sl_inspect_str(sl_inspect_sb *out, const char *s) {
     sl_inspect_sb_append_n(out, "\"", 1);
     if (s) {
         for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
@@ -133,7 +135,7 @@ static const char sl_inspect_b64_alpha[] =
  * them unambiguous next to str (same choice as json's own byte
  * encoding, so the two never disagree about what a bytes value
  * looks like). */
-static void sl_inspect_bytes(sl_inspect_sb *out, sl_bytes *b) {
+SL_API void sl_inspect_bytes(sl_inspect_sb *out, sl_bytes *b) {
     sl_inspect_sb_append_n(out, "\"", 1);
     if (b && b->ptr && b->len > 0) {
         long long i = 0;
@@ -168,7 +170,7 @@ static void sl_inspect_bytes(sl_inspect_sb *out, sl_bytes *b) {
 /* A fault renders as fault("...") with its human-readable form quoted
  * inside, so it never reads as a plain string: the prefix names the
  * kind of thing it is, the quotes show exactly where its text ends. */
-static void sl_inspect_fault(sl_inspect_sb *out, sl_fault f) {
+SL_API void sl_inspect_fault(sl_inspect_sb *out, sl_fault f) {
     char *s = sl_str_from_fault(f);
     sl_inspect_sb_append(out, "fault(");
     sl_inspect_str(out, s);
@@ -177,7 +179,7 @@ static void sl_inspect_fault(sl_inspect_sb *out, sl_fault f) {
 
 /* A peer renders the way println already shows it (1.2.3.4:5678),
  * unquoted: it is an address, not text. */
-static void sl_inspect_peer(sl_inspect_sb *out, sl_peer p) {
+SL_API void sl_inspect_peer(sl_inspect_sb *out, sl_peer p) {
     sl_rt_preempt_disable();
     char buf[32];
     snprintf(buf, sizeof(buf), "%u.%u.%u.%u:%u",
@@ -189,7 +191,7 @@ static void sl_inspect_peer(sl_inspect_sb *out, sl_peer p) {
     sl_inspect_sb_append(out, buf);
 }
 
-static void sl_inspect_until(sl_inspect_sb *out, sl_until u) {
+SL_API void sl_inspect_until(sl_inspect_sb *out, sl_until u) {
     sl_inspect_i64(out, (long long)u);
 }
 
@@ -197,7 +199,7 @@ static void sl_inspect_until(sl_inspect_sb *out, sl_until u) {
  * it views, quoted like a str. A caller that needs ownership copies
  * into bytes first -- inspect never allocates ownership, it only
  * looks. */
-static void sl_inspect_wire(sl_inspect_sb *out, sl_wire w) {
+SL_API void sl_inspect_wire(sl_inspect_sb *out, sl_wire w) {
     sl_inspect_sb_append_n(out, "\"", 1);
     for (long long i = 0; i < w.len; i++) {
         unsigned char c = w.ptr[i];
@@ -227,7 +229,7 @@ static void sl_inspect_wire(sl_inspect_sb *out, sl_wire w) {
  * map-value helper (sl_json_map_val_at): slot i's value lives at
  * order[i]. A separate copy because that helper only exists when
  * json is also in use, and inspect must stand alone. */
-static void *sl_inspect_map_val_at(sl_map *m, long long i) {
+SL_API void *sl_inspect_map_val_at(sl_map *m, long long i) {
     long long slot = m->order[i];
     return m->vals + (size_t)slot * m->vsz;
 }

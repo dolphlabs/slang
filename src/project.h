@@ -1,6 +1,8 @@
 #ifndef SLANG_PROJECT_H
 #define SLANG_PROJECT_H
 
+#include <stddef.h>
+
 typedef struct {
     char *name;
     char *git;
@@ -41,6 +43,7 @@ const char *project_excluded_import(const char *from_dir, const char *ipath,
                                     const char **pkg_name, int *fetched);
 void project_get(SlProject *p);
 char *project_cache_subdir(const char *sub);
+char *project_sha256_hex(const void *data, size_t len);
 int project_is_dir(const char *path);
 
 #endif

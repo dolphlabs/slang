@@ -1,5 +1,6 @@
 /* Typed pg.Rows views. Emitted only for pg.rows_as, after JSON and encoding.
  * No calls back into slang: partially decoded values live in native locals. */
+/* SL_DEV_DECL_BEGIN */
 typedef struct {
     sl_arr *columns, *types, *chunks, *locs, *lens;
     long long count;
@@ -16,8 +17,9 @@ typedef struct {
     bool boolean, binary;
     char *owned;
 } sl_pgr_cell;
+/* SL_DEV_DECL_END */
 
-static bool sl_pgr_valid(sl_pgr_view *v, char **err) {
+SL_API bool sl_pgr_valid(sl_pgr_view *v, char **err) {
     if (!v->columns || !v->types || !v->chunks || !v->locs || !v->lens ||
         v->count < 0 || v->columns->len < 0 || v->chunks->len < 0 || v->locs->len < 0 || v->lens->len < 0 ||
         v->types->len != v->columns->len ||
@@ -31,7 +33,7 @@ static bool sl_pgr_valid(sl_pgr_view *v, char **err) {
     return true;
 }
 
-static bool sl_pgr_read(sl_pgr_view *v, long long row, long long col,
+SL_API bool sl_pgr_read(sl_pgr_view *v, long long row, long long col,
                         sl_pgr_cell *out, char **err) {
     *out = (sl_pgr_cell){0};
     if (col < 0 || col >= v->columns->len || row < 0 || row >= v->count) {
@@ -89,7 +91,7 @@ static bool sl_pgr_read(sl_pgr_view *v, long long row, long long col,
     return true;
 }
 
-static char *sl_pgr_text(sl_pgr_cell *cell) {
+SL_API char *sl_pgr_text(sl_pgr_cell *cell) {
     if (!cell->owned) {
         char *s = (char *)sl_gc_alloc_leaf_uninit((size_t)cell->len + 1, NULL);
         memcpy(s, cell->data, (size_t)cell->len); s[cell->len] = 0;
@@ -98,7 +100,7 @@ static char *sl_pgr_text(sl_pgr_cell *cell) {
     return cell->owned;
 }
 
-static bool sl_pgr_bytes(sl_pgr_cell *cell, sl_bytes **out, char **err) {
+SL_API bool sl_pgr_bytes(sl_pgr_cell *cell, sl_bytes **out, char **err) {
     if (cell->binary) { *out = sl_bytes_new((const unsigned char *)cell->data, cell->len); return true; }
     if (cell->len < 2 || cell->data[0] != '\\' || cell->data[1] != 'x' || (cell->len - 2) % 2) {
         *err = sl_strdup("bytea must use the hex format; set bytea_output = 'hex'"); return false;
@@ -116,7 +118,7 @@ static bool sl_pgr_bytes(sl_pgr_cell *cell, sl_bytes **out, char **err) {
 
 /* Match pg.timestamp_rfc3339, including its fallback for infinity/BC and
  * seconds-level offsets. Calendar validity belongs to the Time decoder. */
-static char *sl_pgr_timestamp(sl_pgr_cell *cell) {
+SL_API char *sl_pgr_timestamp(sl_pgr_cell *cell) {
     long long n = cell->len;
     const char *s = cell->data;
     if (n < 19 || (s[10] != ' ' && s[10] != 'T') || (n >= 3 && !memcmp(s + n - 3, " BC", 3)))
@@ -138,7 +140,7 @@ static char *sl_pgr_timestamp(sl_pgr_cell *cell) {
 }
 
 /* A view for the existing typed JSON codecs, never an encoded row. */
-static sl_json_val *sl_pgr_value(sl_pgr_cell *cell, sl_json_val *scratch, char **err) {
+SL_API sl_json_val *sl_pgr_value(sl_pgr_cell *cell, sl_json_val *scratch, char **err) {
     switch (cell->kind) {
     case SL_PGR_NULL: scratch->kind = SL_JV_NULL; return scratch;
     case SL_PGR_BOOL: scratch->kind = SL_JV_BOOL; scratch->as.b = cell->boolean; return scratch;
@@ -164,7 +166,7 @@ static sl_json_val *sl_pgr_value(sl_pgr_cell *cell, sl_json_val *scratch, char *
 /* Runs at the call site, before native decoding holds any partial output.
  * A recursive JSON column uses the same input-depth stack reservation as
  * json.decode. Ordinary scalar rows do not scan their data for depth. */
-static size_t sl_pgr_stack_bytes(sl_pgr_view *view, size_t per_level) {
+SL_API size_t sl_pgr_stack_bytes(sl_pgr_view *view, size_t per_level) {
     char *ignored = NULL;
     if (!per_level || !sl_pgr_valid(view, &ignored)) return 0;
     long long depth = 0;

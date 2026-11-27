@@ -268,9 +268,15 @@ static void emit_rows(CG *cg, PgRowsInst *it) {
     cg->indent--; emit_guardable_close(cg);
 }
 
-void emit_pg_rows_codecs(CG *cg) {
+void emit_pg_rows_runtime(CG *cg) {
     if (!cg->pg_rows.count) return;
     emit_runtime_file(cg, "sl_pg_rows.c");
+}
+
+void emit_pg_rows_codecs(CG *cg) {
+    if (!cg->pg_rows.count) return;
+    if (cg->split_emit_mode == 0)
+        emit_pg_rows_runtime(cg);
     for (int i = 0; i < cg->pg_cells.count; i++) {
         PgCellInst *it = &cg->pg_cells.items[i];
         emit_line(cg, "static bool %s(sl_pgr_cell *, %s *, char **);", it->name, ctype_of(cg, it->type));

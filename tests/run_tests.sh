@@ -2075,6 +2075,64 @@ for name in big_frame json_wide; do
     fi
     rm -f "/tmp/sl_dev_${name}.bin" "$err"
 done
+rc_dir=$(mktemp -d /tmp/sl_rt_cache.XXXXXX)
+mkdir -p "$rc_dir/bin" "$rc_dir/cache"
+rc_real=$(command -v cc)
+cat >"$rc_dir/bin/cc" <<'RCEOF'
+#!/bin/sh
+echo "$*" >>"$RC_LOG"
+exec "$RC_REAL" "$@"
+RCEOF
+chmod +x "$rc_dir/bin/cc"
+: >"$rc_dir/cold.log"
+: >"$rc_dir/warm.log"
+if ! SLANG_CACHE="$rc_dir/cache" RC_REAL="$rc_real" RC_LOG="$rc_dir/cold.log" \
+        ./slangc tests/json/main.sl --dev --cc "$rc_dir/bin/cc" \
+        -o "$rc_dir/cold" >/dev/null 2>"$rc_dir/cold.err"; then
+    echo "FAIL dev runtime cache: cold build failed"
+    dv_bad=1; fail=1
+elif [ -s "$rc_dir/cold.err" ]; then
+    echo "FAIL dev runtime cache: cold build printed output:"
+    cat "$rc_dir/cold.err"
+    dv_bad=1; fail=1
+elif ! "$rc_dir/cold" </dev/null | diff -q tests/json/expected.txt - >/dev/null; then
+    echo "FAIL dev runtime cache: cold binary output mismatch"
+    dv_bad=1; fail=1
+elif ! SLANG_CACHE="$rc_dir/cache" RC_REAL="$rc_real" RC_LOG="$rc_dir/warm.log" \
+        ./slangc tests/json/main.sl --dev --cc "$rc_dir/bin/cc" \
+        -o "$rc_dir/warm" >/dev/null 2>"$rc_dir/warm.err"; then
+    echo "FAIL dev runtime cache: warm build failed"
+    dv_bad=1; fail=1
+elif [ -s "$rc_dir/warm.err" ]; then
+    echo "FAIL dev runtime cache: warm build printed output:"
+    cat "$rc_dir/warm.err"
+    dv_bad=1; fail=1
+elif ! "$rc_dir/warm" </dev/null | diff -q tests/json/expected.txt - >/dev/null; then
+    echo "FAIL dev runtime cache: warm binary output mismatch"
+    dv_bad=1; fail=1
+elif [ "$(wc -l <"$rc_dir/cold.log" | tr -d ' ')" -ne 2 ] ||
+     [ "$(grep -c -- ' -c ' "$rc_dir/cold.log")" -ne 1 ]; then
+    echo "FAIL dev runtime cache: expected 1 rt -c compile + 1 link on cold build"
+    cat "$rc_dir/cold.log"
+    dv_bad=1; fail=1
+elif [ "$(wc -l <"$rc_dir/warm.log" | tr -d ' ')" -ne 1 ] ||
+     [ "$(grep -c -- ' -c ' "$rc_dir/warm.log")" -ne 0 ]; then
+    echo "FAIL dev runtime cache: warm build did not reuse cached .o"
+    cat "$rc_dir/warm.log"
+    dv_bad=1; fail=1
+elif [ "$(set -- "$rc_dir"/cache/rt/*.o; [ -f "$1" ] && echo $# || echo 0)" -ne 1 ]; then
+    echo "FAIL dev runtime cache: expected 1 cached .o in rt cache dir"
+    ls -la "$rc_dir/cache/rt"
+    dv_bad=1; fail=1
+elif ! SLANG_NO_RT_CACHE=1 SLANG_CACHE="$rc_dir/cache" \
+        ./slangc tests/json/main.sl --dev -o "$rc_dir/nort" \
+        >/dev/null 2>"$rc_dir/nort.err" ||
+     ! "$rc_dir/nort" </dev/null | diff -q tests/json/expected.txt - >/dev/null; then
+    echo "FAIL dev runtime cache: SLANG_NO_RT_CACHE=1 build/run failed"
+    cat "$rc_dir/nort.err"
+    dv_bad=1; fail=1
+fi
+rm -rf "$rc_dir"
 [ "$dv_bad" -eq 0 ] && echo "PASS development builds"
 
 # ---- generated runtime tables --------------------------------------------

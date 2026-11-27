@@ -271,7 +271,7 @@ static int sl_io_fill(void) {
 
 /* One line from stdin without its "\n" (or "\r\n"). none = end of
  * input. */
-static sl_res_opt_str__str *sl_io_read_line(void) {
+SL_API sl_res_opt_str__str *sl_io_read_line(void) {
     for (;;) {
         char *line = NULL;
         size_t n = 0;
@@ -302,7 +302,7 @@ static sl_res_opt_str__str *sl_io_read_line(void) {
 }
 
 /* Everything until end of input, as bytes. */
-static sl_res_bytes_str *sl_io_read_all(void) {
+SL_API sl_res_bytes_str *sl_io_read_all(void) {
     for (;;) {
         int rc = sl_io_fill();
         if (rc < 0)
@@ -335,25 +335,25 @@ static sl_res_bytes_str *sl_io_read_all(void) {
 
 /* stderr is unbuffered, so these appear immediately; one fprintf keeps a
  * line from being split by another thread's write. */
-static void sl_io_eprint(const char *s) {
+SL_API void sl_io_eprint(const char *s) {
     sl_rt_preempt_disable();
     fprintf(stderr, "%s", s ? s : "");
     sl_rt_preempt_enable();
 }
 
-static void sl_io_eprintln(const char *s) {
+SL_API void sl_io_eprintln(const char *s) {
     sl_rt_preempt_disable();
     fprintf(stderr, "%s\n", s ? s : "");
     sl_rt_preempt_enable();
 }
 
-static void sl_io_flush(void) {
+SL_API void sl_io_flush(void) {
     sl_rt_preempt_disable();
     fflush(stdout);
     sl_rt_preempt_enable();
 }
 
-static bool sl_io_is_tty(int32_t fd) {
+SL_API bool sl_io_is_tty(int32_t fd) {
     sl_rt_preempt_disable();
     bool r = isatty((int)fd) == 1;
     sl_rt_preempt_enable();
@@ -546,7 +546,7 @@ static sl_res_bool_str *sl_io_err_bool(const char *msg) {
 
 /* Key-by-key input. Until raw_off, stdin delivers each key as it is
  * pressed instead of a line at a time. Fails if stdin is not a terminal. */
-static sl_res_bool_str *sl_io_raw_on(void) {
+SL_API sl_res_bool_str *sl_io_raw_on(void) {
     sl_rt_preempt_disable();
     int tty = isatty(0) == 1;
     sl_rt_preempt_enable();
@@ -565,7 +565,7 @@ static sl_res_bool_str *sl_io_raw_on(void) {
 
 /* Back to line-at-a-time input with echo. Harmless when raw mode is not
  * on. */
-static sl_res_bool_str *sl_io_raw_off(void) {
+SL_API sl_res_bool_str *sl_io_raw_off(void) {
     sl_io_tty_leave(1);
     return sl_io_ok_bool(true);
 }
@@ -574,7 +574,7 @@ static sl_res_bool_str *sl_io_raw_off(void) {
  * read. Not a terminal: exactly read_line. The person's Enter is not
  * echoed either, so the newline is written here, or the next output would
  * land on the prompt's line. */
-static sl_res_opt_str__str *sl_io_read_secret(void) {
+SL_API sl_res_opt_str__str *sl_io_read_secret(void) {
     sl_rt_preempt_disable();
     int tty = isatty(0) == 1;
     sl_rt_preempt_enable();
@@ -626,14 +626,14 @@ static sl_opt_int *sl_io_opt_int(bool has, long long v) {
 /* Columns of the terminal, from stdout, else stderr, else stdin; none when
  * none of them is a terminal. Asked afresh every call, so it follows a
  * resized window. */
-static sl_opt_int *sl_io_term_width(void) {
+SL_API sl_opt_int *sl_io_term_width(void) {
     struct winsize ws;
     if (!sl_io_winsize(&ws))
         return sl_io_opt_int(false, 0);
     return sl_io_opt_int(true, (long long)ws.ws_col);
 }
 
-static sl_opt_int *sl_io_term_height(void) {
+SL_API sl_opt_int *sl_io_term_height(void) {
     struct winsize ws;
     if (!sl_io_winsize(&ws))
         return sl_io_opt_int(false, 0);
@@ -909,7 +909,7 @@ static int sl_io_key_text(char *out, size_t cap) {
     return 1;
 }
 
-static sl_res_opt_str__str *sl_io_read_key(void) {
+SL_API sl_res_opt_str__str *sl_io_read_key(void) {
     char key[64];
     int rc = sl_io_key_text(key, sizeof(key));
     if (rc < 0)

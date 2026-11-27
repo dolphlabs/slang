@@ -277,7 +277,7 @@ static sl_res_bytes_str *sl_z_decompress(sl_bytes *in, long long max_out,
 /* zlib's crc32 reads its table and the input and nothing else: no lock,
    no allocation, so no preempt bracket. Fed in 1 GiB pieces because its
    length is a uInt. */
-static long long sl_compress_crc32_update(long long crc, sl_bytes *in) {
+SL_API long long sl_compress_crc32_update(long long crc, sl_bytes *in) {
     uLong c = (uLong)(crc & 0xffffffffLL);
     const unsigned char *p = in->ptr;
     long long left = in->len;
@@ -290,36 +290,36 @@ static long long sl_compress_crc32_update(long long crc, sl_bytes *in) {
     return (long long)(c & 0xffffffffUL);
 }
 
-static long long sl_compress_crc32(sl_bytes *in) {
+SL_API long long sl_compress_crc32(sl_bytes *in) {
     return sl_compress_crc32_update(0, in);
 }
 
-static sl_res_bytes_str *sl_compress_gzip(sl_bytes *in) {
+SL_API sl_res_bytes_str *sl_compress_gzip(sl_bytes *in) {
     return sl_z_compress(in, 6, 15 | 16, Z_FINISH);
 }
 
-static sl_res_bytes_str *sl_compress_gzip_level(sl_bytes *in,
+SL_API sl_res_bytes_str *sl_compress_gzip_level(sl_bytes *in,
                                                 long long level) {
     return sl_z_compress(in, (int)level, 15 | 16, Z_FINISH);
 }
 
-static sl_res_bytes_str *sl_compress_deflate(sl_bytes *in) {
+SL_API sl_res_bytes_str *sl_compress_deflate(sl_bytes *in) {
     return sl_z_compress(in, 6, 15, Z_FINISH);
 }
 
-static sl_res_bytes_str *sl_compress_deflate_raw(sl_bytes *in) {
+SL_API sl_res_bytes_str *sl_compress_deflate_raw(sl_bytes *in) {
     return sl_z_compress(in, 6, -15, Z_FINISH);
 }
 
-static sl_res_bytes_str *sl_compress_gunzip(sl_bytes *in, long long max_out) {
+SL_API sl_res_bytes_str *sl_compress_gunzip(sl_bytes *in, long long max_out) {
     return sl_z_decompress(in, max_out, 15 | 16, "gunzip");
 }
 
-static sl_res_bytes_str *sl_compress_inflate(sl_bytes *in, long long max_out) {
+SL_API sl_res_bytes_str *sl_compress_inflate(sl_bytes *in, long long max_out) {
     return sl_z_decompress(in, max_out, 15, "inflate");
 }
 
-static sl_res_bytes_str *sl_compress_inflate_raw(sl_bytes *in,
+SL_API sl_res_bytes_str *sl_compress_inflate_raw(sl_bytes *in,
                                                  long long max_out) {
     return sl_z_decompress(in, max_out, -15, "inflate_raw");
 }
@@ -328,6 +328,6 @@ static sl_res_bytes_str *sl_compress_inflate_raw(sl_bytes *in,
    stream stays open, so a decompressor that keeps its state across
    messages reads on into the next. RFC 7692 (WebSocket permessage-
    deflate) sends exactly this, minus the trailing 00 00 ff ff. */
-static sl_res_bytes_str *sl_compress_deflate_raw_flush(sl_bytes *in) {
+SL_API sl_res_bytes_str *sl_compress_deflate_raw_flush(sl_bytes *in) {
     return sl_z_compress(in, 6, -15, Z_SYNC_FLUSH);
 }
