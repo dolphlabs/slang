@@ -2318,9 +2318,10 @@ assert(p4.status == 200 && strings.contains(b4, "# cpu profile: 40ms"), "r4");
 chan_send(done_ch, 1);
 println("pprof_http_ok");
 PHTTP
-if ! ./slangc "$pd_dir/h/pprof_http.sl" --run >"$pd_dir/h.out" 2>"$pd_dir/h.err" </dev/null; then
+if ! ./slangc "$pd_dir/h/pprof_http.sl" -o "$pd_dir/pprof_bin" >"$pd_dir/hc.err" 2>&1 ||
+   ! "$pd_dir/pprof_bin" >"$pd_dir/h.out" 2>"$pd_dir/h.err" </dev/null; then
     echo "FAIL HTTP pprof loopback"
-    cat "$pd_dir/h.out" "$pd_dir/h.err"
+    cat "$pd_dir/hc.err" "$pd_dir/h.out" "$pd_dir/h.err"
     prof_bad=1; fail=1
 elif [ "$(cat "$pd_dir/h.out")" != "pprof_http_ok" ]; then
     echo "FAIL HTTP pprof loopback output"

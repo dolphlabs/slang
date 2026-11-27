@@ -2456,19 +2456,22 @@ static int sl_prof_alloc_cmp(const void *a, const void *b) {
 static void sl_prof_heap_format(long nworkers, long long rss_bytes,
                                 long long rss_peak_bytes, char **out_buf,
                                 size_t *out_len) {
-    sl_prof_alloc_entry snap[SL_PROF_ALLOC_SLOTS];
+    sl_prof_alloc_entry *snap =
+        (sl_prof_alloc_entry *)malloc(SL_PROF_ALLOC_SLOTS * sizeof(*snap));
     size_t n = 0;
     unsigned long long total_bytes = 0;
-    pthread_mutex_lock(&sl_prof_alloc_mu);
-    for (int i = 0; i < SL_PROF_ALLOC_SLOTS; i++) {
-        if (sl_prof_alloc_tab[i].allocs > 0) {
-            snap[n++] = sl_prof_alloc_tab[i];
-            total_bytes += sl_prof_alloc_tab[i].bytes;
+    if (snap) {
+        pthread_mutex_lock(&sl_prof_alloc_mu);
+        for (int i = 0; i < SL_PROF_ALLOC_SLOTS; i++) {
+            if (sl_prof_alloc_tab[i].allocs > 0) {
+                snap[n++] = sl_prof_alloc_tab[i];
+                total_bytes += sl_prof_alloc_tab[i].bytes;
+            }
         }
+        pthread_mutex_unlock(&sl_prof_alloc_mu);
+        if (n > 1)
+            qsort(snap, n, sizeof(snap[0]), sl_prof_alloc_cmp);
     }
-    pthread_mutex_unlock(&sl_prof_alloc_mu);
-    if (n > 1)
-        qsort(snap, n, sizeof(snap[0]), sl_prof_alloc_cmp);
 
     unsigned long long majors = atomic_load_explicit(&sl_gc_rt_majors,
                                                      memory_order_relaxed);
@@ -2501,6 +2504,7 @@ static void sl_prof_heap_format(long nworkers, long long rss_bytes,
                        snap[i].bytes, pct, snap[i].allocs, snap[i].name,
                        snap[i].loc, snap[i].spawn_at);
     }
+    free(snap);
     if (!b.data)
         sl_pbuf_printf(&b, "# heap profile: empty\n");
     *out_buf = b.data;
