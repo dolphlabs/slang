@@ -115,10 +115,8 @@ static inline unsigned sl_reactor_shard_for(int fd) {
 }
 
 static int sl_reactor_stat_enabled(void) {
-    static int cached = -1;
-    if (cached < 0)
-        cached = getenv("SLANG_REACTOR_STAT") ? 1 : 0;
-    return cached;
+    static _Atomic int cached = -1;
+    return sl_rt_env_flag(&cached, "SLANG_REACTOR_STAT");
 }
 
 static void sl_reactor_shard_count(unsigned shard, int wake) {

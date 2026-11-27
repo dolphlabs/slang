@@ -612,9 +612,21 @@ static void sl_task_park(pthread_mutex_t *held_mu) {
         ps->head->parked_prev = t;
     ps->head = t;
     t->on_parked = 1;
+#ifdef SL_TSAN
+    /* Unlock held_mu on t->tsan_fiber (the same fiber that locked it) so
+       TSan preserves mutex lockset tracking; tsan_switching blocks run-loop
+       dispatch until sl_worker_after_switch finishes saving t->rsp. */
+    t->park_mu = NULL;
+    t->parked = 1;
+    atomic_store_explicit(&t->tsan_switching, 1, memory_order_release);
+    pthread_mutex_unlock(&ps->mu);
+    if (held_mu) pthread_mutex_unlock(held_mu);
+    SL_TSAN_SWITCH_TO_NATIVE(t);
+#else
     pthread_mutex_unlock(&ps->mu);
     t->park_mu = held_mu;
     t->parked = 1;
+#endif
     sl_ctx_switch(&t->rsp, SL_RT_TLS_NATIVE_RSP());
     /* resumes here once re-submitted (sl_task_resume) and re-switched-
        into by some worker */
@@ -722,6 +734,7 @@ static void sl_task_yield_now(void) {
     if (sl_sched_stat_enabled())
         atomic_fetch_add_explicit(&sl_sched_stat_preempt_yield, 1,
                                   memory_order_relaxed);
+    SL_TSAN_SWITCH_TO_NATIVE(t);
     sl_ctx_switch(&t->rsp, SL_RT_TLS_NATIVE_RSP());
     /* resumes here once some worker's run loop dispatches this task
        again -- run_start_ns is reset fresh by that dispatch (see
@@ -738,6 +751,7 @@ static void sl_task_yield_now(void) {
  * main's top-level task can now park exactly like any spawned task
  * can. */
 static void sl_worker_after_switch(sl_task *t) {
+    SL_TSAN_ACQUIRE(t);
     if (t->preempted) {
         /* Tier 11 seventh slice: t's sl_ctx_switch has already safely
          * completed by the time we're running here (this IS the code
@@ -754,11 +768,12 @@ static void sl_worker_after_switch(sl_task *t) {
            after which another worker may already be running t. */
         t->gc_minor_stamp = atomic_load_explicit(&sl_gc_minors_done,
                                                  memory_order_relaxed);
+        SL_TSAN_RELEASE(t);
         sl_runq_stripe_push(t); /* raw stripe push, no bracket -- same
             reason as the old sl_runq_push_raw call here: sl_rt_current_task
             is deliberately still t, and a bracket would decrement freed
             memory after another worker finishes t. Native stack vetoed. */
-        sl_rt_current_task = &sl_rt_task_storage; /* the LAST thing this
+        SL_RT_TLS_SET_CUR(&sl_rt_task_storage); /* the LAST thing this
             branch does, and deliberately not a dereference of t: after
             the push above, t may already be running, finished, and freed
             on another worker. */
@@ -774,16 +789,20 @@ static void sl_worker_after_switch(sl_task *t) {
                                                  memory_order_relaxed);
         pthread_mutex_t *mu = t->park_mu;
         t->park_mu = NULL;
-        sl_rt_current_task = &sl_rt_task_storage; /* MUST happen before
+        SL_RT_TLS_SET_CUR(&sl_rt_task_storage); /* MUST happen before
             the unlock below, not after: the registry's task_slot
             dereferences through sl_rt_current_task at any time,
             including immediately after mu is unlocked and some OTHER
             thread could already be resuming t. */
         if (mu) pthread_mutex_unlock(mu);
+#ifdef SL_TSAN
+        SL_TSAN_RELEASE(t);
+        atomic_store_explicit(&t->tsan_switching, 0, memory_order_release);
+#endif
         return;
     }
     sl_gc_flush_task(t);
-    sl_rt_current_task = &sl_rt_task_storage; /* MUST happen before
+    SL_RT_TLS_SET_CUR(&sl_rt_task_storage); /* MUST happen before
         the release below, not after -- same reasoning as the parked
         case above. */
     sl_task_release(t);
@@ -960,8 +979,13 @@ static void sl_worker_run_loop(long slot_idx) {
             t = sl_runq_pop_blocking(&sl_global_runq);
             now = sl_rt_monotonic_ns(); /* it may have slept */
         }
-        if (t) sl_rt_current_task = t;
         if (!t) break; /* shutdown */
+#ifdef SL_TSAN
+        while (atomic_load_explicit(&t->tsan_switching, memory_order_acquire) != 0)
+            sched_yield();
+        SL_TSAN_ACQUIRE(t);
+#endif
+        SL_RT_TLS_SET_CUR(t);
         if (sl_sched_stat_enabled())
             atomic_fetch_add_explicit(&sl_sched_stat_dispatch, 1,
                                       memory_order_relaxed);
@@ -972,6 +996,11 @@ static void sl_worker_run_loop(long slot_idx) {
          * this stint, never a stale one from before the last switch-out. */
         if (!inherited)
             chain_start = now;
+#ifdef SL_TSAN
+        sl_pool_slot_occupy(occ, t);
+        SL_TSAN_SWITCH_TO_TASK(t);
+        t->run_start_ns = chain_start;
+#else
         t->run_start_ns = chain_start;
         /* Tier 11 eighth slice: publish t as this slot's occupant right
          * where run_start_ns is already reset -- a fresh submit, a
@@ -982,6 +1011,8 @@ static void sl_worker_run_loop(long slot_idx) {
          * thread (a different thread entirely) before any signal based
          * on seeing it could land. */
         sl_pool_slot_occupy(occ, t);
+        SL_TSAN_SWITCH_TO_TASK(t);
+#endif
         sl_ctx_switch(&sl_rt_native_rsp, t->rsp);
         /* resumes here once t either finishes or parks */
         /* Tier 11 eighth slice: .cur cleared BEFORE sl_worker_after_switch,
@@ -1245,7 +1276,7 @@ static void sl_fatal_handler(int sig, siginfo_t *si, void *uctx_raw) {
 }
 
 static void sl_rt_install_fatal_handlers(void) {
-#if defined(__SANITIZE_ADDRESS__)
+#if defined(__SANITIZE_ADDRESS__) || defined(SL_TSAN)
     return;
 #elif defined(__has_feature)
 #if __has_feature(address_sanitizer)
@@ -1565,6 +1596,9 @@ static void sl_preempt_install_handlers(void) {
 }
 
 static void sl_preempt_ticker_start(void) {
+#ifdef SL_TSAN
+    return;
+#endif
     sl_preempt_install_handlers();
     pthread_t th;
     if (sl_rt_thread_spawn(&th, sl_preempt_ticker_thread, NULL) != 0) {

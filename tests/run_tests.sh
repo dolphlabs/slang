@@ -2137,6 +2137,43 @@ then
 fi
 [ "$dg_bad" -eq 0 ] && echo "PASS compiler diagnostics"
 
+echo "--- race detector (slangc test --race) ---"
+race_bad=0
+if ! ./slangc test --race tests/race_pkg >/tmp/sl_race_ok.out 2>/tmp/sl_race_ok.err </dev/null; then
+    echo "FAIL race_pkg --race (nonzero exit)"
+    cat /tmp/sl_race_ok.out /tmp/sl_race_ok.err
+    race_bad=1; fail=1
+elif grep -q "ThreadSanitizer" /tmp/sl_race_ok.err; then
+    echo "FAIL race_pkg --race (unexpected TSan warning)"
+    cat /tmp/sl_race_ok.err
+    race_bad=1; fail=1
+fi
+if ./slangc test --race tests/race_detect_pkg >/tmp/sl_race_det.out 2>/tmp/sl_race_det.err </dev/null; then
+    echo "FAIL race_detect_pkg --race (expected nonzero exit on intentional race)"
+    cat /tmp/sl_race_det.out /tmp/sl_race_det.err
+    race_bad=1; fail=1
+elif ! grep -q "ThreadSanitizer: data race" /tmp/sl_race_det.err /tmp/sl_race_det.out; then
+    echo "FAIL race_detect_pkg --race (missing 'ThreadSanitizer: data race')"
+    cat /tmp/sl_race_det.out /tmp/sl_race_det.err
+    race_bad=1; fail=1
+fi
+if ! SLANG_RACE=1 ./slangc --run tests/mutex/main.sl >/tmp/sl_race_mtx.out 2>/tmp/sl_race_mtx.err </dev/null; then
+    echo "FAIL mutex --run with SLANG_RACE=1"
+    cat /tmp/sl_race_mtx.out /tmp/sl_race_mtx.err
+    race_bad=1; fail=1
+elif ! diff -u tests/mutex/expected.txt /tmp/sl_race_mtx.out >/tmp/sl_race_mtx.diff; then
+    echo "FAIL mutex SLANG_RACE=1 stdout differs"
+    cat /tmp/sl_race_mtx.diff
+    race_bad=1; fail=1
+elif grep -q "ThreadSanitizer" /tmp/sl_race_mtx.err; then
+    echo "FAIL mutex SLANG_RACE=1 (unexpected TSan warning)"
+    cat /tmp/sl_race_mtx.err
+    race_bad=1; fail=1
+fi
+rm -f /tmp/sl_race_ok.out /tmp/sl_race_ok.err /tmp/sl_race_det.out /tmp/sl_race_det.err \
+      /tmp/sl_race_mtx.out /tmp/sl_race_mtx.err /tmp/sl_race_mtx.diff
+[ "$race_bad" -eq 0 ] && echo "PASS race detector"
+
 # Generated C must compile clean under the warnings a C compiler turns
 # on by ITSELF. slangc passes no -W flags, so anything default-on lands
 # in the user's terminal on every single build -- 79 of them across this

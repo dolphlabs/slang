@@ -1427,7 +1427,7 @@ static void sl_task_stack_grow(sl_task *t) {
 #define SL_STACK_FREELIST_OFF 1
 #endif
 #endif
-#if defined(__SANITIZE_ADDRESS__)
+#if defined(__SANITIZE_ADDRESS__) || defined(SL_TSAN)
 #define SL_STACK_FREELIST_OFF 1
 #endif
 
@@ -1443,10 +1443,8 @@ static _Atomic unsigned long long sl_task_cache_hits = 0;
 static _Atomic unsigned long long sl_task_cache_miss = 0;
 
 static int sl_task_cache_stat_enabled(void) {
-    static int cached = -1;
-    if (cached < 0)
-        cached = getenv("SLANG_TASK_STAT") ? 1 : 0;
-    return cached;
+    static _Atomic int cached = -1;
+    return sl_rt_env_flag(&cached, "SLANG_TASK_STAT");
 }
 
 static void sl_task_cache_stat_dump(void) {
@@ -1531,6 +1529,12 @@ static void sl_task_stack_init(sl_task *t, void (*entry)(void *), void *arg) {
      * tail (pkg's async-preempt trampoline, not this one) explicitly
      * releases it. */
     t->preempt_disable_depth = 1;
+#ifdef SL_TSAN
+    if (!t->tsan_fiber)
+        t->tsan_fiber = __tsan_create_fiber(0);
+    atomic_store_explicit(&t->tsan_switching, 0, memory_order_relaxed);
+    SL_TSAN_RELEASE(t);
+#endif
 }
 
 static sl_task *sl_task_grab(void) {
@@ -1604,6 +1608,15 @@ static sl_task *sl_task_acquire(void (*entry)(void *), void *arg) {
 static void sl_task_release(sl_task *t) {
     if (t->entry_arg_owned)
         free(t->entry_arg);
+#ifdef SL_TSAN
+    if (t->tsan_fiber) {
+        __tsan_destroy_fiber(t->tsan_fiber);
+        t->tsan_fiber = NULL;
+    }
+    sl_stack_unmap(t->raw_base, t->stack_size);
+    free(t);
+    return;
+#endif
     if (t->grows_seen == 0 && t->stack_size == SL_TASK_INITIAL_STACK_SIZE &&
         sl_task_cache_n < SL_TASK_CACHE_N) {
         sl_task_cache[sl_task_cache_n++] = t;
@@ -1636,7 +1649,7 @@ static void sl_task_release(sl_task *t) {
  * dispatched this task (sl_worker_run_loop, or main's own one-off
  * switch-in, program.c) before the switch that landed us here. */
 __attribute__((used)) void sl_preempt_release_initial_disable(void) {
-    atomic_fetch_sub_explicit(&sl_rt_current_task->preempt_disable_depth,
+    atomic_fetch_sub_explicit(&SL_RT_TLS_CUR()->preempt_disable_depth,
                                1, memory_order_acq_rel);
 }
 
@@ -1649,7 +1662,7 @@ __attribute__((used)) void sl_preempt_release_initial_disable(void) {
  * emitted after this file -- same established cross-file pattern
  * every other park/resume/yield primitive already uses. */
 __attribute__((used)) void sl_preempt_yield(void) {
-    sl_task *t = sl_rt_current_task;
+    sl_task *t = SL_RT_TLS_CUR();
     t->async_preempted = 1;
     if (sl_sched_stat_enabled() && sl_rt_call_misalign() != 0)
         atomic_fetch_add_explicit(&sl_sched_stat_preempt_misaligned, 1,
