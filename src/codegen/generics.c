@@ -295,7 +295,10 @@ static const char *instantiate(CG *cg, StructTmpl *tm, char **args, int n,
                      key, cg->structs.items[i]->canonical, mangled);
     }
     cg->structs.items[cg->structs.count++] = sd;
-    cg_lookup_reset(cg);
+    cg_cache_clear_one(&cg->struct_map);
+    cg_cache_clear_one(&cg->struct_pkg_map);
+    cg_cache_clear_one(&cg->drop_map);
+    cg_cache_clear_one(&cg->copy_map);
 
     TypeEnv env;
     env.n = n;
@@ -487,7 +490,7 @@ FuncSig *method_instantiate(CG *cg, StructDef *sd, const char *name,
             cg->sigs.items, cg->sigs.cap * sizeof(FuncSig *));
     }
     cg->sigs.items[cg->sigs.count++] = sig;
-    cg_lookup_reset(cg);
+    cg_cache_clear_one(&cg->method_map);
     fi->fn->sig_idx = cg->sigs.count;
     fi->sig = sig;
 
@@ -897,7 +900,8 @@ static FuncSig *func_instance(CG *cg, FuncTmpl *tm, const char *pkg,
             cg->sigs.items, cg->sigs.cap * sizeof(FuncSig *));
     }
     cg->sigs.items[cg->sigs.count++] = sig;
-    cg_lookup_reset(cg);
+    /* Generic function instances carry inst_key != NULL and method_of == NULL,
+     * so none of the lookup caches (sig_map, method_map, struct/drop/copy) observe them. */
     fi->fn->sig_idx = cg->sigs.count;
     fi->sig = sig;
 

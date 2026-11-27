@@ -11,6 +11,7 @@ typedef struct {
      * the package itself in one directory and pinning `dir <that>`. */
     char *dir;
     char *hash;
+    int verified;
 } SlPkgPin;
 
 typedef struct {

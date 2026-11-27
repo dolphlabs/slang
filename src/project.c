@@ -155,6 +155,7 @@ static SlPkgPin *add_pin(SlProject *p, const char *name, const char *git,
     pin->tag = xstrdup(tag);
     pin->dir = dir && dir[0] ? xstrdup(dir) : NULL;
     pin->hash = NULL;
+    pin->verified = 0;
     return pin;
 }
 

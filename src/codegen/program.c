@@ -1669,39 +1669,42 @@ void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
 static const char **fg_syms;
 static int *fg_frames;
 static int fg_n;
+static CGCache fg_map;
 
 void codegen_set_frame_guards(const char *const *symbols, const int *frames,
                               int n) {
+    cg_cache_clear_one(&fg_map);
     fg_syms = (const char **)xmalloc(sizeof(char *) * (size_t)(n ? n : 1));
     fg_frames = (int *)xmalloc(sizeof(int) * (size_t)(n ? n : 1));
     for (int i = 0; i < n; i++) {
         fg_syms[i] = xstrdup(symbols[i]);
         fg_frames[i] = frames[i];
+        cg_cache_put(&fg_map, fg_syms[i], (void *)(uintptr_t)(i + 1));
     }
     fg_n = n;
 }
 
 /* The measured frame of `sym`, or 0 when it is not guarded. */
 static int frame_guard_of(const char *sym) {
-    for (int i = 0; i < fg_n; i++)
-        if (!strcmp(fg_syms[i], sym))
-            return fg_frames[i];
-    return 0;
+    void *hit = cg_cache_get(&fg_map, sym);
+    return hit ? fg_frames[(size_t)((uintptr_t)hit - 1)] : 0;
 }
 
 static const char **emitted_syms;
 static int emitted_n, emitted_cap;
+static CGCache emitted_sym_map;
 
 static void note_emitted_symbol(const char *sym) {
-    for (int i = 0; i < emitted_n; i++)
-        if (!strcmp(emitted_syms[i], sym))
-            return;
+    if (cg_cache_get(&emitted_sym_map, sym))
+        return;
     if (emitted_n == emitted_cap) {
         emitted_cap = emitted_cap ? emitted_cap * 2 : 64;
         emitted_syms = (const char **)xrealloc(
             emitted_syms, sizeof(char *) * (size_t)emitted_cap);
     }
-    emitted_syms[emitted_n++] = xstrdup(sym);
+    char *dup = xstrdup(sym);
+    emitted_syms[emitted_n++] = dup;
+    cg_cache_put(&emitted_sym_map, dup, (void *)(uintptr_t)1);
 }
 
 const char *const *codegen_function_symbols(int *n) {
@@ -1831,7 +1834,9 @@ void gen_function(CG *cg, Package *p, FuncDecl *f) {
                   sym, args.data);
         emit_line(cg, "}");
         emit_line(cg, "");
+        free(args.data);
     }
+    free(params.data);
 
     cg->in_function = 0;
     cg->in_leaf_fn = 0;
@@ -2250,13 +2255,16 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
      * instantiation, then generate for real with complete tables. */
     StrBuf scratch;
     sb_init(&scratch);
+    sb_reserve(&scratch, 1u << 20);
     cg.out = &scratch;
     cg.collect_errors = 1;
     gen_whole_program(&cg, pkgs, npkgs, main_index);
     cg.collect_errors = 0;
+    size_t est = scratch.len + 65536;
     free(scratch.data);
     if (diag_count())
         exit(1); /* every error found was reported by cg_error */
+    cg.dry_done = 1;
 
     /* Tier 10: populate Expr.live_set (used by gen_call's call-site
      * safepoint brackets) once, before the real gen_whole_program pass
@@ -2292,7 +2300,9 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
      * to accumulate across both passes (that's the point of the dry
      * run); globs has no such purpose here. */
     cg.globs.count = 0;
+    cg_cache_clear_one(&cg.glob_map);
 
+    sb_reserve(out, est);
     out->len = 0;
     out->data[0] = '\0';
     cg.out = out;
