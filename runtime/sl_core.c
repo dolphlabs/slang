@@ -1231,13 +1231,15 @@ static void sl_cpu_detect(void) {
 
 /* A development build (slangc --dev) is compiled at -O0, whose frames are
  * several times bigger (a 21k-line service: 464 functions over 1 KB at -O0,
- * 22 at -O3). It gives every task a bigger first stack and safepoint margin
- * instead, and slangc raises its frame-guard limit to half this margin: a
- * frame the guard does not cover still fits. Memory per task is no concern
- * in a build that is never deployed. */
+ * 22 at -O3). On non-glibc Linux (musl, used by static zig cc builds),
+ * printf_core (vfprintf.c) allocates a 7,704-byte (0x1e18) stack frame on
+ * entry, so an 8 KB initial task stack / 2 KB guard margin overflows the guard
+ * page on any printf/snprintf/vsnprintf/fprintf call. Give both builds a
+ * 32 KB initial stack and 16 KB guard margin while keeping glibc Linux and
+ * macOS at 8192 / 2048. */
 #if defined(SL_TSAN)
 #define SL_TASK_INITIAL_STACK_SIZE 262144
-#elif defined(SL_DEV_BUILD)
+#elif defined(SL_DEV_BUILD) || (defined(__linux__) && !defined(__GLIBC__))
 #define SL_TASK_INITIAL_STACK_SIZE 32768
 #else
 #define SL_TASK_INITIAL_STACK_SIZE 8192
@@ -1252,7 +1254,7 @@ static void sl_cpu_detect(void) {
  *
  * Only tasks that actually call into OpenSSL pay it, and only once. */
 #define SL_TASK_DYLD_STACK_SIZE 65536
-#ifdef SL_DEV_BUILD
+#if defined(SL_DEV_BUILD) || (defined(__linux__) && !defined(__GLIBC__))
 #define SL_TASK_GUARD_MARGIN 16384
 #else
 #define SL_TASK_GUARD_MARGIN 2048

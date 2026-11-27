@@ -168,6 +168,10 @@ Useful flags:
 | Flag        | Effect                                              |
 |-------------|-----------------------------------------------------|
 | `-o <name>` | Choose the output binary name                       |
+| `--target <t>` | Cross-compile (`linux-amd64`, `linux-arm64`, `darwin-arm64`, `darwin-amd64`, or C triple; `SLANG_TARGET`) |
+| `--static`  | Static link (`-static`, for Linux musl targets; `SLANG_STATIC=1`) |
+| `--cc <cmd>` | Override C compiler command (e.g. `zig cc`; `SLANG_CC`) |
+| `--sysroot <dir>` | Add `-I<dir>/include -L<dir>/lib` for target C libraries (`SLANG_SYSROOT`) |
 | `--emit-c`  | Only write the generated C file (no compilation)    |
 | `--keep-c`  | Keep the generated C file after compiling           |
 | `--run`     | Compile, then run it; exit with the program's own status |
@@ -6546,10 +6550,14 @@ slangc new billing              # scaffold slang.project, main.sl, .gitignore
 slangc get                      # fetch git pkg dependencies and write slang.lock
 slangc main.sl --dev --run      # fast unoptimized edit-run loop (about 10x faster C compiles)
 slangc main.sl -o billing       # optimized native binary (-O3)
+slangc main.sl --target linux-amd64 --static -o billing-linux   # static Linux binary (uses zig cc if installed)
+slangc main.sl --target linux-arm64 --static --sysroot /opt/arm64-sysroot -o billing-arm64
 slangc main.sl --emit-c         # write main.gen.c without invoking cc
 slangc main.sl --json           # emit compile errors as JSON lines on stderr
 slangc doc httpc client_post    # query signatures and docstrings offline
 ```
+
+Cross-compiling uses `zig` (`zig cc -target <triple>`) automatically when on `PATH` or in `$SLANG_CACHE/zig/zig` (`~/.cache/slang/zig/zig`), falling back to `<triple>-gcc` for Linux targets or an explicit `--cc` / `SLANG_CC`. Note that static linking (`--static`) targets Linux (e.g. `linux-amd64` -> `x86_64-linux-musl`, `linux-arm64` -> `aarch64-linux-musl`); programs importing `crypto`, `sql`, or `compress` require target headers/archives via `OPENSSL_DIR` or `--sysroot`.
 
 `--json` outputs one compact JSON object per error so agents and editors
 can fix every file in one pass:
