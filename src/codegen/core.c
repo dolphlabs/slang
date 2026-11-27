@@ -409,6 +409,31 @@ char *c_string_literal(const char *s) {
     return sb.data;
 }
 
+static const char *source_basename(const char *file) {
+    const char *base = (file && file[0]) ? file : "<unknown>";
+    const char *slash = strrchr(base, '/');
+    if (slash && slash[1])
+        base = slash + 1;
+    const char *bslash = strrchr(base, '\\');
+    if (bslash && bslash[1])
+        base = bslash + 1;
+    return base;
+}
+
+/* Quoted C string literal `"file.sl:line"` for symbol table metadata. */
+char *src_loc_literal(const char *file, int line) {
+    char *raw = xasprintf("%s:%d", source_basename(file), line);
+    return c_string_literal(raw);
+}
+
+/* Quoted C string literal `"file.sl:line (fn)"` for spawn metadata. */
+char *spawn_loc_literal(const char *file, int line, const char *fn_name) {
+    const char *f = (file && file[0]) ? file : diag_file;
+    char *raw = xasprintf("%s:%d (%s)", source_basename(f), line,
+                          (fn_name && fn_name[0]) ? fn_name : "<fn>");
+    return c_string_literal(raw);
+}
+
 /* Render raw bytes as a C string literal using 3-digit octal escapes
  * for anything non-printable, so embedded NULs survive verbatim. */
 char *c_bytes_literal(const unsigned char *p, long long len) {

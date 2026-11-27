@@ -493,6 +493,45 @@ static sl_arr *sl_proc_runtime_stats(void) {
     return a;
 }
 
+static char *sl_prof_take_cstr(char *buf) {
+    char *s = sl_strdup(buf ? buf : "");
+    free(buf);
+    return s;
+}
+
+static char *sl_proc_task_dump(void) {
+    char *buf = NULL;
+    size_t len = 0;
+    sl_rt_format_tasks(&buf, &len);
+    return sl_prof_take_cstr(buf);
+}
+
+static char *sl_proc_cpu_profile(long long duration_ms) {
+    char *buf = NULL;
+    size_t len = 0;
+    sl_prof_cpu_sample(duration_ms, &buf, &len);
+    return sl_prof_take_cstr(buf);
+}
+
+static char *sl_proc_heap_profile(void) {
+    sl_rt_preempt_disable();
+    long long rss = sl_proc_rss_now();
+    struct rusage ru;
+    long long peak = 0;
+    if (getrusage(RUSAGE_SELF, &ru) == 0) {
+#if defined(__APPLE__)
+        peak = (long long)ru.ru_maxrss;
+#else
+        peak = (long long)ru.ru_maxrss * 1024;
+#endif
+    }
+    sl_rt_preempt_enable();
+    char *buf = NULL;
+    size_t len = 0;
+    sl_prof_heap_format((long)sl_pool_nworkers, rss, peak, &buf, &len);
+    return sl_prof_take_cstr(buf);
+}
+
 static sl_res_bool_str *sl_proc_kill(long long pid, int sig) {
     if (pid == 0)
         return sl_proc_err_bool("proc.kill: invalid pid 0");

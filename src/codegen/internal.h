@@ -754,6 +754,8 @@ const char *suggest_method(CG *cg, StructDef *sd, const char *name);
 void sb_putc(StrBuf *sb, char c);
 void sb_nl(StrBuf *sb);
 char *c_string_literal(const char *s);
+char *src_loc_literal(const char *file, int line);
+char *spawn_loc_literal(const char *file, int line, const char *fn_name);
 char *c_bytes_literal(const unsigned char *p, long long len);
 char *sanitize_ident(const char *name);
 const char *map_type(const char *t);

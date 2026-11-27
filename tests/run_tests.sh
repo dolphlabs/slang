@@ -2148,7 +2148,8 @@ elif grep -q "ThreadSanitizer" /tmp/sl_race_ok.err; then
     cat /tmp/sl_race_ok.err
     race_bad=1; fail=1
 fi
-if ./slangc test --race tests/race_detect_pkg >/tmp/sl_race_det.out 2>/tmp/sl_race_det.err </dev/null; then
+if TSAN_OPTIONS="abort_on_error=0${TSAN_OPTIONS:+:$TSAN_OPTIONS}" \
+        ./slangc test --race tests/race_detect_pkg >/tmp/sl_race_det.out 2>/tmp/sl_race_det.err </dev/null; then
     echo "FAIL race_detect_pkg --race (expected nonzero exit on intentional race)"
     cat /tmp/sl_race_det.out /tmp/sl_race_det.err
     race_bad=1; fail=1
@@ -2173,6 +2174,162 @@ fi
 rm -f /tmp/sl_race_ok.out /tmp/sl_race_ok.err /tmp/sl_race_det.out /tmp/sl_race_det.err \
       /tmp/sl_race_mtx.out /tmp/sl_race_mtx.err /tmp/sl_race_mtx.diff
 [ "$race_bad" -eq 0 ] && echo "PASS race detector"
+
+echo "--- task dump & pprof profiling ---"
+prof_bad=0
+pd_dir=$(mktemp -d)
+mkdir -p "$pd_dir/q" "$pd_dir/h"
+cat >"$pd_dir/q/quit.sl" <<'PQUIT'
+import "proc";
+import "time";
+fn waiter(ch: chan[int]) {
+    let _v = chan_recv(ch);
+}
+let ch: chan[int] = make_chan(0);
+spawn waiter(ch);
+let args = proc.args();
+let port = to_int(args[1]) ?? 0;
+let _ = link_dial("127.0.0.1", port, until_never());
+time.sleep(300000000);
+chan_send(ch, 1);
+println("quit_ok");
+PQUIT
+if ./slangc "$pd_dir/q/quit.sl" -o "$pd_dir/quit_bin" >/dev/null 2>"$pd_dir/qc.err"; then
+    if ! python3 - "$pd_dir/quit_bin" >/dev/null 2>"$pd_dir/q.err" <<'PY'
+import signal, socket, subprocess, sys, time
+srv = socket.socket()
+srv.bind(("127.0.0.1", 0))
+srv.listen(1)
+port = srv.getsockname()[1]
+p = subprocess.Popen([sys.argv[1], str(port)],
+                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+conn, _ = srv.accept()
+conn.close()
+srv.close()
+time.sleep(0.05)
+p.send_signal(signal.SIGQUIT)
+out, err = p.communicate(timeout=15)
+sys.stderr.write(err)
+assert p.returncode == 0, f"rc={p.returncode}, err={err}"
+assert out.strip() == "quit_ok", f"out={out!r}"
+assert "# tasks:" in err, err
+assert "[parked: chan recv]" in err, err
+assert "quit.sl:" in err and "(waiter)" in err, err
+PY
+    then
+        echo "FAIL SIGQUIT task dump"
+        cat "$pd_dir/q.err"
+        prof_bad=1; fail=1
+    fi
+else
+    echo "FAIL SIGQUIT task dump (compile)"
+    cat "$pd_dir/qc.err"
+    prof_bad=1; fail=1
+fi
+
+cat >"$pd_dir/h/pprof_http.sl" <<'PHTTP'
+import "http";
+import "httpc";
+import "net";
+import "runtime";
+import "strings";
+import "time";
+
+fn parked_worker(ch: chan[int]) {
+    let _v = chan_recv(ch);
+}
+
+fn read_req_bytes(fd: i32) -> bytes {
+    let acc = b"";
+    while !strings.contains(to_str(acc), "\r\n\r\n") {
+        let rr = net.recv(fd, 4096);
+        guard let chunk = rr else { break; }
+        if len(chunk) == 0 { break; }
+        acc = acc + chunk;
+    }
+    return acc;
+}
+
+fn serve_loop(lfd: i32) {
+    for _ in 0..4 {
+        let ar = net.accept(lfd);
+        guard let cfd = ar else { continue; }
+        let raw = read_req_bytes(cfd);
+        let pr = http.parse(raw);
+        guard let req = pr else {
+            net.close(cfd);
+            continue;
+        }
+        let body = "";
+        let status = "200 OK";
+        let rr = runtime.pprof_text(req.path);
+        guard let okb = rr else let e = err_of(rr) {
+            status = "404 Not Found";
+            body = e;
+            let hdr = "HTTP/1.1 " + status + "\r\nContent-Length: " +
+                      to_str(len(body)) + "\r\nConnection: close\r\n\r\n";
+            let _ = net.send(cfd, to_bytes(hdr + body));
+            net.close(cfd);
+            continue;
+        }
+        body = okb;
+        let hdr = "HTTP/1.1 " + status + "\r\nContent-Length: " +
+                  to_str(len(body)) + "\r\nConnection: close\r\n\r\n";
+        let _ = net.send(cfd, to_bytes(hdr + body));
+        net.close(cfd);
+    }
+    net.close(lfd);
+}
+
+let lr = net.listen(0);
+guard let lfd = lr else { panic("listen failed"); exit(1); }
+let prt = net.port(lfd);
+guard let port = prt else { panic("port failed"); exit(1); }
+
+let done_ch: chan[int] = make_chan(0);
+spawn parked_worker(done_ch);
+time.sleep(20000000);
+spawn serve_loop(lfd);
+
+let base = "http://127.0.0.1:" + to_str(port);
+let dl = until_of(time.mono() + 5000000000);
+
+let g1 = httpc.get(base + "/debug/pprof/", dl);
+guard let p1 = g1 else { panic("get index"); exit(1); }
+let b1 = to_str(p1.body);
+assert(p1.status == 200 && strings.contains(b1, "/debug/pprof/tasks"), "r1");
+
+let g2 = httpc.get(base + "/debug/pprof/tasks", dl);
+guard let p2 = g2 else { panic("get tasks"); exit(1); }
+let b2 = to_str(p2.body);
+assert(p2.status == 200 && strings.contains(b2, "[parked: chan recv]") &&
+       strings.contains(b2, "(parked_worker)"), "r2");
+
+let g3 = httpc.get(base + "/debug/pprof/heap", dl);
+guard let p3 = g3 else { panic("get heap"); exit(1); }
+let b3 = to_str(p3.body);
+assert(p3.status == 200 && strings.contains(b3, "# heap profile:"), "r3");
+
+let g4 = httpc.get(base + "/debug/pprof/cpu?ms=40", dl);
+guard let p4 = g4 else { panic("get cpu"); exit(1); }
+let b4 = to_str(p4.body);
+assert(p4.status == 200 && strings.contains(b4, "# cpu profile: 40ms"), "r4");
+
+chan_send(done_ch, 1);
+println("pprof_http_ok");
+PHTTP
+if ! ./slangc "$pd_dir/h/pprof_http.sl" -o "$pd_dir/pprof_bin" >"$pd_dir/hc.err" 2>&1 ||
+   ! "$pd_dir/pprof_bin" >"$pd_dir/h.out" 2>"$pd_dir/h.err" </dev/null; then
+    echo "FAIL HTTP pprof loopback"
+    cat "$pd_dir/hc.err" "$pd_dir/h.out" "$pd_dir/h.err"
+    prof_bad=1; fail=1
+elif [ "$(cat "$pd_dir/h.out")" != "pprof_http_ok" ]; then
+    echo "FAIL HTTP pprof loopback output"
+    cat "$pd_dir/h.out"
+    prof_bad=1; fail=1
+fi
+rm -rf "$pd_dir"
+[ "$prof_bad" -eq 0 ] && echo "PASS task dump & pprof profiling"
 
 # Generated C must compile clean under the warnings a C compiler turns
 # on by ITSELF. slangc passes no -W flags, so anything default-on lands

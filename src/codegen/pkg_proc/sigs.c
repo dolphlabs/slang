@@ -22,6 +22,9 @@ const NatSig PROC_SIGS[] = {
     /* the runtime's counters in a fixed order; the `runtime` package
        (stdlib/runtime) names them */
     {"proc", "runtime_stats", 0, {0}, "[int]", 0},
+    {"proc", "task_dump", 0, {0}, "str", 0},
+    {"proc", "cpu_profile", 1, {NA_INT}, "str", 0},
+    {"proc", "heap_profile", 0, {0}, "str", 0},
     {"proc", "kill", 2, {NA_INT, NA_INT}, "result[bool,str]", 0},
     {"proc", "wait", 2, {NA_INT, NA_UNTIL}, "result[int,str]", 0},
 };

@@ -2364,6 +2364,8 @@ char *gen_expr(CG *cg, Expr *e) {
          * done or failed by the time join_wait reads it, without a task
          * of its own. Its args stay in this frame, rooted by the
          * safepoint below for as long as the call runs. */
+        char *spawn_loc = spawn_loc_literal(NULL, e->line,
+                                            sft ? "<fn>" : name);
         char *inner = e->as.spawn.joined
             ? xasprintf("({ sl_protect_run(%s_inline, &_sl_sa%d, _sl_sa%d.join); "
                         "_sl_sa%d.join; })",
@@ -2371,9 +2373,9 @@ char *gen_expr(CG *cg, Expr *e) {
             : xasprintf(
                   "({ sl_rt_active_spawns_inc(); "
                   "sl_task_submit_copy(%s_entry, &_sl_sa%d, sizeof(_sl_sa%d), "
-                  "sl_gc_trace_%s); "
+                  "sl_gc_trace_%s, %s); "
                   "_sl_sa%d.join; })",
-                  shape->tname, id, id, shape->sname, id);
+                  shape->tname, id, id, shape->sname, spawn_loc, id);
         char *result = wrap_safepoint(cg, e, "sl_join *", prelude.data, inner);
         cg->ambient_count = ambient_mark;
         return result;

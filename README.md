@@ -3899,6 +3899,23 @@ tasks running, the caller included if it is one) and `workers` (OS
 threads running tasks). The counters are kept whether or not anything
 reads them, at a few atomic adds per collection; reading them is a few
 loads and one system call.
+
+For live task inspection and built-in profiling (`pprof`-style text
+endpoints and `SIGQUIT` task dumps):
+
+- `runtime.task_dump()` snapshots all running, runnable, and parked tasks
+  with task IDs, wait reasons (`chan recv`, `chan send`, `mutex`,
+  `select`, `join`, `sleep`, `net io`, `wait_idle`), and spawn `file.sl:line`.
+- `runtime.cpu_profile(duration_ms)` samples active workers at 100 Hz and
+  aggregates hotspots resolved to Slang function names and source lines.
+- `runtime.heap_profile()` formats GC/RSS totals and allocation hotspots
+  (sampled every 512 KB by default; tune or disable via
+  `SLANG_ALLOC_PROFILE_RATE`).
+- `runtime.pprof_text(path)` dispatches `/debug/pprof/`, `/debug/pprof/tasks`,
+  `/debug/pprof/heap`, `/debug/pprof/cpu?ms=500`, and `/debug/pprof/stats`
+  directly for HTTP debug routes.
+- Sending `SIGQUIT` (`kill -QUIT <pid>`) writes the live task dump to
+  stderr without terminating the process.
 #### `oidc`
 
 OAuth 2.0 and OpenID Connect for a client: sign users in with Google,

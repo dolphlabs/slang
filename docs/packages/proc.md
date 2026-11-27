@@ -118,6 +118,12 @@ working directory as `result[str, str]`.
 
 ### `proc.runtime_stats() -> [int]`
 
+### `proc.task_dump() -> str`
+
+### `proc.cpu_profile(int) -> str`
+
+### `proc.heap_profile() -> str`
+
 ### `proc.kill(int, int) -> result[bool,str]`
 
 ### `proc.wait(int, until) -> result[int,str]`

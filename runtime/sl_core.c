@@ -2,6 +2,7 @@
 #define _XOPEN_SOURCE 700
 #define _DARWIN_C_SOURCE
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>   /* sl_str_parse_f64 (sl_containers.c) checks ERANGE */
@@ -335,6 +336,9 @@ typedef struct sl_task {
      * ending the task. It points into this task's own stack, so
      * sl_task_grower_entry translates it with the safepoint chain. */
     struct sl_recover *recover;
+    unsigned long long task_id; /* monotonic ID assigned in sl_task_stack_init */
+    const char *spawn_at;       /* static literal "file.sl:line (fn)" or "main" */
+    _Atomic(const char *) wait_reason; /* static literal wait reason while parked */
 #ifdef SL_TSAN
     void *tsan_fiber;
     atomic_int tsan_switching;
@@ -939,7 +943,131 @@ static void sl_task_park(pthread_mutex_t *held_mu); /* runtime_pool.c,
     real in RUNTIME_POOL, emitted last. */
 static void sl_task_resume(sl_task *t); /* runtime_pool.c, forward here,
     same reason. */
+static inline void sl_task_set_wait(sl_task *t, const char *reason) {
+    if (t)
+        atomic_store_explicit(&t->wait_reason, reason, memory_order_relaxed);
+}
+
+static inline const char *sl_task_get_wait(sl_task *t) {
+    return t ? atomic_load_explicit(&t->wait_reason, memory_order_relaxed)
+             : NULL;
+}
+
 static void sl_task_resume_local(sl_task *t); /* runtime_pool.c, the same */
+
+/* Profiling symbol table populated once by main() in generated C. Uses a
+ * generic function pointer type in the static table so PIC/PIE relocations
+ * compile cleanly under C11 -Wall -Wextra without object-cast warnings. */
+typedef void (*sl_fn_ptr)(void);
+typedef struct sl_fn_sym {
+    sl_fn_ptr addr;
+    const char *name;
+    const char *loc;
+} sl_fn_sym;
+static const sl_fn_sym *sl_prof_syms = NULL;
+static size_t sl_prof_nsyms = 0;
+static uintptr_t sl_preempt_text_lo = 0;
+static uintptr_t sl_preempt_text_hi = 0;
+
+typedef struct sl_prof_sym_entry {
+    uintptr_t addr;
+    const char *name;
+    const char *loc;
+} sl_prof_sym_entry;
+static sl_prof_sym_entry *sl_prof_sorted = NULL;
+static size_t sl_prof_sorted_n = 0;
+static pthread_once_t sl_prof_sort_once = PTHREAD_ONCE_INIT;
+
+static int sl_prof_sym_cmp(const void *a, const void *b) {
+    uintptr_t x = ((const sl_prof_sym_entry *)a)->addr;
+    uintptr_t y = ((const sl_prof_sym_entry *)b)->addr;
+    return (x > y) - (x < y);
+}
+
+static void sl_prof_sort_init(void) {
+    if (!sl_prof_syms || sl_prof_nsyms == 0)
+        return;
+    sl_prof_sym_entry *arr = (sl_prof_sym_entry *)malloc(
+        sl_prof_nsyms * sizeof(*arr));
+    if (!arr)
+        return;
+    for (size_t i = 0; i < sl_prof_nsyms; i++) {
+        arr[i].addr = (uintptr_t)sl_prof_syms[i].addr;
+        arr[i].name = sl_prof_syms[i].name;
+        arr[i].loc = sl_prof_syms[i].loc;
+    }
+    qsort(arr, sl_prof_nsyms, sizeof(*arr), sl_prof_sym_cmp);
+    sl_prof_sorted = arr;
+    sl_prof_sorted_n = sl_prof_nsyms;
+}
+
+static void sl_prof_lookup_pc(uintptr_t pc, const char **out_name,
+                              const char **out_loc) {
+    pthread_once(&sl_prof_sort_once, sl_prof_sort_init);
+    if (pc && sl_prof_sorted && sl_prof_sorted_n > 0) {
+        if (sl_preempt_text_hi > sl_preempt_text_lo &&
+            (pc < sl_preempt_text_lo || pc >= sl_preempt_text_hi)) {
+            *out_name = "<native>";
+            *out_loc = "external";
+            return;
+        }
+        size_t lo = 0, hi = sl_prof_sorted_n;
+        while (lo < hi) {
+            size_t mid = lo + (hi - lo) / 2;
+            if (sl_prof_sorted[mid].addr <= pc)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        if (lo > 0) {
+            const sl_prof_sym_entry *e = &sl_prof_sorted[lo - 1];
+            if (pc - e->addr < 65536) {
+                *out_name = e->name;
+                *out_loc = e->loc ? e->loc : "?";
+                return;
+            }
+        }
+    }
+    *out_name = "<runtime>";
+    *out_loc = "runtime";
+}
+
+typedef struct {
+    char *data;
+    size_t len;
+    size_t cap;
+} sl_pbuf;
+
+static void sl_pbuf_printf(sl_pbuf *b, const char *fmt, ...)
+    __attribute__((format(printf, 2, 3)));
+
+static void sl_pbuf_printf(sl_pbuf *b, const char *fmt, ...) {
+    va_list ap, ap2;
+    va_start(ap, fmt);
+    va_copy(ap2, ap);
+    int need = vsnprintf(NULL, 0, fmt, ap);
+    va_end(ap);
+    if (need < 0) {
+        va_end(ap2);
+        return;
+    }
+    size_t want = b->len + (size_t)need + 1;
+    if (want > b->cap) {
+        size_t ncap = b->cap ? b->cap : 512;
+        while (ncap < want) ncap *= 2;
+        char *nb = (char *)realloc(b->data, ncap);
+        if (!nb) {
+            va_end(ap2);
+            return;
+        }
+        b->data = nb;
+        b->cap = ncap;
+    }
+    vsnprintf(b->data + b->len, (size_t)need + 1, fmt, ap2);
+    va_end(ap2);
+    b->len += (size_t)need;
+}
+
 static sl_task *sl_rt_idle_waiters, *sl_rt_idle_waiters_tail;
 
 static void sl_rt_idle_wl_push(sl_task *t) {
@@ -999,7 +1127,9 @@ static void sl_rt_wait_idle(void) {
         atomic_fetch_add(&sl_rt_idle_spawned_waiters, 1);
     while (atomic_load(&sl_rt_active_spawns) >
            atomic_load(&sl_rt_idle_spawned_waiters)) {
-        sl_rt_idle_wl_push(sl_rt_cur());
+        sl_task *wself = sl_rt_cur();
+        sl_task_set_wait(wself, "wait_idle");
+        sl_rt_idle_wl_push(wself);
         sl_task_park(&sl_rt_idle_mu);
         pthread_mutex_lock(&sl_rt_idle_mu);
     }
