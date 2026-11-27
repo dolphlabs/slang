@@ -507,9 +507,43 @@ static int sl_gc_test_nursery_adapt(void) {
     return bad;
 }
 
+static int sl_gc_test_pacing(void) {
+    size_t mb = (size_t)1024 * 1024;
+    struct pacing_case {
+        const char *name;
+        size_t live;
+        long pct;
+        size_t limit;
+        size_t want;
+    } cases[] = {
+        {"default below floor", 2 * mb, 100, 0, 8 * mb},
+        {"default above floor", 20 * mb, 100, 0, 20 * mb},
+        {"pct 200", 20 * mb, 200, 0, 40 * mb},
+        {"pct 50 above floor", 20 * mb, 50, 0, 10 * mb},
+        {"pct 50 floor", 10 * mb, 50, 0, 8 * mb},
+        {"pct off no limit", 20 * mb, -1, 0, SIZE_MAX / 2},
+        {"memlimit clamps below live ratio", 10 * mb, 100, 16 * mb, 6 * mb},
+        {"memlimit clamps pct off", 4 * mb, -1, 16 * mb, 12 * mb},
+        {"memlimit near cap floor", 15 * mb + 512 * 1024, 100, 16 * mb, 1 * mb},
+        {"memlimit exceeded anti-thrash", 32 * mb, 100, 16 * mb, 2 * mb},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        size_t got = sl_gc_compute_threshold(cases[i].live, cases[i].pct,
+                                             cases[i].limit);
+        if (got != cases[i].want) {
+            fprintf(stderr, "gc pacing %s: got %zu, expected %zu\n",
+                    cases[i].name, got, cases[i].want);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int main(void) {
     if (sl_gc_test_nursery_adapt()) return 1;
     puts("PASS nursery adaptation policy");
+    if (sl_gc_test_pacing()) return 1;
+    puts("PASS gc pacing policy");
     if (sl_runtime_test_main()) return 1;
     if (sl_gc_test_inline_bytes()) return 1;
     if (sl_gc_test_pointer_free()) { fprintf(stderr, "pointer_free test FAILED\n"); return 1; }
