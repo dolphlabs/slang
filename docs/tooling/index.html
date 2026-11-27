@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tooling — slang</title>
+<meta name="description" content="Testing, race detection, profiling, task dumps, LSP and CLI tools.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<meta name="theme-color" content="#07080a" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f7f5ef" media="(prefers-color-scheme: light)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="Tooling">
+<meta property="og:description" content="Testing, race detection, profiling, task dumps, LSP and CLI tools.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://slang.dolphlabs.com/tooling/">
+<meta property="og:image" content="https://slang.dolphlabs.com/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The slang rabbit mark beside the slang wordmark">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://slang.dolphlabs.com/tooling/">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../tooling/index.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preload" href="../fonts/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<script>
+/* Before first paint, so a saved light theme never flashes dark. */
+try { var t = localStorage.getItem("slang-theme");
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="nav" data-nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="../" aria-label="slang home">
+      <img class="logo-on-dark" src="../brand/slang-logo-light.svg" alt="" width="77" height="32">
+      <img class="logo-on-light" src="../brand/slang-logo-dark.svg" alt="" width="77" height="32">
+    </a>
+    <nav class="nav-links" aria-label="Primary"><a href="../guide/">Guide</a><a href="../concurrency/">Concurrency</a><a href="../packages/">Packages</a><a class="active" href="../tooling/" aria-current="page">Tooling</a><a href="../bench/">Benchmarks</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a></nav>
+    <div class="nav-actions">
+      <button class="search-btn" type="button" data-search aria-label="Search the docs" aria-keyshortcuts="Control+K Meta+K /">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <span class="search-label">Search</span>
+        <kbd class="search-kbd">/</kbd>
+      </button>
+      <button class="icon-btn" type="button" data-theme-toggle aria-label="Switch to light theme" title="Switch theme">
+        <svg class="i-sun" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <svg class="i-moon" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.6A8 8 0 1 1 9.4 4a6.4 6.4 0 0 0 10.6 10.6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      </button>
+      <a class="btn btn-ghost btn-sm nav-gh" href="https://github.com/dolphlabs/slang">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span>GitHub</span>
+      </a>
+      <a class="btn btn-light btn-sm nav-start" href="../#install">Get started</a>
+      <button class="nav-menu" type="button" aria-expanded="false" aria-controls="nav-sheet" aria-label="Menu" data-menu>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6h14M3 10h14M3 14h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </div>
+  <nav class="nav-sheet" id="nav-sheet" aria-label="Menu" hidden><a href="../guide/">Guide</a><a href="../concurrency/">Concurrency</a><a href="../packages/">Packages</a><a class="active" href="../tooling/" aria-current="page">Tooling</a><a href="../bench/">Benchmarks</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="https://github.com/dolphlabs/slang">GitHub</a></nav>
+</header>
+
+<div class="docbar">
+  <button class="docbar-btn" type="button" aria-expanded="false" aria-controls="sidebar" data-drawer>
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    <span>Docs</span>
+  </button>
+  <span class="docbar-here">Tooling</span>
+</div>
+
+<div class="docs">
+  <aside class="sidebar" id="sidebar" aria-label="Documentation">
+    <div class="sidebar-inner"><div class="side-group"><p class="side-title">Start</p><ul class="side-list"><li><a href="../">Overview</a></li><li><a href="../guide/">Guide</a></li><li><a href="../guide/data">Data types</a></li><li><a href="../guide/errors">Errors</a></li><li><a href="../guide/functions">Functions</a></li></ul></div><div class="side-group"><p class="side-title">Build</p><ul class="side-list"><li><a href="../concurrency/">Concurrency</a></li><li><a href="../testing/">Testing</a></li><li><a href="../tooling/" aria-current="page">Tooling</a></li><li><a href="../packages/">Packages</a></li><li><a href="../interop/">C interop</a></li></ul></div><div class="side-group"><p class="side-title">Under the hood</p><ul class="side-list"><li><a href="../internals/">Internals</a></li><li><a href="../bench/">Benchmarks</a></li><li><a href="../limitations/">Limitations</a></li></ul></div><details class="side-group side-pkgs"><summary>Packages<span class="side-count">79</span></summary><ul class="side-list"><li><a href="../packages/acme">acme</a></li><li><a href="../packages/balance">balance</a></li><li><a href="../packages/builder">builder</a></li><li><a href="../packages/byteutil">byteutil</a></li><li><a href="../packages/cache">cache</a></li><li><a href="../packages/cbor">cbor</a></li><li><a href="../packages/compress">compress</a></li><li><a href="../packages/context">context</a></li><li><a href="../packages/crdt">crdt</a></li><li><a href="../packages/crypto">crypto</a></li><li><a href="../packages/csv">csv</a></li><li><a href="../packages/decimal">decimal</a></li><li><a href="../packages/dns">dns</a></li><li><a href="../packages/encoding">encoding</a></li><li><a href="../packages/envelope">envelope</a></li><li><a href="../packages/flags">flags</a></li><li><a href="../packages/fs">fs</a></li><li><a href="../packages/http">http</a></li><li><a href="../packages/http2">http2</a></li><li><a href="../packages/httpc">httpc</a></li><li><a href="../packages/idempotency">idempotency</a></li><li><a href="../packages/io">io</a></li><li><a href="../packages/json">json</a></li><li><a href="../packages/lease">lease</a></li><li><a href="../packages/log">log</a></li><li><a href="../packages/math">math</a></li><li><a href="../packages/math/big">math/big</a></li><li><a href="../packages/math/finance">math/finance</a></li><li><a href="../packages/math/geo">math/geo</a></li><li><a href="../packages/math/interp">math/interp</a></li><li><a href="../packages/math/numtheory">math/numtheory</a></li><li><a href="../packages/math/optimize">math/optimize</a></li><li><a href="../packages/math/shard">math/shard</a></li><li><a href="../packages/math/sketch">math/sketch</a></li><li><a href="../packages/math/stats">math/stats</a></li><li><a href="../packages/math/vec">math/vec</a></li><li><a href="../packages/memcache">memcache</a></li><li><a href="../packages/metrics">metrics</a></li><li><a href="../packages/msgpack">msgpack</a></li><li><a href="../packages/multipart">multipart</a></li><li><a href="../packages/mysql">mysql</a></li><li><a href="../packages/nats">nats</a></li><li><a href="../packages/net">net</a></li><li><a href="../packages/oidc">oidc</a></li><li><a href="../packages/os">os</a></li><li><a href="../packages/otp">otp</a></li><li><a href="../packages/outbox">outbox</a></li><li><a href="../packages/pg">pg</a></li><li><a href="../packages/pool">pool</a></li><li><a href="../packages/proc">proc</a></li><li><a href="../packages/protobuf">protobuf</a></li><li><a href="../packages/proxyproto">proxyproto</a></li><li><a href="../packages/rand">rand</a></li><li><a href="../packages/redis">redis</a></li><li><a href="../packages/regex">regex</a></li><li><a href="../packages/resilience">resilience</a></li><li><a href="../packages/runtime">runtime</a></li><li><a href="../packages/s3">s3</a></li><li><a href="../packages/sigv4">sigv4</a></li><li><a href="../packages/singleflight">singleflight</a></li><li><a href="../packages/smtp">smtp</a></li><li><a href="../packages/sort">sort</a></li><li><a href="../packages/sql">sql</a></li><li><a href="../packages/sse">sse</a></li><li><a href="../packages/strings">strings</a></li><li><a href="../packages/tar">tar</a></li><li><a href="../packages/template">template</a></li><li><a href="../packages/time">time</a></li><li><a href="../packages/timez">timez</a></li><li><a href="../packages/toml">toml</a></li><li><a href="../packages/trace">trace</a></li><li><a href="../packages/unicode">unicode</a></li><li><a href="../packages/uuid">uuid</a></li><li><a href="../packages/webauthn">webauthn</a></li><li><a href="../packages/websocket">websocket</a></li><li><a href="../packages/x509">x509</a></li><li><a href="../packages/xml">xml</a></li><li><a href="../packages/yaml">yaml</a></li><li><a href="../packages/zip">zip</a></li></ul></details></div>
+  </aside>
+  <div class="drawer-scrim" data-scrim hidden></div>
+
+  <main id="main" class="doc-main">
+
+    <article class="content">
+      <nav class="crumbs" aria-label="Breadcrumb"><a href="../">Docs</a><span class="sep" aria-hidden="true">/</span><span aria-current="page">Tooling</span></nav>
+      <header class="page-head">
+        <h1>Tooling</h1>
+        <p class="tagline">Testing, race detection, profiling, task dumps, LSP and CLI tools.</p>
+        <p class="agentline">
+          <a href="../tooling/index.md">Markdown</a><span aria-hidden="true">·</span><a href="../llms.txt">llms.txt</a><span aria-hidden="true">·</span><a href="../api.json">api.json</a>
+        </p>
+      </header>
+<h2 id="tooling">Tooling</h2>
+<p>slang ships its everyday engineering tools either directly inside <code>slangc</code> and the standard library (<code>runtime</code>) or as companion open-source tools in the ecosystem, so teams can test, race-check, profile, format, and inspect production binaries without wiring together external toolchains.</p>
+<div class="tablewrap"><table><thead><tr><th>Tool</th><th>Role</th><th>Entry point</th></tr></thead><tbody><tr><td>Compiler, deps &amp; docs</td><td>Compile to C/native binary, fetch <code>pkg</code> pins, query stdlib signatures, JSON diagnostics</td><td><code>slangc</code> (<code>new</code>, <code>get</code>, <code>doc</code>, <code>--run</code>, <code>--dev</code>, <code>--json</code>)</td></tr><tr><td>Test runner</td><td>Package-level task-isolated tests with filtering and verbose timing</td><td><code>slangc test</code> (<code>-v</code>, <code>--run &lt;pat&gt;</code>, <code>--keep</code>)</td></tr><tr><td>Data-race detector</td><td>ThreadSanitizer across M:N <code>spawn</code> tasks and OS workers</td><td><code>slangc test --race</code>, <code>slangc --race</code>, <code>SLANG_RACE=1</code></td></tr><tr><td>Profiler &amp; task dumps</td><td>Live green-task snapshot (<code>SIGQUIT</code>), 100 Hz CPU profiler, sampled allocation/heap profiler, <code>/debug/pprof/</code> text handler</td><td><code>import &quot;runtime&quot;</code>, <code>kill -QUIT &lt;pid&gt;</code></td></tr><tr><td>Runtime &amp; GC tuning</td><td>Exit GC/scheduler stats, minor write-barrier verifier, <code>GOGC</code>-style pacing &amp; soft memory limit</td><td><code>SLANG_GC_STAT</code>, <code>SLANG_GC_VERIFY_MINOR</code>, <code>SLANG_GC_PERCENT</code>, <code>SLANG_GC_MEMLIMIT_MB</code></td></tr><tr><td>Language server &amp; formatter</td><td>Diagnostics, hover, goto-definition, completion, inlay hints, semantic tokens, deterministic formatting</td><td><a href="https://github.com/dolphlabs/slang-analyser"><code>slanganalyser</code></a> (<code>slang.project</code>)</td></tr><tr><td>Backend CLI &amp; arch linter</td><td>Scaffold layered services, fast live watch reloads, enforce architectural rules, run migrations</td><td><a href="https://github.com/dolphlabs/zokor_cli"><code>zokor_cli</code></a> (<code>zokor newcomp</code>, <code>watch</code>, <code>check</code>)</td></tr><tr><td>Schema code generators</td><td>Generate typed <code>.sl</code> structs/codecs from GraphQL SDL or <code>.proto</code> definitions</td><td><a href="https://github.com/dolphlabs/graphql"><code>graphqlc</code></a>, <a href="https://github.com/dolphlabs/grpc"><code>protoc-gen-slang</code></a></td></tr></tbody></table></div>
+<h3 id="compiler-cli-json-diagnostics">Compiler CLI &amp; JSON diagnostics<a class="anchor" href="#compiler-cli-json-diagnostics" aria-label="Link to this section">#</a></h3>
+<div class="code"><div class="code-bar"><span class="code-lang">shell</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code>slangc new billing              # scaffold slang.project, main.sl, .gitignore
+slangc get                      # fetch git pkg dependencies and write slang.lock
+slangc main.sl --dev --run      # fast unoptimized edit-run loop (about 10x faster C compiles)
+slangc main.sl -o billing       # optimized native binary (-O3)
+slangc main.sl --emit-c         # write main.gen.c without invoking cc
+slangc main.sl --json           # emit compile errors as JSON lines on stderr
+slangc doc httpc client_post    # query signatures and docstrings offline</code></pre></div>
+<p><code>--json</code> outputs one compact JSON object per error so agents and editors can fix every file in one pass:</p>
+<div class="code"><div class="code-bar"><span class="code-lang">JSON</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code>{&quot;file&quot;:&quot;main.sl&quot;,&quot;line&quot;:14,&quot;severity&quot;:&quot;error&quot;,&quot;message&quot;:&quot;undefined variable &#x27;summ&#x27; (did you mean &#x27;sum&#x27;?)&quot;}</code></pre></div>
+<h3 id="test-runner-data-race-detection">Test runner &amp; data-race detection<a class="anchor" href="#test-runner-data-race-detection" aria-label="Link to this section">#</a></h3>
+<p><code>slangc test</code> compiles all <code>*_test.sl</code> files alongside a package, runs every <code>test_*</code> function in its own green task, and prints one summary line when everything passes:</p>
+<div class="code"><div class="code-bar"><span class="code-lang">shell</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code>slangc test                     # run tests in the current package
+slangc test -v --run retry      # verbose timing for tests matching &quot;retry&quot;
+slangc test --race stdlib/net   # compile &amp; run tests under ThreadSanitizer
+slangc main.sl --race --run     # run a full binary with race detection enabled
+SLANG_RACE=1 ./slangc app.sl --run</code></pre></div>
+<p>Under <code>--race</code> / <code>SLANG_RACE=1</code>, <code>slangc</code> compiles with <code>-fsanitize=thread</code> and links runtime task-switch annotations (<code>sl_tsan_*</code>) so TSan tracks green tasks accurately when they migrate across worker OS threads:</p>
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="c">// counter_test.sl</span>
+<span class="k">fn</span> <span class="f">worker</span>(mtx: <span class="t">mutex</span>, ch: <span class="t">chan</span>[<span class="t">int</span>]) {
+    <span class="b">mutex_lock</span>(mtx);
+    <span class="c">// critical section protected across spawned tasks</span>
+    <span class="b">mutex_unlock</span>(mtx);
+    <span class="b">chan_send</span>(ch, <span class="n">1</span>);
+}
+
+<span class="k">fn</span> <span class="f">test_concurrent_handoff</span>() {
+    <span class="k">let</span> mtx = <span class="b">make_mutex</span>();
+    <span class="k">let</span> ch: <span class="t">chan</span>[<span class="t">int</span>] = <span class="b">make_chan</span>(<span class="n">2</span>);
+    <span class="k">spawn</span> <span class="f">worker</span>(mtx, ch);
+    <span class="k">spawn</span> <span class="f">worker</span>(mtx, ch);
+    <span class="f">assert</span>((<span class="b">chan_recv</span>(ch) ?? <span class="n">0</span>) + (<span class="b">chan_recv</span>(ch) ?? <span class="n">0</span>) == <span class="n">2</span>);
+}</code></pre></div>
+<h3 id="profiling-live-task-dumps-pprof-sigquit">Profiling &amp; live task dumps (<code>pprof</code> &amp; <code>SIGQUIT</code>)<a class="anchor" href="#profiling-live-task-dumps-pprof-sigquit" aria-label="Link to this section">#</a></h3>
+<p>Every compiled slang binary ships built-in task inspection and sampling profilers without extra daemons:</p>
+<ul><li><strong>Signal dump (<code>SIGQUIT</code> / <code>Ctrl-\</code>)</strong>: sends a live snapshot of all running, runnable, and parked tasks with wait reasons (<code>chan send</code>, <code>chan recv</code>, <code>mutex</code>, <code>select</code>, <code>join</code>, <code>sleep</code>, <code>net io</code>) and <code>.sl</code> source file/line locations to <code>stderr</code> without terminating the process (set <code>SLANG_SIGQUIT_EXIT=1</code> to exit immediately after dumping):</li></ul>
+<div class="code"><div class="code-bar"><span class="code-lang">shell</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code>kill -QUIT &lt;pid&gt;</code></pre></div>
+<div class="code"><div class="code-bar"><span class="code-lang">text</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code></code></pre></div>
+<nav class="pager" aria-label="Previous and next"><a class="prev" href="../testing/"><span class="dir">Previous</span><span class="name">Testing</span></a><a class="next" href="../packages/"><span class="dir">Next</span><span class="name">Packages</span></a></nav>
+    </article>
+  </main>
+
+  <aside class="toc" aria-label="On this page">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+
+<footer class="foot">
+  <div class="foot-inner">
+    <a class="foot-logo" href="../" aria-label="slang home">
+      <img class="logo-on-dark" src="../brand/slang-icon-light.svg" alt="" width="28" height="28">
+      <img class="logo-on-light" src="../brand/slang-icon-dark.svg" alt="" width="28" height="28">
+    </a>
+    <p class="foot-by">Built and maintained by
+      <a href="https://dolphlabs.com" rel="noopener">Dolphlabs</a> · Dolph Tech Limited</p>
+    <p class="foot-note">Generated from the repository by <code>www/build.py</code>:
+      the guide from <code>README.md</code>, the API from the compiler's own
+      signature tables and the <code>pub</code> declarations in
+      <code>stdlib/</code>. Nothing here is written twice.</p>
+  </div>
+</footer>
+
+<div class="palette" id="palette" role="dialog" aria-modal="true" aria-label="Search the docs" hidden>
+  <div class="palette-box">
+    <div class="palette-field">
+      <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <input id="palette-input" type="search" placeholder="Search pages, packages and functions" autocomplete="off" spellcheck="false"
+             role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list">
+      <kbd>esc</kbd>
+    </div>
+    <div class="palette-list" id="palette-list" role="listbox" aria-label="Results"></div>
+    <div class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

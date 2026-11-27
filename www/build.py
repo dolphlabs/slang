@@ -129,6 +129,14 @@ PAGES = [
         "sections": ["Testing"],
     },
     {
+        "path": "tooling/index.html",
+        "title": "Tooling",
+        "tagline": "Testing, race detection, profiling, task dumps, LSP and CLI tools.",
+        "kind": "doc",
+        "nav": "Tooling",
+        "sections": ["Tooling"],
+    },
+    {
         "path": "bench/index.html",
         "title": "Benchmarks",
         "tagline": "Every cross-language run, including the ones slang loses.",
@@ -668,6 +676,7 @@ HEADER_LINKS = [
     ("Guide", "guide/index.html", ("guide/",)),
     ("Concurrency", "concurrency/index.html", ("concurrency/",)),
     ("Packages", "packages/index.html", ("packages/",)),
+    ("Tooling", "tooling/index.html", ("tooling/",)),
     ("Benchmarks", "bench/index.html", ("bench/",)),
     ("C interop", "interop/index.html", ("interop/",)),
     ("Internals", "internals/index.html", ("internals/",)),
@@ -680,7 +689,8 @@ SIDEBAR_GROUPS = [
     ("Start", ["index.html", "guide/index.html", "guide/data.html",
                "guide/errors.html", "guide/functions.html"]),
     ("Build", ["concurrency/index.html", "testing/index.html",
-               "packages/index.html", "interop/index.html"]),
+               "tooling/index.html", "packages/index.html",
+               "interop/index.html"]),
     ("Under the hood", ["internals/index.html", "bench/index.html",
                         "limitations/index.html"]),
 ]
