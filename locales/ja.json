@@ -4,9 +4,7 @@
   "meta.og_description": "言語の全体が約3,000トークンのコンテキストに。修正方法を示すエラー。C を経由して小さな単一のネイティブバイナリにコンパイル。",
   "meta.og_image_alt": "slang のウサギのマークと slang のロゴタイプ",
   "meta.ld_description": "サーバーとネットワークのための静的型付け言語。C にコンパイルされます。",
-
   "common.get_started": "はじめる",
-
   "nav.skip": "本文へスキップ",
   "nav.home": "slang ホーム",
   "nav.primary": "メイン",
@@ -17,12 +15,10 @@
   "nav.benchmarks": "ベンチマーク",
   "nav.interop": "C 連携",
   "nav.internals": "内部構造",
-
   "lang.label": "言語",
   "lang.suggest": "このページは日本語でも読めます。",
   "lang.dismiss": "閉じる",
   "lang.docs_note": "ガイド、パッケージリファレンス、その他のドキュメントは英語です。",
-
   "search.aria": "ドキュメントを検索",
   "search.label": "検索",
   "search.placeholder": "ページ、パッケージ、関数を検索",
@@ -33,7 +29,6 @@
   "search.empty": "「{query}」に一致するものはありません。",
   "search.unavailable": "検索は、ドキュメントがサイトと一緒にデプロイされると使えます。",
   "search.pages": "ページ",
-
   "hero.pill_long": "新パッケージ38個: DNS、パスキー、ACME、OIDC ほか",
   "hero.pill_short": "新機能",
   "hero.title_1": "slang で書く。",
@@ -42,20 +37,17 @@
   "hero.lede": "言語の全体が約3,000トークンのコンテキストに収まります。エラーは修正方法を示し、成功したテストは1行だけを出力するので、エージェントは読む量も、推測も、やり直しも減ります。サーバーは C を経由して、小さな単一のネイティブバイナリにコンパイルされます。",
   "hero.give_agent": "エージェントに渡す",
   "hero.race_tag": "トークン",
-  "hero.race_long": "slang と Go と TypeScript を、同じタスク・同じエージェントで比較: <b>ベンチマーク実施中</b>",
-  "hero.race_short": "Go・TypeScript と比較: <b>ベンチマーク実施中</b>",
-
+  "hero.race_long": "slang・Go・Rust・TypeScript、5タスク・同一エージェント: <b>5/5 合格、705 行</b>",
+  "hero.race_short": "Go・Rust・TS と比較: <b>5/5 合格、705 行</b>",
   "stats.label": "数字で見る slang",
   "stats.tokens_unit": "トークン",
   "stats.tokens_desc": "で言語の全体を読めます。エージェントが丸ごと保持できる1ページです。",
   "stats.mem_desc": "は 39.9k req/s を処理したときのピークメモリ。Go: 9.6&nbsp;MB、Node: 185&nbsp;MB。",
   "stats.cpu_desc": "CPU とアロケーションのベンチマークで。Rust に次ぐ2位です。",
   "stats.note": "言語横断スイートの軽量ティア、4 vCPU の VM。<a href=\"/bench/\">負けた結果も含む、すべての実行 →</a>",
-
   "run.eyebrow": "試してみる",
   "run.title": "一度読んで、実行を押す。",
   "run.lede": "6つの小さなプログラムと、その出力。プロンプトに収まるほど短く、間違いが最初の実行で見つかるほど厳密です。",
-
   "runner.tablist": "サンプルプログラム",
   "runner.foot": "{tool} で記録。CI が各プログラムをコンパイルし、出力を本物のコンパイラと照合します。",
   "runner.run": "実行",
@@ -65,7 +57,6 @@
   "runner.note.json": "型付きデコード。エラーは正確なフィールドパスを示します。",
   "runner.note.generics": "メソッドは、呼び出された型に対してだけ検査されます。",
   "runner.note.regex": "線形時間のマッチング。どんなパターンでもバックトラックは起きません。",
-
   "perf.eyebrow": "パフォーマンス",
   "perf.title": "小ささが機能です。",
   "perf.lede": "同じ契約のもとで5言語と比較し、計測の前に適合性チェックを行いました。メモリでは slang が抜きん出ています。JSON API では Rust と互角です。",
@@ -80,7 +71,6 @@
   "perf.fact_gc": "マイナー GC あたり。生存オブジェクトが 2万でも 100万でも同じ",
   "perf.fact_h2": "で、1接続上の 500&nbsp;ms の HTTP/2 リクエスト4件が完了",
   "perf.fine": "<a href=\"https://github.com/dolphlabs/slang/tree/main/bench/suite\"><code>bench/suite</code></a> の全体、軽量ティアと重量ティア: slang、Go、Rust、Java、Bun、Node を共有 4 vCPU の VM(サーバーには物理コア1つ)で実行、3回の中央値、2026年11月。データベースや負荷生成側が上限になった結果は全記録に明記しています。<a href=\"/bench/\">全記録と方法 →</a>",
-
   "conc.title": "止めるのはタスク。スレッドではない。",
   "conc.lede": "<code>spawn</code> は、コアごとに1つのワーカーを持つプールにグリーンタスクを載せます。ソケット、スリープ、チャネル、ロックはタスクを停止させ、スレッドを返します。<code>async</code> も <code>await</code> も、関数の「第二の色」もありません。ブロックして見えるコードが、そのまま単純なままです。",
   "conc.tick_1": "<b>1万タスク</b>が各 100&nbsp;ms スリープしても、ノート PC で約 0.5&nbsp;秒で終わります。",
@@ -92,7 +82,6 @@
   "conc.sched_queues": "実行キュー",
   "conc.sched_workers": "ワーカースレッド、コアごとに1つ",
   "conc.caption": "何千もの停止中のタスクと、わずかなスレッド。起きたタスクはキューに戻り、空いたワーカーが拾います。",
-
   "agents.eyebrow": "エージェントのために",
   "agents.title": "学ぶのも、直すのも安い。",
   "agents.lede": "エージェントはトークンを、ドキュメントを読むこと、選択肢を選ぶこと、エラー後にやり直すことに使います。slang はこの3つを減らすよう設計されており、エージェントにも、その成果をレビューする人にも効きます。",
@@ -105,16 +94,21 @@
   "agents.quiet_title": "うまくいくときは静か",
   "agents.quiet_text": "エージェントが負担できるツール出力: テストが通れば1行、通らなければ失敗だけ。",
   "agents.quiet_bar": "緑の壁はなし",
-  "agents.bench_status": "初回実行は未実施",
+  "agents.bench_status": "実行 2026-11-26 · claude-opus-5-5",
   "agents.bench_title": "主張を、公開の場で測る。",
-  "agents.bench_text": "5つのバックエンドタスクを、同じエージェントに3通りで渡します: zokor を使った slang、Fiber を使った Go、NestJS を使った TypeScript。非公開のブラックボックステストが合否を決めます。通るまでの入力トークン、出力トークン、ターン数を数え、slang がまだ無駄を出している実行も公開します。",
-  "agents.bench_link": "ハーネス、仕様、テスト →",
+  "agents.bench_text": "5つのバックエンド課題を同一エージェントで4スタック比較しました（各1回実行）。全スタックが5/5の非公開受け入れテストに合格しました。Slangは最小コード量（705行 vs 922〜1,705行）と低メモリ（9.6 MB RSS・46.2k req/s）を示した一方、事前学習に Slang/Zokor がないため総キャッシュ入力トークン数（765k）はまだ多くなっています。",
+  "agents.bench_link": "全結果・ハーネス・生データ →",
+  "agents.th_stack": "スタック",
+  "agents.th_pass": "合格",
+  "agents.th_loc": "行数",
+  "agents.th_out": "出力",
+  "agents.th_tokens": "総数",
+  "agents.bench_foot": "以下5タスクの中央値（--runs 1、MacBook Pro i5-8279U）。テスト除くソース合計行数。",
   "agents.task_notes": "検証付き CRUD",
   "agents.task_auth": "ログイン、Bearer トークン、ミドルウェア、ログアウト",
   "agents.task_jobs": "並行処理を伴うバックグラウンドワーカー",
   "agents.task_ratelimit": "<code>Retry-After</code> 付きのクライアント別制限",
   "agents.task_upload": "マルチパート、サイズ制限、安全なファイル名",
-
   "zokor.title": "何をするにも、道は一つ。",
   "zokor.lede": "zokor は slang のバックエンドフレームワークです。どのサービスも毎回違う形で決めている事柄を先に決めてしまうので、エージェントも新メンバーも決める必要がありません。",
   "zokor.kicker": "エージェントが直面する選択はどれも推論トークンを消費します。zokor はそれに一度だけ答えます。",
@@ -131,7 +125,6 @@
   "zokor.q_ws": "WebSocket は?",
   "zokor.a_ws": "RFC 6455 と Socket.IO",
   "zokor.link": "GitHub の zokor →",
-
   "syntax.eyebrow": "言語",
   "syntax.title": "見慣れた形に、小さな仕様。どちらも意図的に。",
   "syntax.read_title": "すでに読める構文",
@@ -151,7 +144,6 @@
   "syntax.c_title": "C はランタイムであって、異国ではない",
   "syntax.c_text": "slang は C を出力し、それをあなたの <code>cc</code> に渡します。C ライブラリの呼び出しは <code>extern fn</code> とリンカーフラグだけ。バインディング生成器も、マーシャリング層も、別のビルドシステムも要りません。",
   "syntax.c_link": "C 連携 →",
-
   "pkg.eyebrow": "標準ライブラリ",
   "pkg.title": "バッテリーはコンパイラの中に。",
   "pkg.lede": "<code>slangc</code> には79個のパッケージが付属します。ネイティブのものはプログラムがインポートしたときだけリンクされるので、素朴な TCP サーバーは OpenSSL、SQLite、zlib と無縁のままです。",
@@ -236,7 +228,6 @@
   "pkg.math_sketch": "固定メモリで異なり数・頻出キー・パーセンタイルを推定",
   "pkg.any_c_name": "あらゆる C ライブラリ",
   "pkg.any_c": "<code>extern fn</code> とリンカーフラグ",
-
   "eco.eyebrow": "エコシステム",
   "eco.title": "<code>pkg</code> 1行で追加。",
   "eco.lede": "それぞれ独自のリポジトリにあり、標準ライブラリの上に slang で書かれたパッケージです。<code>slang.project</code> に <code>pkg</code> の行を1つ足せば、<code>slangc</code> が指定したタグで取得します。",
@@ -257,7 +248,6 @@
   "eco.any_git": "<code>pkg</code> の行とタグだけ。ハッシュは <code>slang.lock</code> が保持",
   "eco.yours_name": "あなたの",
   "eco.yours": "公開しましたか? プルリクエストでここに載せます",
-
   "install.title": "クローンから hello まで。",
   "install.lede": "ソースからコンパイラをビルドして、プロジェクトを始めます。<code>make install</code> は <code>slangc</code> とそのランタイムを <code>/usr/local</code> に置きます。<code>PREFIX=~/.local</code> も使えます。",
   "install.req_caption": "必要なもの",
@@ -276,7 +266,6 @@
   "install.next_agent_desc": "言語の全体を1ページで",
   "install.next_packages": "パッケージを見る",
   "install.next_packages_desc": "すべての関数をドキュメント付きで",
-
   "faq.eyebrow": "FAQ",
   "faq.title": "よくある質問。",
   "faq.q_prod": "slang は本番で使えますか?",
@@ -293,11 +282,9 @@
   "faq.a_ffi": "はい。<code>extern fn</code> と <code>link \"name\"</code> を使います。数値、<code>bool</code>、<code>str</code>、<code>bytes</code>、不透明ポインタは境界を越えられます。GC 管理の値はコンパイル時に拒否されるので、C 側がそのレイアウトを見ることはありません。",
   "faq.q_who": "slang は誰が作っていますか?",
   "faq.a_who": "<a href=\"https://dolphlabs.com\">Dolphlabs</a> (Dolph Tech Limited) が、オープンな形で、MIT ライセンスのもとで開発しています。",
-
   "cta.title": "飛び込もう。",
   "cta.tagline": "slang で書く。C として届ける。",
   "cta.github": "GitHub で見る",
-
   "footer.nav": "フッター",
   "footer.tagline": "super language. compiles to C.",
   "footer.learn": "学ぶ",
