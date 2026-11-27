@@ -1701,6 +1701,47 @@ else
     echo "PASS stopped threads help a major's mark (major_mark_helps=$mjhelps)"
 fi
 
+# ---- parallel mark work-sharing & configurable GC pacing ------------------
+echo "--- GC parallel mark & pacing ---"
+pm_dir=$(mktemp -d)
+if ! ./slangc tests/gc_parallel_mark/main.sl -o "$pm_dir/pm" >/dev/null 2>&1; then
+    echo "FAIL GC parallel mark (compile)"
+    fail=1
+else
+    pm_stat=$(SLANG_WORKERS=4 SLANG_GC_STAT=1 "$pm_dir/pm" 2>&1 >/dev/null)
+    pm_helps=$(printf '%s\n' "$pm_stat" | sed -n 's/.* major_mark_helps=\([0-9]*\).*/\1/p')
+    pm_steals=$(printf '%s\n' "$pm_stat" | sed -n 's/^slang-gc-stat mark_steals=\([0-9]*\).*/\1/p')
+    pm_thresh=$(printf '%s\n' "$pm_stat" | sed -n 's/^slang-gc-stat collects=.* threshold=\([0-9]*\).*/\1/p')
+    pm_bad=0
+    if [ -z "$pm_helps" ] || [ "$pm_helps" -eq 0 ]; then
+        echo "FAIL GC parallel mark: major_mark_helps=${pm_helps:-?}"
+        pm_bad=1; fail=1
+    fi
+    if [ -z "$pm_steals" ] || [ "$pm_steals" -eq 0 ]; then
+        echo "FAIL GC parallel mark work-sharing: mark_steals=${pm_steals:-?}"
+        pm_bad=1; fail=1
+    fi
+    pm_verify=$(SLANG_WORKERS=4 SLANG_GC_VERIFY_MINOR=1 "$pm_dir/pm" 2>&1 >/dev/null |
+                sed -n 's/^slang-gc-verify minors=[0-9]* missed=\([0-9]*\).*/\1/p')
+    if [ -z "$pm_verify" ] || [ "$pm_verify" -ne 0 ]; then
+        echo "FAIL GC parallel mark minor verify: missed=${pm_verify:-?}"
+        pm_bad=1; fail=1
+    fi
+    t200=$(SLANG_WORKERS=4 SLANG_GC_PERCENT=200 SLANG_GC_STAT=1 "$pm_dir/pm" 2>&1 >/dev/null |
+           sed -n 's/^slang-gc-stat collects=.* threshold=\([0-9]*\).*/\1/p')
+    t50=$(SLANG_WORKERS=4 SLANG_GC_PERCENT=50 SLANG_GC_STAT=1 "$pm_dir/pm" 2>&1 >/dev/null |
+          sed -n 's/^slang-gc-stat collects=.* threshold=\([0-9]*\).*/\1/p')
+    tlim=$(SLANG_WORKERS=4 SLANG_GC_MEMLIMIT_MB=16 SLANG_GC_STAT=1 "$pm_dir/pm" 2>&1 >/dev/null |
+           sed -n 's/^slang-gc-stat collects=.* threshold=\([0-9]*\).*/\1/p')
+    if [ -z "$t200" ] || [ -z "$t50" ] || [ -z "$tlim" ] ||
+       [ "$t200" -le "$t50" ] || [ "$tlim" -ge 8388608 ]; then
+        echo "FAIL GC pacing thresholds: default=${pm_thresh:-?} pct200=${t200:-?} pct50=${t50:-?} memlimit16=${tlim:-?}"
+        pm_bad=1; fail=1
+    fi
+    [ "$pm_bad" -eq 0 ] && echo "PASS GC parallel mark & pacing (helps=$pm_helps steals=$pm_steals pct200=$t200 pct50=$t50 limit16=$tlim)"
+fi
+rm -rf "$pm_dir"
+
 # ---- minors skip long-idle parked tasks ---------------------------------------
 # A parked task that two minors have scanned since it last ran holds only
 # old objects, so later minors leave its roots out (sl_gc_root_units_build;

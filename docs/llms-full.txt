@@ -8655,9 +8655,11 @@ What this means in practice:
   cost follows the nursery, not the heap: about 0.8ms per minor whether a
   program keeps 20k or a million long-lived objects. Majors sweep
   everything and promote what they keep.
-- Both kinds sweep in parallel: the threads stopped for a collection take
-  a share of the heap's pages each, instead of waiting while one thread
-  sweeps them all. `SLANG_GC_STAT` counts the joins (`sweep_helps`).
+- Both kinds mark and sweep in parallel: the threads stopped for a
+  collection share root scanning, steal queued subgraphs via the
+  mark donation pool when a single root dominates a large heap
+  (`mark_steals` in `SLANG_GC_STAT=1`), and take a share of the heap's
+  pages to sweep (`sweep_helps`, `mark_helps`, `major_mark_helps`).
 - A list or map whose elements hold no pointer -- numbers, `bool`, enums,
   and value structs made only of those -- is never traced at all: a
   table of a million ints costs a collection nothing to keep.
@@ -8666,12 +8668,17 @@ What this means in practice:
   or map costs each minor only what was added since the previous one.
   Updating an existing map key is the exception: its position is not
   recorded, so the next minor traces that whole map.
+- `SLANG_GC_PERCENT=n` tunes major-collection headroom like Go's `GOGC`
+  (default `100`; `off` or `<= 0` disables ratio-triggered majors).
+  `SLANG_GC_MEMLIMIT_MB=n` sets a soft live-heap cap that tightens the
+  major threshold as retained memory approaches `n` MB (clamped safely
+  above a 1 MB / `live/16` floor to prevent thrashing).
 - `SLANG_GC_STAT=1` prints collection counts and pause times at exit
-  (`minor_pause_ns_total` for the minors).
-  `SLANG_GC_THRESHOLD_KB=n` collects every n KB instead, with no pacing:
-  for tests, since a rooting bug only shows when a collection lands at
-  the one safepoint where an object is unrooted. `SLANG_GC_NURSERY_KB=n`
-  does the same for minors.
+  (`minor_pause_ns_total` for the minors, `mark_steals` for work-sharing
+  transfers). `SLANG_GC_THRESHOLD_KB=n` collects every n KB instead,
+  with no pacing: for tests, since a rooting bug only shows when a
+  collection lands at the one safepoint where an object is unrooted.
+  `SLANG_GC_NURSERY_KB=n` does the same for minors.
 - `SLANG_GC_VERIFY_MINOR=1` checks every minor against a full mark and
   reports any live young object it missed, with the kind of old
   container holding it -- a store with no write barrier. It prints
