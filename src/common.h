@@ -58,10 +58,20 @@ typedef struct {
 } StrBuf;
 
 static inline void sb_init(StrBuf *sb) {
-    sb->cap = 1 << 16;
+    sb->cap = 256;
     sb->len = 0;
     sb->data = (char *)xmalloc(sb->cap);
     sb->data[0] = '\0';
+}
+
+static inline void sb_reserve(StrBuf *sb, size_t need) {
+    if (need + 1 <= sb->cap)
+        return;
+    size_t ncap = sb->cap ? sb->cap : 256;
+    while (ncap < need + 1)
+        ncap *= 2;
+    sb->data = (char *)xrealloc(sb->data, ncap);
+    sb->cap = ncap;
 }
 
 static inline void sb_append_n(StrBuf *sb, const char *s, size_t n) {
