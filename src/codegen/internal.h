@@ -481,14 +481,18 @@ struct CG {
      * StructDef or FuncSig, because instances register only when first
      * asked for: a miss today can hit tomorrow, so a cached "no" may not
      * outlive an append that could turn it into a hit. */
-    CGCache struct_map;   /* canonical -> StructDef *  (struct_find_canon) */
-    CGCache sig_map;      /* pkg/name    -> FuncSig *  (sig_find_in)      */
-    CGCache method_map;   /* pkg/of/name -> FuncSig *  (method_find hits) */
-    CGCache drop_map;     /* type spelling -> type_needs_drop result */
-    CGCache copy_map;     /* type spelling -> type_is_copy result    */
+    CGCache struct_map;     /* canonical -> StructDef *      (struct_find_canon)  */
+    CGCache sig_map;        /* pkg/name    -> FuncSig *      (sig_find_in)        */
+    CGCache method_map;     /* pkg/of/name -> FuncSig *      (method_find hits)   */
+    CGCache drop_map;       /* type spelling -> type_needs_drop result            */
+    CGCache copy_map;       /* type spelling -> type_is_copy result               */
+    CGCache import_map;     /* cur_pkg/alias -> target pkg   (import_try)         */
+    CGCache struct_pkg_map; /* pkg/name      -> StructDef *  (struct_find_in_pkg) */
+    CGCache glob_map;       /* pkg/name      -> index + 2    (glob_find)          */
     int insts_frozen;   /* set once the passes after the dry run have run:
                            a new instance from here on would never be
                            walked by them (see codegen_program) */
+    int dry_done;       /* set after the dry run finishes without errors */
     /* What generic instances cost, measured in the real run: the C their
      * bodies emitted, per template, against the program's own C (the
      * runtime excluded). For the instance warning in codegen_program. */
@@ -871,6 +875,9 @@ int safepoint_elidable(CG *cg, Expr *e);
 char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
                      const char *prelude, char *inner);
 FuncSig *sig_find_in(CG *cg, const char *pkg, const char *name);
+void *cg_cache_get(CGCache *c, const char *key);
+void cg_cache_put(CGCache *c, const char *key, void *val);
+void cg_cache_clear_one(CGCache *c);
 void cg_lookup_reset(CG *cg);
 void glob_push(CG *cg, const char *name, const char *pkg,
                       const char *slang, int is_pub);

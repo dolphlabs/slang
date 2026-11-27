@@ -353,9 +353,13 @@ static int load_import(Loader *ld, const char *from_dir,
                        ipath);
         /* The hash covers the package's complete included tree, including
            files outside `dir`; excluded directories are absent by design. */
-        char *got = project_tree_hash(cached);
-        if (strcmp(got, pin->hash))
-            load_error("package '%s' hash mismatch; run slangc get", ipath);
+        if (!pin->verified) {
+            char *got = project_tree_hash(cached);
+            if (strcmp(got, pin->hash))
+                load_error("package '%s' hash mismatch; run slangc get", ipath);
+            free(got);
+            pin->verified = 1;
+        }
         char *pkgdir = project_pkg_dir(pin);
         if (!project_is_dir(pkgdir))
             load_error("package '%s' has no directory '%s'", ipath, pin->dir);

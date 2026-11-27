@@ -1148,7 +1148,7 @@ const char *infer_binary(CG *cg, Expr *e) {
     return NULL; /* unreachable */
 }
 
-const char *infer_type(CG *cg, Expr *e) {
+static const char *infer_type_uncached(CG *cg, Expr *e) {
     switch (e->kind) {
     case EX_INT:
         /* resolve_enum_refs (enum.c) rewrites a `Type.Variant` reference
@@ -1576,6 +1576,15 @@ const char *infer_type(CG *cg, Expr *e) {
     }
     }
     return NULL; /* unreachable */
+}
+
+const char *infer_type(CG *cg, Expr *e) {
+    if (cg->dry_done && e->inf_ty)
+        return e->inf_ty;
+    const char *t = infer_type_uncached(cg, e);
+    if (t)
+        e->inf_ty = t;
+    return t;
 }
 
 /* ------------------------------------------------------------------ */

@@ -23,22 +23,25 @@
  * implies structurally: nothing here outlives a table append, the reset
  * hook see below. */
 
+void cg_cache_clear_one(CGCache *c) {
+    if (c->rows) {
+        for (int j = 0; j < c->cap; j++)
+            free(c->rows[j].key);
+        free(c->rows);
+    }
+    c->rows = NULL;
+    c->cap = c->count = 0;
+}
+
 void cg_lookup_reset(CG *cg) {
     /* Rows go away entirely: a cached negative answer ("no such struct",
      * "not copyable") is exactly what an append can invalidate, and the
      * append will be followed by asks whose answers depend on it. */
-    CGCache *caches[] = {&cg->struct_map, &cg->sig_map, &cg->method_map,
-                         &cg->drop_map,  &cg->copy_map};
-    for (int i = 0; i < 5; i++) {
-        CGCache *c = caches[i];
-        if (c->rows) {
-            for (int j = 0; j < c->cap; j++)
-                free(c->rows[j].key);
-            free(c->rows);
-        }
-        c->rows = NULL;
-        c->cap = c->count = 0;
-    }
+    CGCache *caches[] = {&cg->struct_map,     &cg->sig_map,  &cg->method_map,
+                         &cg->drop_map,       &cg->copy_map, &cg->import_map,
+                         &cg->struct_pkg_map, &cg->glob_map};
+    for (int i = 0; i < 8; i++)
+        cg_cache_clear_one(caches[i]);
 }
 
 /* type_needs_drop / type_is_copy results, parked as 1 = no, 2 = yes
@@ -103,6 +106,14 @@ static void *sv_get(CGCache *c, const char *key) {
         if (!strcmp(c->rows[slot].key, key))
             return c->rows[slot].val;
     }
+}
+
+void *cg_cache_get(CGCache *c, const char *key) {
+    return sv_get(c, key);
+}
+
+void cg_cache_put(CGCache *c, const char *key, void *val) {
+    sv_put(c, key, val);
 }
 
 
@@ -2523,6 +2534,7 @@ char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
     if (has_prelude)
         sb_append(&block, prelude);
     sb_append(&block, sp.data);
+    free(sp.data);
     if (result_ctype) {
         sb_append(&block,
                   xasprintf("%s _sl_spres%d = %s; sl_rt_safepoint_exit_s(SL_SELF()); "
@@ -2535,27 +2547,30 @@ char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
     return block.data;
 }
 
+/* Two-component cache key using stack buffer `buf` when possible. */
+static char *sv_pair_key(char *buf, size_t cap, const char *a, const char *b) {
+    size_t na = strlen(a), nb = strlen(b);
+    if (na + nb + 2 <= cap) {
+        memcpy(buf, a, na);
+        buf[na] = '\x01';
+        memcpy(buf + na + 1, b, nb);
+        buf[na + nb + 1] = '\0';
+        return buf;
+    }
+    return xasprintf("%s\x01%s", a, b);
+}
+
 /* A package-level function (or extern) by name. Never a method: those
  * live in their struct's namespace -- see method_find. */
 FuncSig *sig_find_in(CG *cg, const char *pkg, const char *name) {
-    /* pkg+name in one key: the packages and names are too varied to
-     * reserve a stack buffer they always fit, so the common size rides
-     * on one and only a long pair allocates. */
     char kbuf[192];
-    size_t np = strlen(pkg), nn = strlen(name);
-    char *key;
-    if (np + nn + 2 <= sizeof kbuf) {
-        memcpy(kbuf, pkg, np);
-        kbuf[np] = '\x01';
-        memcpy(kbuf + np + 1, name, nn);
-        kbuf[np + nn + 1] = '\0';
-        key = kbuf;
-    } else {
-        key = xasprintf("%s\x01%s", pkg, name);
-    }
+    char *key = sv_pair_key(kbuf, sizeof kbuf, pkg, name);
     void *hit = sv_get(&cg->sig_map, key);
-    if (hit)
+    if (hit) {
+        if (key != kbuf)
+            free(key);
         return hit == SV_NO ? NULL : (FuncSig *)hit;
+    }
     /* An instance of a generic function is excluded: it shares its
      * (pkg, name) with every OTHER instance of the same function, so
      * a bare name search cannot tell them apart -- only the call
@@ -2591,15 +2606,30 @@ void glob_push(CG *cg, const char *name, const char *pkg,
     cg->globs.items[cg->globs.count].slang = slang;
     cg->globs.items[cg->globs.count].is_pub = is_pub;
     cg->globs.count++;
+    cg_cache_clear_one(&cg->glob_map);
 }
 
 GlobSym *glob_find(CG *cg, const char *pkg, const char *name) {
-    for (int i = 0; i < cg->globs.count; i++) {
+    char kbuf[192];
+    char *key = sv_pair_key(kbuf, sizeof kbuf, pkg, name);
+    void *hit = sv_get(&cg->glob_map, key);
+    if (hit) {
+        if (key != kbuf)
+            free(key);
+        return hit == SV_NO ? NULL
+                            : &cg->globs.items[(size_t)((uintptr_t)hit - 2)];
+    }
+    int found = -1;
+    for (int i = 0; i < cg->globs.count && found < 0; i++) {
         if (!strcmp(cg->globs.items[i].pkg, pkg) &&
             !strcmp(cg->globs.items[i].name, name))
-            return &cg->globs.items[i];
+            found = i;
     }
-    return NULL;
+    sv_put(&cg->glob_map, key,
+           found >= 0 ? (void *)(uintptr_t)(found + 2) : SV_NO);
+    if (key != kbuf)
+        free(key);
+    return found >= 0 ? &cg->globs.items[found] : NULL;
 }
 
 void import_push(CG *cg, const char *owner, const char *alias,
@@ -2613,15 +2643,28 @@ void import_push(CG *cg, const char *owner, const char *alias,
     cg->imports.items[cg->imports.count].alias = (char *)alias;
     cg->imports.items[cg->imports.count].target = (char *)target;
     cg->imports.count++;
+    cg_cache_clear_one(&cg->import_map);
 }
 
 const char *import_try(CG *cg, const char *alias) {
-    for (int i = 0; i < cg->imports.count; i++) {
+    char kbuf[192];
+    char *key = sv_pair_key(kbuf, sizeof kbuf, cg->cur_pkg, alias);
+    void *hit = sv_get(&cg->import_map, key);
+    if (hit) {
+        if (key != kbuf)
+            free(key);
+        return hit == SV_NO ? NULL : (const char *)hit;
+    }
+    const char *found = NULL;
+    for (int i = 0; i < cg->imports.count && !found; i++) {
         ImportBind *b = &cg->imports.items[i];
         if (!strcmp(b->owner, cg->cur_pkg) && !strcmp(b->alias, alias))
-            return b->target;
+            found = b->target;
     }
-    return NULL;
+    sv_put(&cg->import_map, key, found ? (void *)(uintptr_t)found : SV_NO);
+    if (key != kbuf)
+        free(key);
+    return found;
 }
 
 const char *import_target(CG *cg, const char *alias, int line) {
@@ -2784,12 +2827,24 @@ StructDef *struct_find_canon(CG *cg, const char *canon) {
 
 StructDef *struct_find_in_pkg(CG *cg, const char *pkg,
                                      const char *name) {
-    for (int i = 0; i < cg->structs.count; i++) {
+    char kbuf[192];
+    char *key = sv_pair_key(kbuf, sizeof kbuf, pkg, name);
+    void *hit = sv_get(&cg->struct_pkg_map, key);
+    if (hit) {
+        if (key != kbuf)
+            free(key);
+        return hit == SV_NO ? NULL : (StructDef *)hit;
+    }
+    StructDef *found = NULL;
+    for (int i = 0; i < cg->structs.count && !found; i++) {
         if (!strcmp(cg->structs.items[i]->pkg, pkg) &&
             !strcmp(cg->structs.items[i]->name, name))
-            return cg->structs.items[i];
+            found = cg->structs.items[i];
     }
-    return NULL;
+    sv_put(&cg->struct_pkg_map, key, found ? (void *)found : SV_NO);
+    if (key != kbuf)
+        free(key);
+    return found;
 }
 
 /* 64-bit FNV-1a. Only ever names a generic instance's C symbol. */
