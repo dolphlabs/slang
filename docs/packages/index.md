@@ -5189,7 +5189,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 
 ## Official ecosystem & tools
 
-- [zokor](https://github.com/dolphlabs/zokor) (Web & Backend, `v0.3.0`) -- Backend web framework for slang with routing, middleware, JSON envelopes, auth, OAuth/OIDC, WebSockets, and postgres helpers. (`pkg zokor git https://github.com/dolphlabs/zokor.git tag v0.3.0 dir zokor`)
+- [zokor](https://github.com/dolphlabs/zokor) (Web & Backend, `v0.3.1`) -- Backend web framework for slang with routing, middleware, JSON envelopes, auth, OAuth/OIDC, WebSockets, and postgres helpers. (`pkg zokor git https://github.com/dolphlabs/zokor.git tag v0.3.1 dir zokor`)
 - [amqp](https://github.com/dolphlabs/amqp) (Messaging, `v0.1.0`) -- RabbitMQ (AMQP 0-9-1) client over stdlib net with work queues, pub/sub, RPC, publisher confirms, deadlines, and TLS. (`pkg amqp git https://github.com/dolphlabs/amqp.git tag v0.1.0 dir src/amqp`)
 - [argon](https://github.com/dolphlabs/argon) (Auth & Security, `v0.1.0`) -- Typed Argon2id password hashing and PHC string verification for slang services. (`pkg argon git https://github.com/dolphlabs/argon.git tag v0.1.0 dir src/argon`)
 - [gcs](https://github.com/dolphlabs/gcs) (Cloud & Storage, `v0.1.0`) -- Google Cloud Storage JSON API client with V4 signed URLs, byte-range reads, and service-account auth. (`pkg gcs git https://github.com/dolphlabs/gcs.git tag v0.1.0 dir src/gcs`)
