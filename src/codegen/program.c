@@ -1504,7 +1504,9 @@ void emit_spawn_trampolines(CG *cg) {
          * at entry and used it here, after the task had moved workers
          * (SL_RT_TLS_ADDR_FN's comment, runtime/sl_core.c). */
         emit_line(cg, "sl_rt_preempt_disable();");
-        emit_line(cg, "sl_ctx_switch(&SL_RT_TLS_CUR()->rsp, SL_RT_TLS_NATIVE_RSP());");
+        emit_line(cg, "sl_task *_sl_fin = SL_RT_TLS_CUR();");
+        emit_line(cg, "SL_TSAN_SWITCH_TO_NATIVE(_sl_fin);");
+        emit_line(cg, "sl_ctx_switch(&_sl_fin->rsp, SL_RT_TLS_NATIVE_RSP());");
         emit_line(cg, "fprintf(stderr, \"slang: internal error: spawn task entry \"");
         emit_line(cg, "                \"resumed after switching back -- unreachable\\n\");");
         emit_line(cg, "abort(); /* genuinely unreachable -- a can't-happen guard, never");
@@ -2135,16 +2137,17 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
     emit_line(cg, "    }");
     emit_line(cg, "    memset(sl_rt_main_task, 0, sizeof(*sl_rt_main_task));");
     emit_line(cg, "    sl_rt_main_task->is_main = 1;");
-    emit_line(cg, "    sl_rt_current_task = sl_rt_main_task;");
-    emit_line(cg, "    sl_task_stack_init(sl_rt_current_task, sl_main_task_entry, NULL);");
+    emit_line(cg, "    SL_RT_TLS_SET_CUR(sl_rt_main_task);");
+    emit_line(cg, "    sl_task_stack_init(sl_rt_main_task, sl_main_task_entry, NULL);");
     /* Tier 11 seventh slice: same run_start_ns reset sl_worker_run_loop
      * gives every OTHER dispatch (runtime_pool.c) -- this is the one
      * switch-in that bypasses that loop, so it needs its own copy.
      * Without it, main's very first loop back-edge would compare
      * against 0 (the memset'd default) instead of a real timestamp. */
-    emit_line(cg, "    sl_rt_main_task->run_start_ns = sl_rt_monotonic_ns();");
     emit_line(cg, "    sl_pool_slot_occupy(SL_POOL_MAIN_SLOT, sl_rt_main_task);");
-    emit_line(cg, "    sl_ctx_switch(&sl_rt_native_rsp, sl_rt_current_task->rsp);");
+    emit_line(cg, "    SL_TSAN_SWITCH_TO_TASK(sl_rt_main_task);");
+    emit_line(cg, "    sl_rt_main_task->run_start_ns = sl_rt_monotonic_ns();");
+    emit_line(cg, "    sl_ctx_switch(&sl_rt_native_rsp, sl_rt_main_task->rsp);");
     /* Only reached if main's own task PARKED -- a normal finish calls
      * exit(0) directly from sl_main_task_entry and never switches back
      * at all. Falls into the SAME shared post-switch dispatch the real

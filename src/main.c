@@ -40,12 +40,13 @@ int cmd_doc(int argc, char **argv); /* doc.c */
 
 static void print_usage(void) {
     fputs("usage: slangc <file.sl> [-o <name>] [--emit-c] [--keep-c] [--run] "
-          "[--dev] [--json] [--dump-liveness] [--dump-mir]\n"
+          "[--dev] [--race] [--json] [--dump-liveness] [--dump-mir]\n"
           "       --dev: unoptimized, for edit-and-rerun (zokor watch); also SLANG_DEV=1\n"
+          "       --race: compile/run with ThreadSanitizer data-race detection; also SLANG_RACE=1\n"
           "       --json: compile errors as JSON lines on stderr, one per error\n"
           "       slangc new <name>|.        scaffold a project here or in <name>\n"
           "       slangc get [file.sl|dir]   resolve deps, write slang.lock\n"
-          "       slangc test [dir] [--run substr] [-v] [--keep]   run test_* functions in *_test.sl\n"
+          "       slangc test [dir] [--run substr] [-v] [--keep] [--race]   run test_* functions in *_test.sl\n"
           "       slangc doc [<pkg>[.<name>]]   a package's API: signatures and doc comments\n"
           "       slangc --version",
           stderr);
@@ -57,6 +58,7 @@ static void write_file(const char *path, const char *data, size_t len);
  * place of the runner's path, which is a new temporary directory every
  * time. See frame_cache_path. */
 static char *frame_cache_test_key = NULL;
+static int race_build = 0;
 
 static int build(const char *input, const char *outname, int emit_c,
                  int keep_c, int run, int want_liveness_dump,
@@ -422,6 +424,8 @@ static int cmd_test(int argc, char **argv) {
             keep = 1;   /* keep the generated runner, and say where */
         } else if (!strcmp(argv[i], "-v")) {
             verbose = 1; /* a line for every passing test, too */
+        } else if (!strcmp(argv[i], "--race")) {
+            race_build = 1; /* compile/run test runner with ThreadSanitizer */
         } else if (!strcmp(argv[i], "--run")) {
             if (i + 1 >= argc) {
                 fputs("slang: --run needs a substring of the test names to run\n",
@@ -657,6 +661,7 @@ static int cmd_test(int argc, char **argv) {
  * a function the guard does not cover, slang or the runtime's own, still
  * fits the margin with room to call others. */
 #define DEV_FRAME_LIMIT_DEFAULT 8192
+#define RACE_FRAME_LIMIT_DEFAULT 16384
 
 static int dev_build = 0;
 
@@ -665,6 +670,8 @@ static int frame_limit(void) {
     int v = e ? atoi(e) : 0;
     if (v > 0)
         return v;
+    if (race_build)
+        return RACE_FRAME_LIMIT_DEFAULT;
     return dev_build ? DEV_FRAME_LIMIT_DEFAULT : FRAME_LIMIT_DEFAULT;
 }
 
@@ -950,11 +957,11 @@ static char *frame_cache_path(const char *input) {
      * instead: the package directory and the --run filter, since a
      * filtered runner is a different program whose save would otherwise
      * replace the full runner's guards. */
+    const char *mode = race_build ? "race" : dev_build ? "dev" : "release";
     char *key = frame_cache_test_key
                     ? xasprintf("test\n%s\n%d\n%s", frame_cache_test_key,
-                                frame_limit(), dev_build ? "dev" : "release")
-                    : xasprintf("%s\n%d\n%s", real, frame_limit(),
-                                dev_build ? "dev" : "release");
+                                frame_limit(), mode)
+                    : xasprintf("%s\n%d\n%s", real, frame_limit(), mode);
     unsigned long long h = 1469598103934665603ULL; /* FNV-1a */
     for (const char *p = key; *p; p++) {
         h ^= (unsigned char)*p;
@@ -1104,7 +1111,12 @@ static int build(const char *input, const char *outname, int emit_c,
        15's linker, ld-prime, drops the diagnostics raised inside full
        LTO code generation, the frame report among them). */
     const char *release_cc = "cc -O3 -fwrapv ";
-    sb_append(&cmd, dev_build ? "cc -O0 -fwrapv -DSL_DEV_BUILD=1 " : release_cc);
+    const char *race_cc =
+        "cc -O1 -g1 -fno-omit-frame-pointer -fsanitize=thread -fwrapv "
+        "-DSL_RACE_BUILD=1 -DSL_DEV_BUILD=1 ";
+    sb_append(&cmd, race_build  ? race_cc
+                    : dev_build ? "cc -O0 -fwrapv -DSL_DEV_BUILD=1 "
+                                : release_cc);
     sb_append(&cmd, xasprintf("-Wframe-larger-than=%d ", frame_limit()));
     sb_append(&cmd, gen_path);
     sb_append(&cmd, " -o ");
@@ -1264,6 +1276,9 @@ int main(int argc, char **argv) {
     const char *dev_env = getenv("SLANG_DEV");
     if (dev_env && dev_env[0] && strcmp(dev_env, "0"))
         dev_build = 1;
+    const char *race_env = getenv("SLANG_RACE");
+    if (race_env && race_env[0] && strcmp(race_env, "0"))
+        race_build = 1;
 
     if (argc >= 2 && !strcmp(argv[1], "get")) {
         sl_compiler_argv0 = argv[0];
@@ -1303,6 +1318,8 @@ int main(int argc, char **argv) {
             run = 1;
         } else if (!strcmp(argv[i], "--dev")) {
             dev_build = 1;
+        } else if (!strcmp(argv[i], "--race")) {
+            race_build = 1;
         } else if (!strcmp(argv[i], "--json")) {
             diag_json = 1;
         } else if (!strcmp(argv[i], "--dump-liveness")) {

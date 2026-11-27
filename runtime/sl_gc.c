@@ -141,10 +141,8 @@ static _Atomic unsigned long long sl_gc_stat_promoted = 0;
 static _Atomic unsigned long long sl_gc_stat_pause_buckets[SL_GC_STAT_BUCKETS];
 
 static int sl_gc_stat_enabled(void) {
-    static int cached = -1;
-    if (cached < 0)
-        cached = getenv("SLANG_GC_STAT") ? 1 : 0;
-    return cached;
+    static _Atomic int cached = -1;
+    return sl_rt_env_flag(&cached, "SLANG_GC_STAT");
 }
 
 static void sl_gc_stat_pause(long long ns, size_t marked, size_t swept) {
@@ -526,7 +524,7 @@ static void sl_gc_register_thread(void) {
      * is exactly what makes it safe for a future worker pool to
      * reassign sl_rt_current_task freely. */
     memset(&sl_rt_task_storage, 0, sizeof(sl_rt_task_storage));
-    sl_rt_current_task = &sl_rt_task_storage;
+    SL_RT_TLS_SET_CUR(&sl_rt_task_storage);
     sl_rt_gc_reg.task_slot = &sl_rt_current_task;
     sl_rt_gc_reg.blocked_ptr = &sl_rt_gc_blocked;
     sl_rt_gc_reg.acked_cycle_ptr = &sl_rt_gc_acked_cycle;
@@ -1090,10 +1088,8 @@ static _Atomic unsigned long long sl_gc_class_stat_hits = 0;
 static _Atomic unsigned long long sl_gc_class_stat_over = 0;
 
 static int sl_gc_class_stat_enabled(void) {
-    static int cached = -1;
-    if (cached < 0)
-        cached = getenv("SLANG_GC_CLASS_STAT") ? 1 : 0;
-    return cached;
+    static _Atomic int cached = -1;
+    return sl_rt_env_flag(&cached, "SLANG_GC_CLASS_STAT");
 }
 
 static void sl_gc_class_stat_dump(void) {
@@ -2778,10 +2774,8 @@ static void sl_gc_scan_conservative(uintptr_t lo, uintptr_t hi,
  * per-page counters match their listed headers. Slow (quadratic in
  * places), like SLANG_GC_VERIFY_MINOR, and off unless asked. */
 static int sl_gc_page_debug_enabled(void) {
-    static int cached = -1;
-    if (cached < 0)
-        cached = getenv("SLANG_GC_PAGE_DEBUG") ? 1 : 0;
-    return cached;
+    static _Atomic int cached = -1;
+    return sl_rt_env_flag(&cached, "SLANG_GC_PAGE_DEBUG");
 }
 
 static void sl_gc_page_check_free(sl_gc_page *pg) {
@@ -3500,10 +3494,8 @@ static void sl_gc_major_mark(sl_gc_thread **snap, int nsnap) {
  * and missed objects; the suite runs the GC-bearing tests under it and
  * requires missed=0. Diagnostic only: it roughly doubles minor cost. */
 static int sl_gc_verify_minor_enabled(void) {
-    static int cached = -1;
-    if (cached < 0)
-        cached = getenv("SLANG_GC_VERIFY_MINOR") ? 1 : 0;
-    return cached;
+    static _Atomic int cached = -1;
+    return sl_rt_env_flag(&cached, "SLANG_GC_VERIFY_MINOR");
 }
 
 /* All four under sl_gc_mu: only a collection touches them. */
