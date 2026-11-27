@@ -151,11 +151,10 @@ Every number on the page comes from somewhere you can check:
 | 10,000 tasks in ~0.5 s | `programs/tasks`, measured on an i5-8279U |
 | Compiler errors, test output | real `slangc` output, copied |
 | The runner's output | `programs/*/expected.txt`, checked in CI |
+| Agent token table (`5/5`, `705` LOC, `7,540` out / `765,111` total tokens, `46,154` req/s, `9.6 MB` RSS) | `bench/agent/RESULTS.md` in the slang repo, run `20261126T181431Z` (`claude-opus-5-5`, `--runs 1`) |
 
-When the benchmarks are rerun, update the page from the new
-`bench/RESULTS.md`, including where slang loses. The agent-token
-benchmark has not run yet, and the page says so; when it has, its table
-replaces the "first run pending" card.
+When any benchmark is rerun, update the page from `bench/RESULTS.md`
+and `bench/agent/RESULTS.md`, including where slang loses.
 
 ## The runner's programs
 

@@ -4,9 +4,7 @@
   "meta.og_description": "El lenguaje completo en unos 3000 tokens de contexto. Errores que dicen cómo arreglarlos. Compilado a través de C en un único binario nativo pequeño.",
   "meta.og_image_alt": "La marca del conejo de slang junto al logotipo de slang",
   "meta.ld_description": "Un lenguaje de tipado estático para servidores y redes que compila a C.",
-
   "common.get_started": "Empezar",
-
   "nav.skip": "Saltar al contenido",
   "nav.home": "Inicio de slang",
   "nav.primary": "Principal",
@@ -17,12 +15,10 @@
   "nav.benchmarks": "Benchmarks",
   "nav.interop": "Interop con C",
   "nav.internals": "Internos",
-
   "lang.label": "Idioma",
   "lang.suggest": "Esta página también está disponible en español.",
   "lang.dismiss": "Cerrar",
   "lang.docs_note": "La guía, la referencia de paquetes y el resto de la documentación están en inglés.",
-
   "search.aria": "Buscar en la documentación",
   "search.label": "Buscar",
   "search.placeholder": "Busca páginas, paquetes y funciones",
@@ -33,7 +29,6 @@
   "search.empty": "Nada coincide con “{query}”.",
   "search.unavailable": "La búsqueda estará disponible cuando la documentación se despliegue con el sitio.",
   "search.pages": "Páginas",
-
   "hero.pill_long": "38 paquetes nuevos: DNS, passkeys, ACME, OIDC y más",
   "hero.pill_short": "Novedades",
   "hero.title_1": "Dilo en slang.",
@@ -42,20 +37,17 @@
   "hero.lede": "El lenguaje completo cabe en unos 3000 tokens de contexto. Los errores dicen cómo arreglarlos y los tests que pasan imprimen una sola línea, así que tu agente lee menos, adivina menos y reintenta menos. Tus servidores se compilan a través de C en un único binario nativo pequeño.",
   "hero.give_agent": "Dáselo a tu agente",
   "hero.race_tag": "tokens",
-  "hero.race_long": "slang vs Go vs TypeScript, mismas tareas, mismo agente: <b>benchmark en curso</b>",
-  "hero.race_short": "vs Go y TypeScript: <b>benchmark en curso</b>",
-
+  "hero.race_long": "slang vs Go, Rust y TypeScript, 5 servicios, 1 agente: <b>5/5 pasan, 705 líneas</b>",
+  "hero.race_short": "vs Go, Rust y TS: <b>5/5 pasan, 705 líneas</b>",
   "stats.label": "slang en cifras",
   "stats.tokens_unit": "tokens",
   "stats.tokens_desc": "para leer el lenguaje completo. Una página que tu agente puede retener.",
   "stats.mem_desc": "de memoria máxima sirviendo 39,9k req/s. Go: 9,6&nbsp;MB. Node: 185&nbsp;MB.",
   "stats.cpu_desc": "en el benchmark de CPU y asignación. Solo por detrás de Rust.",
   "stats.note": "Nivel ligero de la suite entre lenguajes, VM de 4 vCPU. <a href=\"/bench/\">Todas las ejecuciones, también las que perdemos →</a>",
-
   "run.eyebrow": "Pruébalo",
   "run.title": "Léelo una vez. Pulsa ejecutar.",
   "run.lede": "Seis programas pequeños y lo que imprimen. Lo bastante cortos para caber en un prompt y lo bastante estrictos para que un error aparezca en la primera ejecución.",
-
   "runner.tablist": "Programas de ejemplo",
   "runner.foot": "Grabado con {tool}. La CI compila cada uno y comprueba su salida contra el compilador real.",
   "runner.run": "Ejecutar",
@@ -65,7 +57,6 @@
   "runner.note.json": "Decodificación tipada. El error nombra la ruta exacta del campo.",
   "runner.note.generics": "Un método se comprueba para los tipos con los que se llama, y solo esos.",
   "runner.note.regex": "Coincidencia en tiempo lineal. Ningún patrón puede provocar retroceso.",
-
   "perf.eyebrow": "Rendimiento",
   "perf.title": "Lo pequeño es la ventaja.",
   "perf.lede": "Medido frente a cinco lenguajes bajo el mismo contrato, con una comprobación de conformidad antes de medir nada. La memoria es donde slang se despega. En la API JSON va a la par con Rust.",
@@ -80,7 +71,6 @@
   "perf.fact_gc": "por recolección menor, con 20k o un millón de objetos vivos",
   "perf.fact_h2": "para cuatro peticiones HTTP/2 de 500&nbsp;ms en una sola conexión",
   "perf.fine": "<a href=\"https://github.com/dolphlabs/slang/tree/main/bench/suite\"><code>bench/suite</code></a> completo, niveles ligero y pesado: slang, Go, Rust, Java, Bun y Node en una VM compartida de 4 vCPU con un núcleo físico para el servidor, mediana de 3 rondas, noviembre de 2026. El registro completo indica qué resultados limitó la base de datos o el generador de carga. <a href=\"/bench/\">Registro completo y método →</a>",
-
   "conc.title": "Aparca la tarea, no el hilo.",
   "conc.lede": "<code>spawn</code> pone una tarea verde en un pool con un worker por núcleo. Los sockets, las esperas, los canales y los bloqueos aparcan la tarea y devuelven el hilo. No hay <code>async</code>, ni <code>await</code>, ni un segundo color de función: el código que parece bloqueante sigue siendo simple.",
   "conc.tick_1": "<b>10.000 tareas</b> que duermen 100&nbsp;ms cada una terminan en unos 0,5&nbsp;s en un portátil.",
@@ -92,7 +82,6 @@
   "conc.sched_queues": "colas de ejecución",
   "conc.sched_workers": "hilos worker, uno por núcleo",
   "conc.caption": "Miles de tareas aparcadas, un puñado de hilos. Una tarea que despierta vuelve a una cola; un worker libre la recoge.",
-
   "agents.eyebrow": "Hecho para agentes",
   "agents.title": "Barato de aprender. Barato de corregir.",
   "agents.lede": "Un agente gasta sus tokens leyendo documentación, eligiendo entre opciones y reintentando tras los errores. slang está diseñado para reducir las tres cosas, para el agente y para quien revisa su trabajo.",
@@ -105,16 +94,21 @@
   "agents.quiet_title": "Silencioso cuando funciona",
   "agents.quiet_text": "Una salida de herramienta que un agente puede permitirse: una línea cuando los tests pasan y solo los fallos cuando no.",
   "agents.quiet_bar": "sin muro de verde",
-  "agents.bench_status": "Primera ejecución pendiente",
+  "agents.bench_status": "Ejecución 2026-11-26 · claude-opus-5-5",
   "agents.bench_title": "La afirmación, medida en público.",
-  "agents.bench_text": "Cinco tareas de backend van al mismo agente tres veces: en slang con zokor, en Go con Fiber y en TypeScript con NestJS. Unos tests de caja negra ocultos deciden qué pasa. Contamos tokens de entrada, tokens de salida y turnos hasta que pasan, y publicamos las ejecuciones en las que slang aún desperdicia.",
-  "agents.bench_link": "El arnés, las especificaciones y los tests →",
+  "agents.bench_text": "Cinco tareas de backend fueron al mismo agente en cuatro stacks (una ejecución cada una). Todos pasaron 5/5 tests de aceptación ocultos. Slang escribió menos líneas (705 frente a 922–1.705) y mantuvo baja memoria (9,6 MB RSS a 46,2k req/s), pero aún gastó más tokens totales en caché (765k) porque los modelos no están preentrenados en Slang ni Zokor.",
+  "agents.bench_link": "Resultados completos, arnés y artefactos →",
+  "agents.th_stack": "stack",
+  "agents.th_pass": "pasan",
+  "agents.th_loc": "líneas",
+  "agents.th_out": "salida",
+  "agents.th_tokens": "totales",
+  "agents.bench_foot": "Medianas en las 5 tareas (--runs 1, MacBook Pro i5-8279U); líneas totales de código fuente.",
   "agents.task_notes": "CRUD con validación",
   "agents.task_auth": "Inicio de sesión, tokens bearer, middleware, cierre de sesión",
   "agents.task_jobs": "Un worker en segundo plano con concurrencia",
   "agents.task_ratelimit": "Límites por cliente con <code>Retry-After</code>",
   "agents.task_upload": "Multipart, límites de tamaño, nombres de archivo seguros",
-
   "zokor.title": "Una sola forma de hacer cada cosa.",
   "zokor.lede": "zokor es el framework de backend para slang. Toma las decisiones que cada servicio toma de otra manera, para que ni un agente ni una persona recién llegada tengan que hacerlo.",
   "zokor.kicker": "Cada elección a la que se enfrenta un agente cuesta tokens de razonamiento. zokor las responde una vez.",
@@ -131,7 +125,6 @@
   "zokor.q_ws": "¿WebSockets?",
   "zokor.a_ws": "RFC 6455 y Socket.IO",
   "zokor.link": "zokor en GitHub →",
-
   "syntax.eyebrow": "El lenguaje",
   "syntax.title": "Familiar a propósito. Pequeño a propósito.",
   "syntax.read_title": "Una sintaxis que ya sabes leer",
@@ -151,7 +144,6 @@
   "syntax.c_title": "C es el runtime, no un país extranjero",
   "syntax.c_text": "slang emite C y se lo pasa a tu <code>cc</code>. Llamar a una biblioteca de C es <code>extern fn</code> y una opción del enlazador: sin generador de bindings, sin capa de marshalling, sin un segundo sistema de compilación.",
   "syntax.c_link": "Interop con C →",
-
   "pkg.eyebrow": "Biblioteca estándar",
   "pkg.title": "Pilas incluidas en el compilador.",
   "pkg.lede": "79 paquetes vienen con <code>slangc</code>. Los nativos solo se enlazan cuando un programa los importa, así que un servidor TCP sencillo se mantiene libre de OpenSSL, SQLite y zlib.",
@@ -236,7 +228,6 @@
   "pkg.math_sketch": "Conteos distintos, claves frecuentes y percentiles en memoria fija",
   "pkg.any_c_name": "cualquier biblioteca de C",
   "pkg.any_c": "<code>extern fn</code> y una opción del enlazador",
-
   "eco.eyebrow": "Ecosistema",
   "eco.title": "A una línea de <code>pkg</code>.",
   "eco.lede": "Paquetes que viven en sus propios repositorios, escritos en slang sobre la biblioteca estándar. Añade uno a <code>slang.project</code> con una línea <code>pkg</code> y <code>slangc</code> lo descarga en la etiqueta que indiques.",
@@ -257,7 +248,6 @@
   "eco.any_git": "Una línea <code>pkg</code> y una etiqueta; <code>slang.lock</code> guarda el hash",
   "eco.yours_name": "el tuyo",
   "eco.yours": "¿Has publicado uno? Una pull request lo añade aquí",
-
   "install.title": "De clonar a hola.",
   "install.lede": "Compila el compilador desde el código fuente y empieza un proyecto. <code>make install</code> instala <code>slangc</code> y su runtime en <code>/usr/local</code>; <code>PREFIX=~/.local</code> también funciona.",
   "install.req_caption": "Qué necesitas",
@@ -276,7 +266,6 @@
   "install.next_agent_desc": "El lenguaje completo en una página",
   "install.next_packages": "Explora los paquetes",
   "install.next_packages_desc": "Cada función, con su documentación",
-
   "faq.eyebrow": "FAQ",
   "faq.title": "Preguntas y respuestas.",
   "faq.q_prod": "¿Está slang listo para producción?",
@@ -293,11 +282,9 @@
   "faq.a_ffi": "Sí: <code>extern fn</code> más <code>link \"name\"</code>. Los números, <code>bool</code>, <code>str</code>, <code>bytes</code> y los punteros opacos cruzan la frontera; los valores gestionados por el GC se rechazan en tiempo de compilación, así que C nunca ve su disposición en memoria.",
   "faq.q_who": "¿Quién construye slang?",
   "faq.a_who": "<a href=\"https://dolphlabs.com\">Dolphlabs</a> (Dolph Tech Limited), en abierto, bajo la licencia MIT.",
-
   "cta.title": "Súbete.",
   "cta.tagline": "Dilo en slang. Despliégalo como C.",
   "cta.github": "Ver en GitHub",
-
   "footer.nav": "Pie de página",
   "footer.tagline": "super lenguaje. compila a C.",
   "footer.learn": "Aprender",

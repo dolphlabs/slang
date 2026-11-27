@@ -333,18 +333,74 @@ fn find_at(rawptr, str, int) -> [int]</code></pre>
 
     <div class="card tokenbench" id="tokens">
       <div class="tokenbench-copy">
-        <span class="status"><i aria-hidden="true"></i>{{agents.bench_status}}</span>
+        <span class="status is-done"><i aria-hidden="true"></i>{{agents.bench_status}}</span>
         <h3>{{agents.bench_title}}</h3>
         <p>{{agents.bench_text}}</p>
-        <a class="text-link" href="https://github.com/dolphlabs/slang/tree/main/bench/agent">{{agents.bench_link}}</a>
+        <a class="text-link" href="https://github.com/dolphlabs/slang/blob/dev/bench/agent/RESULTS.md">{{agents.bench_link}}</a>
       </div>
-      <ol class="tasks">
-        <li><span class="mono">notes</span><span>{{agents.task_notes}}</span></li>
-        <li><span class="mono">auth</span><span>{{agents.task_auth}}</span></li>
-        <li><span class="mono">jobs</span><span>{{agents.task_jobs}}</span></li>
-        <li><span class="mono">ratelimit</span><span>{{agents.task_ratelimit}}</span></li>
-        <li><span class="mono">upload</span><span>{{agents.task_upload}}</span></li>
-      </ol>
+      <div class="tokenbench-data">
+        <div class="tokenbench-table-wrap">
+          <table class="mini-table tokenbench-table">
+            <thead>
+              <tr>
+                <th scope="col">{{agents.th_stack}}</th>
+                <th scope="col">{{agents.th_pass}}</th>
+                <th scope="col">{{agents.th_loc}}</th>
+                <th scope="col">{{agents.th_out}}</th>
+                <th scope="col">{{agents.th_tokens}}</th>
+                <th scope="col">req/s</th>
+                <th scope="col">RSS</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="is-slang">
+                <td>slang + zokor</td>
+                <td>5/5</td>
+                <td>{{n:705}}</td>
+                <td>{{n:7540}}</td>
+                <td>{{n:765111}}</td>
+                <td>{{n:46154}}</td>
+                <td>{{n:9.6}} MB</td>
+              </tr>
+              <tr>
+                <td>Rust + Axum</td>
+                <td>5/5</td>
+                <td>{{n:1032}}</td>
+                <td>{{n:6315}}</td>
+                <td>{{n:213960}}</td>
+                <td>{{n:115350}}</td>
+                <td>{{n:3.5}} MB</td>
+              </tr>
+              <tr>
+                <td>Go + Fiber</td>
+                <td>5/5</td>
+                <td>{{n:922}}</td>
+                <td>{{n:8258}}</td>
+                <td>{{n:343121}}</td>
+                <td>{{n:107777}}</td>
+                <td>{{n:14.8}} MB</td>
+              </tr>
+              <tr>
+                <td>TS + NestJS</td>
+                <td>5/5</td>
+                <td>{{n:1705}}</td>
+                <td>{{n:11659}}</td>
+                <td>{{n:460506}}</td>
+                <td>{{n:5424}}</td>
+                <td>{{n:170.0}} MB</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="tokenbench-foot">{{agents.bench_foot}}</p>
+        <ol class="tasks">
+          <li><span class="mono">notes</span><span>{{agents.task_notes}}</span></li>
+          <li><span class="mono">auth</span><span>{{agents.task_auth}}</span></li>
+          <li><span class="mono">jobs</span><span>{{agents.task_jobs}}</span></li>
+          <li><span class="mono">ratelimit</span><span>{{agents.task_ratelimit}}</span></li>
+          <li><span class="mono">upload</span><span>{{agents.task_upload}}</span></li>
+        </ol>
+      </div>
     </div>
   </div>
 </section>

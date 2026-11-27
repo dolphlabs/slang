@@ -4,9 +4,7 @@
   "meta.og_description": "整门语言只需约 3,000 个 token 的上下文。错误信息直接告诉你怎么修。通过 C 编译成一个小巧的原生二进制文件。",
   "meta.og_image_alt": "slang 的兔子标志与 slang 字标",
   "meta.ld_description": "一门面向服务器和网络的静态类型语言，编译为 C。",
-
   "common.get_started": "开始使用",
-
   "nav.skip": "跳到正文",
   "nav.home": "slang 首页",
   "nav.primary": "主导航",
@@ -17,12 +15,10 @@
   "nav.benchmarks": "基准测试",
   "nav.interop": "C 互操作",
   "nav.internals": "内部原理",
-
   "lang.label": "语言",
   "lang.suggest": "本页也提供简体中文版本。",
   "lang.dismiss": "关闭",
   "lang.docs_note": "指南、软件包参考及其他文档均为英文。",
-
   "search.aria": "搜索文档",
   "search.label": "搜索",
   "search.placeholder": "搜索页面、软件包和函数",
@@ -33,7 +29,6 @@
   "search.empty": "没有与“{query}”匹配的内容。",
   "search.unavailable": "文档随站点一起部署后即可使用搜索。",
   "search.pages": "页面",
-
   "hero.pill_long": "38 个新包：DNS、通行密钥、ACME、OIDC 等",
   "hero.pill_short": "新特性",
   "hero.title_1": "用 slang 写出来。",
@@ -42,20 +37,17 @@
   "hero.lede": "整门语言只需约 3,000 个 token 的上下文。错误信息直接告诉你怎么修，测试通过时只输出一行，所以你的智能体读得更少、猜得更少、重试得更少。你的服务器通过 C 编译成一个小巧的原生二进制文件。",
   "hero.give_agent": "交给你的智能体",
   "hero.race_tag": "token",
-  "hero.race_long": "slang 对比 Go 对比 TypeScript，相同任务、相同智能体：<b>基准测试进行中</b>",
-  "hero.race_short": "对比 Go 与 TypeScript：<b>基准测试进行中</b>",
-
+  "hero.race_long": "slang 对比 Go、Rust 与 TypeScript，5 个服务、同一智能体：<b>5/5 通过，705 行</b>",
+  "hero.race_short": "对比 Go、Rust 与 TS：<b>5/5 通过，705 行</b>",
   "stats.label": "数字里的 slang",
   "stats.tokens_unit": "个 token",
   "stats.tokens_desc": "就能读完整门语言。一页内容，你的智能体完全装得下。",
   "stats.mem_desc": "是处理 39.9k req/s 时的峰值内存。Go：9.6&nbsp;MB。Node：185&nbsp;MB。",
   "stats.cpu_desc": "出现在 CPU 与内存分配基准中。仅次于 Rust。",
   "stats.note": "跨语言测试套件的轻量档，4 vCPU 虚拟机。<a href=\"/bench/\">每一次运行，包括我们落败的 →</a>",
-
   "run.eyebrow": "试一试",
   "run.title": "读一遍，点运行。",
   "run.lede": "六个小程序和它们的输出。短到能放进一条提示词，严格到错误在第一次运行就会暴露。",
-
   "runner.tablist": "示例程序",
   "runner.foot": "使用 {tool} 录制。CI 会编译每一个程序，并把输出与真实编译器的结果比对。",
   "runner.run": "运行",
@@ -65,7 +57,6 @@
   "runner.note.json": "带类型的解码。错误会指出确切的字段路径。",
   "runner.note.generics": "方法只会针对调用它时用到的类型进行检查。",
   "runner.note.regex": "线性时间匹配。任何模式都不可能引发回溯。",
-
   "perf.eyebrow": "性能",
   "perf.title": "小，就是特性。",
   "perf.lede": "在同一份约定下与五种语言比较，计时之前先做一致性检查。内存方面 slang 遥遥领先；在 JSON API 上与 Rust 不相上下。",
@@ -80,7 +71,6 @@
   "perf.fact_gc": "每次小回收，无论存活对象是 2 万还是一百万",
   "perf.fact_h2": "完成同一连接上四个各 500&nbsp;ms 的 HTTP/2 请求",
   "perf.fine": "完整的 <a href=\"https://github.com/dolphlabs/slang/tree/main/bench/suite\"><code>bench/suite</code></a>，轻量档与重量档：slang、Go、Rust、Java、Bun 和 Node 运行在共享的 4 vCPU 虚拟机上（服务器只有一个物理核心），取 3 轮的中位数，2026 年 11 月。完整记录标明了哪些结果受数据库或负载生成器限制。<a href=\"/bench/\">完整记录与方法 →</a>",
-
   "conc.title": "挂起任务，而不是线程。",
   "conc.lede": "<code>spawn</code> 把一个绿色任务放进每核一个 worker 的线程池。套接字、睡眠、通道和锁会挂起任务并交还线程。没有 <code>async</code>，没有 <code>await</code>，也没有函数的“第二种颜色”：看起来阻塞的代码依然简单。",
   "conc.tick_1": "<b>一万个任务</b>各睡 100&nbsp;ms，在笔记本上约 0.5&nbsp;秒就能全部完成。",
@@ -92,7 +82,6 @@
   "conc.sched_queues": "运行队列",
   "conc.sched_workers": "worker 线程，每核一个",
   "conc.caption": "成千上万的挂起任务，只有少数几个线程。醒来的任务回到队列，空闲的 worker 把它取走。",
-
   "agents.eyebrow": "为智能体而生",
   "agents.title": "学得省，改得也省。",
   "agents.lede": "智能体的 token 花在读文档、在选项间做选择，以及出错后重试上。slang 的设计目标就是同时压低这三项，对智能体如此，对审查它成果的人也如此。",
@@ -105,16 +94,21 @@
   "agents.quiet_title": "正常时保持安静",
   "agents.quiet_text": "智能体负担得起的工具输出：测试通过时一行，不通过时只列出失败项。",
   "agents.quiet_bar": "没有满屏的绿色",
-  "agents.bench_status": "首次运行待进行",
+  "agents.bench_status": "实测 2026-11-26 · claude-opus-5-5",
   "agents.bench_title": "这个主张，公开地测量。",
-  "agents.bench_text": "五个后端任务，交给同一个智能体做三遍：用 slang 加 zokor，用 Go 加 Fiber，用 TypeScript 加 NestJS。由隐藏的黑盒测试决定是否通过。我们统计直到通过为止的输入 token、输出 token 和轮数，并公布 slang 仍在浪费的那些运行。",
-  "agents.bench_link": "测试框架、规格与测试用例 →",
+  "agents.bench_text": "同一智能体在四个技术栈上完成五个后端任务（各运行 1 次），全部通过 5/5 隐藏黑盒验收测试。Slang 代码最少（705 行对比 922–1,705 行）且内存低（9.6 MB RSS、46.2k req/s），但由于模型尚未预训练 Slang 与 Zokor，缓存总输入 token（765k）目前仍然偏高。",
+  "agents.bench_link": "完整结果、测试框架与原始数据 →",
+  "agents.th_stack": "技术栈",
+  "agents.th_pass": "通过",
+  "agents.th_loc": "代码行",
+  "agents.th_out": "输出",
+  "agents.th_tokens": "总计",
+  "agents.bench_foot": "以下 5 项任务的中位数（--runs 1，MacBook Pro i5-8279U）；代码行为非测试源码总计。",
   "agents.task_notes": "带校验的 CRUD",
   "agents.task_auth": "登录、Bearer 令牌、中间件、登出",
   "agents.task_jobs": "带并发的后台 worker",
   "agents.task_ratelimit": "按客户端限流，附带 <code>Retry-After</code>",
   "agents.task_upload": "Multipart、大小限制、安全的文件名",
-
   "zokor.title": "每件事，只有一种做法。",
   "zokor.lede": "zokor 是 slang 的后端框架。每个服务本来各自做出不同的决定，它先替你做好，这样智能体和新同事都不必再做。",
   "zokor.kicker": "智能体面对的每一个选择都要消耗推理 token。zokor 把答案一次定好。",
@@ -131,7 +125,6 @@
   "zokor.q_ws": "WebSocket 呢？",
   "zokor.a_ws": "RFC 6455，以及 Socket.IO",
   "zokor.link": "GitHub 上的 zokor →",
-
   "syntax.eyebrow": "语言",
   "syntax.title": "刻意熟悉，刻意精简。",
   "syntax.read_title": "你本来就读得懂的语法",
@@ -151,7 +144,6 @@
   "syntax.c_title": "C 是运行时，不是异国他乡",
   "syntax.c_text": "slang 输出 C，再交给你的 <code>cc</code>。调用 C 库只需要 <code>extern fn</code> 加一个链接器参数：无需绑定生成器，无需封送层，也无需第二套构建系统。",
   "syntax.c_link": "C 互操作 →",
-
   "pkg.eyebrow": "标准库",
   "pkg.title": "电池，就在编译器里。",
   "pkg.lede": "<code>slangc</code> 自带 79 个软件包。原生包只有在程序导入时才会链接，所以一个普通的 TCP 服务器不会带上 OpenSSL、SQLite 和 zlib。",
@@ -236,7 +228,6 @@
   "pkg.math_sketch": "固定内存下的去重计数、热点键与百分位数",
   "pkg.any_c_name": "任意 C 库",
   "pkg.any_c": "<code>extern fn</code> 加一个链接器参数",
-
   "eco.eyebrow": "生态",
   "eco.title": "只差一行 <code>pkg</code>。",
   "eco.lede": "这些软件包各自位于独立的仓库，用 slang 基于标准库编写。在 <code>slang.project</code> 里加一行 <code>pkg</code>，<code>slangc</code> 就会按你指定的标签拉取它。",
@@ -257,7 +248,6 @@
   "eco.any_git": "一行 <code>pkg</code> 加一个标签；哈希由 <code>slang.lock</code> 保存",
   "eco.yours_name": "你的",
   "eco.yours": "发布了一个？提交 pull request 就能列在这里",
-
   "install.title": "从克隆到 hello。",
   "install.lede": "从源码构建编译器，然后新建一个项目。<code>make install</code> 会把 <code>slangc</code> 及其运行时装到 <code>/usr/local</code> 下；也可以用 <code>PREFIX=~/.local</code>。",
   "install.req_caption": "你需要准备",
@@ -276,7 +266,6 @@
   "install.next_agent_desc": "整门语言，一页搞定",
   "install.next_packages": "浏览软件包",
   "install.next_packages_desc": "每个函数都附有文档",
-
   "faq.eyebrow": "常见问题",
   "faq.title": "问与答。",
   "faq.q_prod": "slang 可以用于生产环境吗？",
@@ -293,11 +282,9 @@
   "faq.a_ffi": "可以：<code>extern fn</code> 加 <code>link \"name\"</code>。数字、<code>bool</code>、<code>str</code>、<code>bytes</code> 和不透明指针可以跨越边界；由 GC 管理的值在编译期就会被拒绝，所以 C 永远看不到它们的内存布局。",
   "faq.q_who": "是谁在开发 slang？",
   "faq.a_who": "<a href=\"https://dolphlabs.com\">Dolphlabs</a>（Dolph Tech Limited），公开开发，采用 MIT 许可证。",
-
   "cta.title": "跳进来吧。",
   "cta.tagline": "用 slang 写出来。以 C 的形态交付。",
   "cta.github": "在 GitHub 上查看",
-
   "footer.nav": "页脚",
   "footer.tagline": "super language. compiles to C.",
   "footer.learn": "学习",
