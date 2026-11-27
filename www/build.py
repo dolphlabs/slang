@@ -863,6 +863,8 @@ def build(out_dir):
                                  "items": []})
     source = extract_source_packages()
     all_pkgs = dict(sorted({**native, **source}.items()))
+    eco = load_ecosystem()
+    version = read_version()
 
     pages = list(PAGES)
     for name in all_pkgs:
@@ -948,8 +950,8 @@ def build(out_dir):
                 print("  ! bench/RESULTS.md not found", file=sys.stderr)
 
         if p["kind"] == "packages":
-            body_parts.append(package_index_html(all_pkgs, depth))
-            md_parts.append(package_index_md(all_pkgs))
+            body_parts.append(package_index_html(all_pkgs, eco, depth))
+            md_parts.append(package_index_md(all_pkgs, eco))
 
         mdrel = re.sub(r"\.html$", ".md", p["path"])
         body = "\n".join(body_parts)
@@ -972,12 +974,23 @@ def build(out_dir):
         single_pages.append({"path": p["path"], "title": p["title"],
                              "tagline": p["tagline"], "body": body,
                              "nav": p.get("nav"), "kind": p["kind"]})
-        search.append({"kind": "page", "title": p["title"],
+        search.append({"kind": "package" if p["kind"] == "package" else "page",
+                       "title": p["title"],
                        "url": clean_path(re.sub(r"\.html$", "", p["path"])),
                        "tagline": p["tagline"],
                        "text": re.sub(r"\s+", " ",
                                       re.sub(r"<[^>]+>", " ", body))[:4000]})
         llms_parts.append("# %s\n\n%s\n" % (p["title"], twin))
+
+    for e in eco:
+        search.append({
+            "kind": "package",
+            "title": e["name"],
+            "url": "packages/#eco-%s" % e["name"],
+            "tagline": "%s (%s) — %s" % (e["category"], e["tag"], e["summary"]),
+            "text": " ".join([e["name"], e["category"], e["tag"], e["summary"]]
+                             + e.get("keywords", [])),
+        })
 
     # The palette finds functions as well as pages: every API item, with
     # the anchor its package page gives it.
@@ -994,12 +1007,17 @@ def build(out_dir):
     # ---- agent surfaces ----
     (out / "search.json").write_text(
         json.dumps(search, separators=(",", ":")), encoding="utf-8")
+    (out / "packages.json").write_text(
+        json.dumps(packages_json_payload(version, all_pkgs, eco), indent=2),
+        encoding="utf-8")
     (out / "api.json").write_text(
         json.dumps({
             "project": "slang",
+            "version": version,
             "maintainer": {"name": ORG, "entity": ORG_ENTITY,
                            "url": ORG_URL},
             "packages": all_pkgs,
+            "ecosystem": eco,
         }, indent=2), encoding="utf-8")
 
     llms = ["# slang",
@@ -1404,29 +1422,129 @@ def api_md(pkg):
     return "\n".join(out)
 
 
-def package_index_html(pkgs, depth):
+def load_ecosystem():
+    p = WWW / "ecosystem.json"
+    if not p.exists():
+        return []
+    return json.loads(p.read_text(encoding="utf-8")).get("packages", [])
+
+
+def read_version():
+    m = re.search(r"^VERSION\s*=\s*(\S+)",
+                  (ROOT / "Makefile").read_text(encoding="utf-8"), re.M)
+    return m.group(1) if m else "dev"
+
+
+def packages_json_payload(version, pkgs, eco):
+    builtin = []
+    for name, pkg in pkgs.items():
+        syms = list(dict.fromkeys(it["name"] for it in pkg["items"]))[:20]
+        builtin.append({
+            "name": name,
+            "kind": pkg["kind"],
+            "url": "packages/%s" % name,
+            "items": len(pkg["items"]),
+            "symbols": syms,
+        })
+    return {
+        "project": "slang",
+        "version": version,
+        "builtin": builtin,
+        "ecosystem": eco,
+    }
+
+
+def package_index_html(pkgs, eco, depth):
+    total = len(pkgs) + len(eco)
+    filter_bar = (
+        '<div class="pkg-filter" id="pkg-filter">'
+        '<input id="pkg-search" class="pkg-search" type="search" '
+        'placeholder="Filter packages by name, topic, or symbol (e.g. http, jwt, kafka, zokor)" '
+        'autocomplete="off" spellcheck="false" aria-label="Filter packages">'
+        '<div class="pkg-pills" role="group" aria-label="Package kind">'
+        '<button class="pkg-pill" type="button" data-pkg-filter="all" aria-pressed="true">All</button>'
+        '<button class="pkg-pill" type="button" data-pkg-filter="source" aria-pressed="false">Standard library</button>'
+        '<button class="pkg-pill" type="button" data-pkg-filter="native" aria-pressed="false">Native</button>'
+        '<button class="pkg-pill" type="button" data-pkg-filter="ecosystem" aria-pressed="false">Ecosystem</button>'
+        '</div>'
+        '<span class="pkg-filter-count" id="pkg-count">%d packages</span>'
+        '</div>'
+        '<p class="pkg-empty" id="pkg-empty" hidden>No packages match this filter.</p>'
+        % total
+    )
     cards = []
     for name, pkg in pkgs.items():
-        kind = ("compiler-provided" if pkg["kind"] == "native"
-                else "source package")
+        kind_code = "native" if pkg["kind"] == "native" else "source"
+        kind_label = ("compiler-provided" if kind_code == "native"
+                      else "source package")
+        syms = " ".join(it["name"] for it in pkg["items"][:20]).lower()
+        hay = html.escape("%s %s %s" % (name.lower(), kind_label, syms))
         cards.append(
-            '<a class="pkg-card" href="%s%s.html">'
+            '<a class="pkg-card" href="%s%s.html" data-pkg-kind="%s" '
+            'data-pkg-search="%s">'
             '<h3>%s</h3><p class="pkg-kind">%s</p>'
             '<p class="pkg-count">%d public items</p></a>'
-            % (rel(depth) + "packages/", name, html.escape(name), kind,
-               len(pkg["items"])))
-    return ('<h2 id="all-packages">All packages'
-            '<a class="anchor" href="#all-packages">#</a></h2>'
-            '<div class="pkg-grid">%s</div>' % "".join(cards))
+            % (rel(depth) + "packages/", name, kind_code, hay,
+               html.escape(name), kind_label, len(pkg["items"])))
+    out = [
+        filter_bar,
+        '<h2 class="pkg-section-head" id="all-packages">Built-in packages'
+        '<a class="anchor" href="#all-packages">#</a></h2>',
+        '<div class="pkg-grid">%s</div>' % "".join(cards),
+    ]
+    if eco:
+        eco_cards = []
+        for e in eco:
+            hay = html.escape(" ".join(
+                [e["name"], e["category"], e["tag"], e["summary"]]
+                + e.get("keywords", [])).lower())
+            install = ""
+            if e.get("pkg_line"):
+                install = (
+                    '<div class="pkg-install">'
+                    '<code title="Add to slang.project">%s</code>'
+                    '<a class="pkg-link" href="%s">Repo ↗</a></div>'
+                    % (html.escape(e["pkg_line"]), html.escape(e["repo"])))
+            else:
+                install = (
+                    '<div class="pkg-install">'
+                    '<span>%s</span>'
+                    '<a class="pkg-link" href="%s">Repo ↗</a></div>'
+                    % (html.escape(e["kind"]), html.escape(e["repo"])))
+            eco_cards.append(
+                '<article class="pkg-card pkg-eco" id="eco-%s" '
+                'data-pkg-kind="ecosystem" data-pkg-search="%s">'
+                '<h3><a href="%s">%s</a>'
+                '<span class="pkg-ver">%s</span></h3>'
+                '<p class="pkg-kind">%s</p>'
+                '<p class="pkg-summary">%s</p>%s</article>'
+                % (html.escape(e["name"]), hay, html.escape(e["repo"]),
+                   html.escape(e["name"]), html.escape(e["tag"]),
+                   html.escape(e["category"]), html.escape(e["summary"]),
+                   install))
+        out.append(
+            '<h2 class="pkg-section-head" id="ecosystem-packages">'
+            'Official ecosystem &amp; tools'
+            '<a class="anchor" href="#ecosystem-packages">#</a></h2>')
+        out.append('<div class="pkg-grid pkg-grid-eco">%s</div>'
+                   % "".join(eco_cards))
+    return "".join(out)
 
 
-def package_index_md(pkgs):
-    out = ["## All packages", ""]
+def package_index_md(pkgs, eco):
+    out = ["## Built-in packages", ""]
     for name, pkg in pkgs.items():
         out.append("- [%s](packages/%s.md) -- %s, %d public items"
                    % (name, name,
                       "compiler-provided" if pkg["kind"] == "native"
                       else "source package", len(pkg["items"])))
+    if eco:
+        out.extend(["", "## Official ecosystem & tools", ""])
+        for e in eco:
+            tail = (" (`%s`)" % e["pkg_line"]) if e.get("pkg_line") else ""
+            out.append("- [%s](%s) (%s, `%s`) -- %s%s"
+                       % (e["name"], e["repo"], e["category"], e["tag"],
+                          e["summary"], tail))
     return "\n".join(out)
 
 

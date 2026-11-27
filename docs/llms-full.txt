@@ -8349,7 +8349,7 @@ unchanged when nothing needs escaping. A 100-row table page (15 KB, six
 actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 `html/template` on the same page, run alternately on one machine.
 
-## All packages
+## Built-in packages
 
 - [acme](packages/acme.md) -- source package, 12 public items
 - [balance](packages/balance.md) -- source package, 17 public items
@@ -8430,6 +8430,22 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [xml](packages/xml.md) -- source package, 25 public items
 - [yaml](packages/yaml.md) -- source package, 4 public items
 - [zip](packages/zip.md) -- source package, 15 public items
+
+## Official ecosystem & tools
+
+- [zokor](https://github.com/dolphlabs/zokor) (Web & Backend, `v0.3.0`) -- Backend web framework for slang with routing, middleware, JSON envelopes, auth, OAuth/OIDC, WebSockets, and postgres helpers. (`pkg zokor git https://github.com/dolphlabs/zokor.git tag v0.3.0 dir zokor`)
+- [amqp](https://github.com/dolphlabs/amqp) (Messaging, `v0.1.0`) -- RabbitMQ (AMQP 0-9-1) client over stdlib net with work queues, pub/sub, RPC, publisher confirms, deadlines, and TLS. (`pkg amqp git https://github.com/dolphlabs/amqp.git tag v0.1.0 dir src/amqp`)
+- [argon](https://github.com/dolphlabs/argon) (Auth & Security, `v0.1.0`) -- Typed Argon2id password hashing and PHC string verification for slang services. (`pkg argon git https://github.com/dolphlabs/argon.git tag v0.1.0 dir src/argon`)
+- [gcs](https://github.com/dolphlabs/gcs) (Cloud & Storage, `v0.1.0`) -- Google Cloud Storage JSON API client with V4 signed URLs, byte-range reads, and service-account auth. (`pkg gcs git https://github.com/dolphlabs/gcs.git tag v0.1.0 dir src/gcs`)
+- [graphql](https://github.com/dolphlabs/graphql) (API & RPC, `v0.1.0`) -- Schema-first GraphQL runtime and code generator (graphqlc) producing typed resolvers and cached execution plans. (`pkg graphql git https://github.com/dolphlabs/graphql.git tag v0.1.0 dir src/graphql`)
+- [grpc](https://github.com/dolphlabs/grpc) (API & RPC, `v0.1.0`) -- gRPC client and server with bounded protobuf wire codecs, protoc-gen-slang, and multiplexed HTTP/2 calls. (`pkg grpc git https://github.com/dolphlabs/grpc.git tag v0.1.0 dir src/grpc`)
+- [jwt](https://github.com/dolphlabs/jwt) (Auth & Security, `v0.2.0`) -- JWS Compact tokens (HS256/384/512, RS256, PS256, ES256, EdDSA), JWKS caching client, and OIDC ID-token verification. (`pkg jwt git https://github.com/dolphlabs/jwt.git tag v0.2.0 dir src/jwt`)
+- [kafka](https://github.com/dolphlabs/kafka) (Messaging, `v0.1.0`) -- Apache Kafka client with producers, consumers, consumer groups, transactions, SASL, and TLS over stdlib net. (`pkg kafka git https://github.com/dolphlabs/kafka.git tag v0.1.0 dir src/kafka`)
+- [mongo](https://github.com/dolphlabs/mongo) (Databases, `v0.1.0`) -- MongoDB driver with ordered BSON codecs, Atlas SRV discovery, and non-blocking net I/O. (`pkg mongo git https://github.com/dolphlabs/mongo.git tag v0.1.0 dir src/mongo`)
+- [sns](https://github.com/dolphlabs/sns) (Cloud & Storage, `v0.1.0`) -- Amazon SNS client for topic publishing, subscription management, and webhook signature verification. (`pkg sns git https://github.com/dolphlabs/sns.git tag v0.1.0 dir src/sns`)
+- [sqs](https://github.com/dolphlabs/sqs) (Cloud & Storage, `v0.1.0`) -- Amazon SQS JSON client with batch send, long polling, visibility control, and AWS SigV4 signing. (`pkg sqs git https://github.com/dolphlabs/sqs.git tag v0.1.0 dir src/sqs`)
+- [zokor_cli](https://github.com/dolphlabs/zokor_cli) (Developer Tools, `v0.3.0`) -- CLI for zokor services: project scaffolding (zokor new), feature generation, migrations, check, and live-reload watch.
+- [slang-analyser](https://github.com/dolphlabs/slang-analyser) (Developer Tools, `v0.2.0`) -- Language server and VS Code extension providing diagnostics, hover types, go-to-definition, completion, and formatting.
 
 ---
 
