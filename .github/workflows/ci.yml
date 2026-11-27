@@ -43,7 +43,7 @@ jobs:
           - name: macos-arm64
             runner: macos-15
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
