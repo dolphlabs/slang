@@ -2075,9 +2075,12 @@ FAIL: <span class="n">1</span> of <span class="n">2</span> failed (<span class="
 slangc get                      # fetch git pkg dependencies and write slang.lock
 slangc main.sl --dev --run      # fast unoptimized edit-run loop (about 10x faster C compiles)
 slangc main.sl -o billing       # optimized native binary (-O3)
+slangc main.sl --target linux-amd64 --static -o billing-linux   # static Linux binary (uses zig cc if installed)
+slangc main.sl --target linux-arm64 --static --sysroot /opt/arm64-sysroot -o billing-arm64
 slangc main.sl --emit-c         # write main.gen.c without invoking cc
 slangc main.sl --json           # emit compile errors as JSON lines on stderr
 slangc doc httpc client_post    # query signatures and docstrings offline</code></pre></div>
+<p>Cross-compiling uses <code>zig</code> (<code>zig cc -target &lt;triple&gt;</code>) automatically when on <code>PATH</code> or in <code>$SLANG_CACHE/zig/zig</code> (<code>~/.cache/slang/zig/zig</code>), falling back to <code>&lt;triple&gt;-gcc</code> for Linux targets or an explicit <code>--cc</code> / <code>SLANG_CC</code>. Note that static linking (<code>--static</code>) targets Linux (e.g. <code>linux-amd64</code> -&gt; <code>x86_64-linux-musl</code>, <code>linux-arm64</code> -&gt; <code>aarch64-linux-musl</code>); programs importing <code>crypto</code>, <code>sql</code>, or <code>compress</code> require target headers/archives via <code>OPENSSL_DIR</code> or <code>--sysroot</code>.</p>
 <p><code>--json</code> outputs one compact JSON object per error so agents and editors can fix every file in one pass:</p>
 <div class="code"><div class="code-bar"><span class="code-lang">JSON</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code>{&quot;file&quot;:&quot;main.sl&quot;,&quot;line&quot;:14,&quot;severity&quot;:&quot;error&quot;,&quot;message&quot;:&quot;undefined variable &#x27;summ&#x27; (did you mean &#x27;sum&#x27;?)&quot;}</code></pre></div>
 <h3 id="test-runner-data-race-detection">Test runner &amp; data-race detection<a class="anchor" href="#test-runner-data-race-detection" aria-label="Link to this section">#</a></h3>

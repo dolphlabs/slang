@@ -472,3 +472,38 @@ jobs:
           MYSQL_SHA256_URL: mysql://sha256:sha256-pw@127.0.0.1:53306/slangtest?allow_public_key_retrieval=true
           MARIADB_URL: mysql://native:native-pw@127.0.0.1:53307/slangtest
         run: ./slangc tests/live/mysqldb/main.sl --run
+
+  # Static Linux cross-compilation via zig cc (amd64 & arm64) without target
+  # sysroot setup for pure slang/runtime programs.
+  cross-compile:
+    name: cross-compile (linux static)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential file
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.0
+
+      - name: Build slangc
+        run: make slangc
+
+      - name: Cross-compile and execute static linux-amd64 binary
+        run: |
+          ./slangc tests/gc_stress/main.sl --target linux-amd64 --static -o /tmp/app_x86_64
+          file /tmp/app_x86_64
+          file /tmp/app_x86_64 | grep -qE 'ELF 64-bit.*x86-64.*statically linked'
+          /tmp/app_x86_64 > /tmp/app_x86_64.out
+          diff -u tests/gc_stress/expected.txt /tmp/app_x86_64.out
+
+      - name: Cross-compile static linux-arm64 binary
+        run: |
+          ./slangc tests/http/main.sl --target linux-arm64 --static -o /tmp/app_arm64
+          file /tmp/app_arm64
+          file /tmp/app_arm64 | grep -qE 'ELF 64-bit.*ARM aarch64.*statically linked'

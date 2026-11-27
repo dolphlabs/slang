@@ -2372,6 +2372,138 @@ fi
 rm -rf "$pd_dir"
 [ "$prof_bad" -eq 0 ] && echo "PASS task dump & pprof profiling"
 
+echo "--- cross-compilation & static builds ---"
+cc_bad=0
+cc_dir=$(mktemp -d)
+cat >"$cc_dir/fake-zig" <<'FZI'
+#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_CC_LOG"
+prev=""
+for a in "$@"; do
+    if [ "$prev" = "-o" ]; then
+        printf '#!/bin/sh\necho fake_ok\n' > "$a"
+        chmod +x "$a"
+    fi
+    prev="$a"
+done
+exit 0
+FZI
+chmod +x "$cc_dir/fake-zig"
+cp "$cc_dir/fake-zig" "$cc_dir/x86_64-linux-gnu-gcc"
+cat >"$cc_dir/net_app.sl" <<'NSL'
+import "net";
+import "os";
+fn probe() {
+    let _d = net.lookup_txt_until("example.com", until_never());
+    let _w = os.watch(".", ["."]);
+}
+println("cross_ok");
+NSL
+mkdir -p "$cc_dir/sys/include" "$cc_dir/sys/lib" "$cc_dir/cache"
+
+if ! SLANG_CACHE="$cc_dir/cache" FAKE_CC_LOG="$cc_dir/amd64.log" ./slangc "$cc_dir/net_app.sl" \
+    --target linux-amd64 --static --cc "$cc_dir/fake-zig cc" \
+    --sysroot "$cc_dir/sys" -o "$cc_dir/app_amd64" >"$cc_dir/amd64.out" 2>&1; then
+    echo "FAIL cross-compile compile linux-amd64:"
+    cat "$cc_dir/amd64.out"
+    cc_bad=1; fail=1
+fi
+amd64_line=$(cat "$cc_dir/amd64.log" 2>/dev/null)
+if ! printf '%s\n' "$amd64_line" | grep -q -- "-target x86_64-linux-musl" ||
+   ! printf '%s\n' "$amd64_line" | grep -q -- "-static" ||
+   ! printf '%s\n' "$amd64_line" | grep -q -- "-I$cc_dir/sys/include" ||
+   ! printf '%s\n' "$amd64_line" | grep -q -- "-L$cc_dir/sys/lib" ||
+   printf '%s\n' "$amd64_line" | grep -q -- "-lresolv" ||
+   printf '%s\n' "$amd64_line" | grep -q -- "-framework"; then
+    echo "FAIL cross-compile flags linux-amd64: $amd64_line"
+    cc_bad=1; fail=1
+fi
+
+if ! SLANG_CACHE="$cc_dir/cache" FAKE_CC_LOG="$cc_dir/arm64.log" ./slangc "$cc_dir/net_app.sl" \
+    --target linux-arm64 --static --cc "$cc_dir/fake-zig cc" \
+    -o "$cc_dir/app_arm64" >"$cc_dir/arm64.out" 2>&1; then
+    echo "FAIL cross-compile compile linux-arm64:"
+    cat "$cc_dir/arm64.out"
+    cc_bad=1; fail=1
+fi
+arm64_line=$(cat "$cc_dir/arm64.log" 2>/dev/null)
+if ! printf '%s\n' "$arm64_line" | grep -q -- "-target aarch64-linux-musl" ||
+   ! printf '%s\n' "$arm64_line" | grep -q -- "-static"; then
+    echo "FAIL cross-compile flags linux-arm64: $arm64_line"
+    cc_bad=1; fail=1
+fi
+
+if ! SLANG_CACHE="$cc_dir/cache" FAKE_CC_LOG="$cc_dir/darwin.log" ./slangc "$cc_dir/net_app.sl" \
+    --target darwin-arm64 --cc "$cc_dir/fake-zig cc" \
+    -o "$cc_dir/app_darwin" >"$cc_dir/darwin.out" 2>&1; then
+    echo "FAIL cross-compile compile darwin-arm64:"
+    cat "$cc_dir/darwin.out"
+    cc_bad=1; fail=1
+fi
+darwin_line=$(cat "$cc_dir/darwin.log" 2>/dev/null)
+if ! printf '%s\n' "$darwin_line" | grep -q -- "-target aarch64-macos" ||
+   ! printf '%s\n' "$darwin_line" | grep -q -- "-framework CoreServices" ||
+   ! printf '%s\n' "$darwin_line" | grep -q -- "-lresolv"; then
+    echo "FAIL cross-compile flags darwin-arm64: $darwin_line"
+    cc_bad=1; fail=1
+fi
+
+if ! SLANG_CACHE="$cc_dir/cache" FAKE_CC_LOG="$cc_dir/gnu.log" ./slangc "$cc_dir/net_app.sl" \
+    --target linux-amd64-gnu --cc "$cc_dir/x86_64-linux-gnu-gcc" \
+    -o "$cc_dir/app_gnu" >"$cc_dir/gnu.out" 2>&1; then
+    echo "FAIL cross-compile compile linux-amd64-gnu:"
+    cat "$cc_dir/gnu.out"
+    cc_bad=1; fail=1
+fi
+gnu_line=$(cat "$cc_dir/gnu.log" 2>/dev/null)
+if printf '%s\n' "$gnu_line" | grep -q -- "-target " ||
+   ! printf '%s\n' "$gnu_line" | grep -q -- "-lresolv" ||
+   printf '%s\n' "$gnu_line" | grep -q -- "-framework"; then
+    echo "FAIL cross-compile flags linux-amd64-gnu: $gnu_line"
+    cc_bad=1; fail=1
+fi
+
+if ./slangc "$cc_dir/net_app.sl" --target darwin-arm64 --static -o "$cc_dir/bad_stat" \
+        >/dev/null 2>"$cc_dir/stat.err"; then
+    echo "FAIL darwin --static was allowed"
+    cc_bad=1; fail=1
+elif ! grep -q -- "--static" "$cc_dir/stat.err"; then
+    echo "FAIL darwin --static error missing mention of --static"
+    cc_bad=1; fail=1
+fi
+
+if ./slangc "$cc_dir/net_app.sl" --static --race -o "$cc_dir/bad_race" \
+        >/dev/null 2>"$cc_dir/race.err"; then
+    echo "FAIL --static --race was allowed"
+    cc_bad=1; fail=1
+fi
+
+if ./slangc "$cc_dir/net_app.sl" --target windows-x86_64 --run -o "$cc_dir/bad_run" \
+        >/dev/null 2>"$cc_dir/run.err"; then
+    echo "FAIL cross-compile --run was allowed"
+    cc_bad=1; fail=1
+elif ! grep -q -- "--run" "$cc_dir/run.err"; then
+    echo "FAIL cross-compile --run error missing mention of --run"
+    cc_bad=1; fail=1
+fi
+
+if ! SLANG_CC=cc ./slangc tests/gc_stat/main.sl -o "$cc_dir/hello_cc" >/dev/null 2>&1 ||
+   ! "$cc_dir/hello_cc" >"$cc_dir/hello.out" ||
+   ! diff -u tests/gc_stat/expected.txt "$cc_dir/hello.out" >/dev/null; then
+    echo "FAIL SLANG_CC=cc override build/run"
+    cc_bad=1; fail=1
+fi
+mkdir -p "$cc_dir/cache/zig"
+cp "$cc_dir/fake-zig" "$cc_dir/cache/zig/zig"
+if ! SLANG_CACHE="$cc_dir/cache" FAKE_CC_LOG="$cc_dir/cached_zig.log" ./slangc "$cc_dir/net_app.sl" \
+        --target linux-amd64 --static -o "$cc_dir/app_czig" >/dev/null 2>&1 ||
+   ! grep -q -- "-target x86_64-linux-musl" "$cc_dir/cached_zig.log"; then
+    echo "FAIL cached SLANG_CACHE/zig/zig auto-discovery"
+    cc_bad=1; fail=1
+fi
+rm -rf "$cc_dir"
+[ "$cc_bad" -eq 0 ] && echo "PASS cross-compilation & static builds"
+
 # Generated C must compile clean under the warnings a C compiler turns
 # on by ITSELF. slangc passes no -W flags, so anything default-on lands
 # in the user's terminal on every single build -- 79 of them across this
