@@ -212,16 +212,19 @@
       if (s > 0) scored.push({ it: it, s: s });
     });
     scored.sort(function (a, b) { return b.s - a.s; });
-    var pages = [], api = [], best = { page: 0, api: 0 };
+    var buckets = { page: [], package: [], api: [] };
+    var limits = { page: 6, package: 12, api: 40 };
+    var best = { page: 0, package: 0, api: 0 };
     scored.forEach(function (x) {
-      var k = x.it.kind === "page" ? "page" : "api";
+      var k = buckets[x.it.kind] ? x.it.kind : "api";
       if (!best[k]) best[k] = x.s;
-      if (k === "page") { if (pages.length < 6) pages.push(x.it); }
-      else if (api.length < 40) api.push(x.it);
+      if (buckets[k].length < limits[k]) buckets[k].push(x.it);
     });
-    /* The group with the better match goes first: "verify" should lead
-     * with x509.verify, not with the pages whose prose mentions it. */
-    items = best.api > best.page ? api.concat(pages) : pages.concat(api);
+    var order = ["page", "package", "api"].sort(function (a, b) {
+      return best[b] - best[a];
+    });
+    items = [];
+    order.forEach(function (k) { items = items.concat(buckets[k]); });
     draw(items, words);
   }
 
@@ -231,10 +234,10 @@
       list.innerHTML = '<p class="palette-empty">Nothing matches “' + esc(input.value.trim()) + '”.</p>';
       return;
     }
+    var titles = { page: "Pages", package: "Packages", api: "API" };
     var html = [], group = null;
     rows.forEach(function (it, i) {
-      var g = it.kind === "page" ? "Pages" : "API";
-      if (onlyTitle) g = onlyTitle;
+      var g = onlyTitle || titles[it.kind] || "API";
       if (g !== group) { html.push('<p class="palette-group">' + g + "</p>"); group = g; }
       var isApi = it.kind === "api";
       html.push(
@@ -314,4 +317,61 @@
       else if (sheet && !sheet.hidden) { sheet.hidden = true; menuBtn.setAttribute("aria-expanded", "false"); }
     }
   });
+
+  /* ---- packages page live search & filter ---------------------------------- */
+  var pkgFilter = $("#pkg-filter");
+  if (pkgFilter) {
+    var pkgScope = pkgFilter.closest("section, article") || document;
+    var pkgInput = $("#pkg-search", pkgFilter);
+    var pkgPills = $$(".pkg-pill", pkgFilter);
+    var pkgCount = $("#pkg-count", pkgFilter);
+    var pkgEmpty = $("#pkg-empty", pkgScope);
+    var pkgCards = $$(".pkg-card[data-pkg-kind]", pkgScope);
+    var pkgKind = "all";
+
+    function applyPkgFilter() {
+      var words = (pkgInput ? pkgInput.value : "").toLowerCase().trim().split(/\s+/).filter(Boolean);
+      var shown = 0;
+      pkgCards.forEach(function (card) {
+        var kindOk = pkgKind === "all" || card.dataset.pkgKind === pkgKind;
+        var hay = card.dataset.pkgSearch || card.textContent.toLowerCase();
+        var textOk = true;
+        for (var i = 0; i < words.length; i++) {
+          if (hay.indexOf(words[i]) === -1) { textOk = false; break; }
+        }
+        var ok = kindOk && textOk;
+        card.hidden = !ok;
+        if (ok) shown++;
+      });
+      $$(".pkg-grid", pkgScope).forEach(function (grid) {
+        var any = $$(".pkg-card[data-pkg-kind]", grid).some(function (c) { return !c.hidden; });
+        grid.hidden = !any;
+        var prev = grid.previousElementSibling;
+        if (prev && prev.classList.contains("pkg-section-head")) prev.hidden = !any;
+      });
+      if (pkgCount) {
+        pkgCount.textContent = shown === pkgCards.length
+          ? shown + " packages"
+          : shown + " of " + pkgCards.length;
+      }
+      if (pkgEmpty) pkgEmpty.hidden = shown > 0;
+    }
+
+    pkgPills.forEach(function (pill) {
+      pill.addEventListener("click", function () {
+        pkgKind = pill.dataset.pkgFilter || "all";
+        pkgPills.forEach(function (p) {
+          p.setAttribute("aria-pressed", p === pill ? "true" : "false");
+        });
+        applyPkgFilter();
+      });
+    });
+    if (pkgInput) {
+      var params = new URLSearchParams(location.search);
+      var q0 = params.get("q");
+      if (q0) pkgInput.value = q0;
+      pkgInput.addEventListener("input", applyPkgFilter);
+    }
+    applyPkgFilter();
+  }
 })();

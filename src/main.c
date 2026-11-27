@@ -33,14 +33,21 @@
 #include <unistd.h>
 
 #ifndef SLANG_VERSION
-#define SLANG_VERSION "0.2.9"
+#define SLANG_VERSION "0.3.0"
 #endif
 
 int cmd_doc(int argc, char **argv); /* doc.c */
 
 static void print_usage(void) {
-    fputs("usage: slangc <file.sl> [-o <name>] [--emit-c] [--keep-c] [--run] "
-          "[--dev] [--race] [--json] [--dump-liveness] [--dump-mir]\n"
+    fputs("usage: slangc <file.sl> [-o <name>] [--target <triple>] [--static]\n"
+          "              [--cc <cmd>] [--sysroot <dir>] [--emit-c] [--keep-c]\n"
+          "              [--run] [--dev] [--race] [--json] [--dump-liveness] [--dump-mir]\n"
+          "       --target <t>: target triple or alias (linux-amd64, linux-arm64,\n"
+          "                     linux-amd64-gnu, linux-arm64-gnu, darwin-arm64, darwin-amd64);\n"
+          "                     also SLANG_TARGET\n"
+          "       --static: static link (default for musl targets); also SLANG_STATIC=1\n"
+          "       --cc <cmd>: C compiler command (e.g. 'zig cc'); also SLANG_CC\n"
+          "       --sysroot <dir>: extra -I<dir>/include -L<dir>/lib for cross libs; also SLANG_SYSROOT\n"
           "       --dev: unoptimized, for edit-and-rerun (zokor watch); also SLANG_DEV=1\n"
           "       --race: compile/run with ThreadSanitizer data-race detection; also SLANG_RACE=1\n"
           "       --json: compile errors as JSON lines on stderr, one per error\n"
@@ -59,6 +66,10 @@ static void write_file(const char *path, const char *data, size_t len);
  * time. See frame_cache_path. */
 static char *frame_cache_test_key = NULL;
 static int race_build = 0;
+static const char *target_triple = NULL;
+static const char *cc_override = NULL;
+static const char *sysroot_dir = NULL;
+static int static_build = 0;
 
 static int build(const char *input, const char *outname, int emit_c,
                  int keep_c, int run, int want_liveness_dump,
@@ -267,6 +278,216 @@ static int first_line_of(const char *cmd, char *out, size_t n) {
     return len > 0;
 }
 
+/* Resolve short target aliases or pass a canonical triple through. */
+static int resolve_target_triple(const char *raw, char *out, size_t n) {
+    static const struct {
+        const char *alias;
+        const char *triple;
+    } aliases[] = {
+        {"linux-amd64", "x86_64-linux-musl"},
+        {"linux-x86_64", "x86_64-linux-musl"},
+        {"linux-arm64", "aarch64-linux-musl"},
+        {"linux-aarch64", "aarch64-linux-musl"},
+        {"linux-amd64-gnu", "x86_64-linux-gnu"},
+        {"linux-x86_64-gnu", "x86_64-linux-gnu"},
+        {"linux-arm64-gnu", "aarch64-linux-gnu"},
+        {"linux-aarch64-gnu", "aarch64-linux-gnu"},
+        {"darwin-arm64", "aarch64-macos"},
+        {"macos-arm64", "aarch64-macos"},
+        {"darwin-amd64", "x86_64-macos"},
+        {"macos-amd64", "x86_64-macos"},
+        {"darwin-x86_64", "x86_64-macos"},
+        {"macos-x86_64", "x86_64-macos"},
+    };
+    if (!raw || !*raw)
+        return 0;
+    for (size_t i = 0; i < sizeof(aliases) / sizeof(aliases[0]); i++) {
+        if (!strcmp(raw, aliases[i].alias)) {
+            snprintf(out, n, "%s", aliases[i].triple);
+            return 1;
+        }
+    }
+    if (strchr(raw, '-')) {
+        snprintf(out, n, "%s", raw);
+        return 1;
+    }
+    return 0;
+}
+
+static int target_is_darwin(const char *triple) {
+    if (!triple) {
+#if defined(__APPLE__)
+        return 1;
+#else
+        return 0;
+#endif
+    }
+    return strstr(triple, "darwin") != NULL || strstr(triple, "macos") != NULL;
+}
+
+static int target_is_linux(const char *triple) {
+    if (!triple) {
+#if defined(__linux__)
+        return 1;
+#else
+        return 0;
+#endif
+    }
+    return strstr(triple, "linux") != NULL;
+}
+
+static int target_is_musl(const char *triple) {
+    if (!triple) {
+#if defined(__linux__) && !defined(__GLIBC__)
+        return 1;
+#else
+        return 0;
+#endif
+    }
+    return strstr(triple, "musl") != NULL;
+}
+
+static int target_matches_host(const char *triple) {
+    if (!triple || !*triple)
+        return 1;
+#if defined(__APPLE__)
+    if (!target_is_darwin(triple))
+        return 0;
+#elif defined(__linux__)
+    if (!target_is_linux(triple))
+        return 0;
+#else
+    return 0;
+#endif
+#if defined(__x86_64__) || defined(_M_X64)
+    return !strncmp(triple, "x86_64-", 7) || !strncmp(triple, "amd64-", 6);
+#elif defined(__aarch64__) || defined(__arm64__)
+    return !strncmp(triple, "aarch64-", 8) || !strncmp(triple, "arm64-", 6);
+#else
+    return 0;
+#endif
+}
+
+static int command_on_path(const char *cmd) {
+    if (!cmd || !*cmd)
+        return 0;
+    char tok[PATH_MAX];
+    size_t i = 0;
+    while (cmd[i] && !isspace((unsigned char)cmd[i]) && i + 1 < sizeof(tok)) {
+        tok[i] = cmd[i];
+        i++;
+    }
+    tok[i] = '\0';
+    if (!tok[0])
+        return 0;
+    if (strchr(tok, '/'))
+        return access(tok, X_OK) == 0;
+    const char *path = getenv("PATH");
+    if (!path)
+        return 0;
+    const char *p = path;
+    while (*p) {
+        const char *colon = strchr(p, ':');
+        size_t len = colon ? (size_t)(colon - p) : strlen(p);
+        if (len > 0 && len + strlen(tok) + 2 < PATH_MAX) {
+            char full[PATH_MAX];
+            memcpy(full, p, len);
+            full[len] = '/';
+            memcpy(full + len + 1, tok, strlen(tok) + 1);
+            if (access(full, X_OK) == 0)
+                return 1;
+        }
+        if (!colon)
+            break;
+        p = colon + 1;
+    }
+    return 0;
+}
+
+static int find_cached_zig(char *out, size_t n) {
+    const char *env = getenv("SLANG_CACHE");
+    if (env && env[0]) {
+        snprintf(out, n, "%s/zig/zig", env);
+        return access(out, X_OK) == 0;
+    }
+    const char *home = getenv("HOME");
+    if (home && home[0]) {
+        snprintf(out, n, "%s/.cache/slang/zig/zig", home);
+        return access(out, X_OK) == 0;
+    }
+    return 0;
+}
+
+static int cc_accepts_target_flag(const char *cc_cmd) {
+    char tok[PATH_MAX];
+    size_t i = 0;
+    while (cc_cmd[i] && !isspace((unsigned char)cc_cmd[i]) &&
+           i + 1 < sizeof(tok)) {
+        tok[i] = cc_cmd[i];
+        i++;
+    }
+    tok[i] = '\0';
+    const char *slash = strrchr(tok, '/');
+    const char *base = slash ? slash + 1 : tok;
+    return strstr(base, "zig") != NULL || strstr(base, "clang") != NULL;
+}
+
+static int resolve_cc(char *out, size_t n) {
+    if (cc_override && *cc_override) {
+        snprintf(out, n, "%s", cc_override);
+        return 1;
+    }
+    char zig_bin[PATH_MAX];
+    if (target_triple && *target_triple) {
+        if (command_on_path("zig")) {
+            snprintf(out, n, "zig cc");
+            return 1;
+        }
+        if (find_cached_zig(zig_bin, sizeof(zig_bin))) {
+            snprintf(out, n, "'%s' cc", zig_bin);
+            return 1;
+        }
+        if (target_is_linux(target_triple)) {
+            char gcc_name[256];
+            snprintf(gcc_name, sizeof(gcc_name), "%s-gcc", target_triple);
+            if (command_on_path(gcc_name)) {
+                snprintf(out, n, "%s", gcc_name);
+                return 1;
+            }
+        }
+        fprintf(stderr,
+                "slang: cross-compiling for '%s' requires zig "
+                "(e.g. brew install zig or https://ziglang.org/download/) "
+                "or --cc / SLANG_CC\n",
+                target_triple);
+        return 0;
+    }
+    if (command_on_path("cc")) {
+        snprintf(out, n, "cc");
+        return 1;
+    }
+    if (command_on_path("clang")) {
+        snprintf(out, n, "clang");
+        return 1;
+    }
+    if (command_on_path("gcc")) {
+        snprintf(out, n, "gcc");
+        return 1;
+    }
+    if (command_on_path("zig")) {
+        snprintf(out, n, "zig cc");
+        return 1;
+    }
+    if (find_cached_zig(zig_bin, sizeof(zig_bin))) {
+        snprintf(out, n, "'%s' cc", zig_bin);
+        return 1;
+    }
+    fputs("slang: no C compiler found (tried cc, clang, gcc, zig); install "
+          "a C toolchain or pass --cc / SLANG_CC\n",
+          stderr);
+    return 0;
+}
+
 /* Fills `out` with compiler flags for OpenSSL. Returns where they came
  * from, or NULL when no install was located and plain -lssl -lcrypto is
  * a hope rather than an answer. */
@@ -280,6 +501,14 @@ static const char *find_openssl(char *out, size_t n) {
         fprintf(stderr,
                 "slang: warning: OPENSSL_DIR=%s has no include/openssl/ssl.h; "
                 "looking elsewhere\n", dir);
+    }
+
+    if (target_triple &&
+        (!target_matches_host(target_triple) || target_is_musl(target_triple))) {
+        snprintf(out, n, "-lssl -lcrypto");
+        if (sysroot_dir && openssl_prefix_ok(sysroot_dir))
+            return sysroot_dir;
+        return NULL;
     }
 
     if (first_line_of("pkg-config --cflags --libs openssl 2>/dev/null", out, n))
@@ -958,10 +1187,14 @@ static char *frame_cache_path(const char *input) {
      * filtered runner is a different program whose save would otherwise
      * replace the full runner's guards. */
     const char *mode = race_build ? "race" : dev_build ? "dev" : "release";
+    const char *tgt = target_triple ? target_triple : "host";
+    const char *lnk = static_build ? "static" : "dynamic";
     char *key = frame_cache_test_key
-                    ? xasprintf("test\n%s\n%d\n%s", frame_cache_test_key,
-                                frame_limit(), mode)
-                    : xasprintf("%s\n%d\n%s", real, frame_limit(), mode);
+                    ? xasprintf("test\n%s\n%d\n%s\n%s\n%s",
+                                frame_cache_test_key, frame_limit(), mode, tgt,
+                                lnk)
+                    : xasprintf("%s\n%d\n%s\n%s\n%s", real, frame_limit(),
+                                mode, tgt, lnk);
     unsigned long long h = 1469598103934665603ULL; /* FNV-1a */
     for (const char *p = key; *p; p++) {
         h ^= (unsigned char)*p;
@@ -1086,11 +1319,21 @@ static int build(const char *input, const char *outname, int emit_c,
     if (want_tls || want_crypto)
         openssl_source = find_openssl(tlsflags, sizeof(tlsflags));
 
+    char cc_cmd[PATH_MAX];
+    if (!resolve_cc(cc_cmd, sizeof(cc_cmd)))
+        return 1;
+
     int nlinks = 0;
     char **link_libs = collect_link_libs(&pkgs, &nlinks);
 
     StrBuf cmd;
     sb_init(&cmd);
+    sb_append(&cmd, cc_cmd);
+    if (target_triple && cc_accepts_target_flag(cc_cmd))
+        sb_append(&cmd, xasprintf(" -target %s", target_triple));
+    if (sysroot_dir && *sysroot_dir)
+        sb_append(&cmd, xasprintf(" -I'%s/include' -L'%s/lib'",
+                                  sysroot_dir, sysroot_dir));
     /* -O3 on the generated C, with no -flto. Green-thread TLS still forbids
        caching sl_rt_current_task (or any _Thread_local) across a park
        or preemption: the address is OS-thread affine, the task is not.
@@ -1110,13 +1353,13 @@ static int build(const char *input, const char *outname, int emit_c,
        also moves the frame reports back to the plain cc pass (Xcode
        15's linker, ld-prime, drops the diagnostics raised inside full
        LTO code generation, the frame report among them). */
-    const char *release_cc = "cc -O3 -fwrapv ";
-    const char *race_cc =
-        "cc -O1 -g1 -fno-omit-frame-pointer -fsanitize=thread -fwrapv "
+    const char *release_flags = " -O3 -fwrapv ";
+    const char *race_flags =
+        " -O1 -g1 -fno-omit-frame-pointer -fsanitize=thread -fwrapv "
         "-DSL_RACE_BUILD=1 -DSL_DEV_BUILD=1 ";
-    sb_append(&cmd, race_build  ? race_cc
-                    : dev_build ? "cc -O0 -fwrapv -DSL_DEV_BUILD=1 "
-                                : release_cc);
+    sb_append(&cmd, race_build  ? race_flags
+                    : dev_build ? " -O0 -fwrapv -DSL_DEV_BUILD=1 "
+                                : release_flags);
     sb_append(&cmd, xasprintf("-Wframe-larger-than=%d ", frame_limit()));
     sb_append(&cmd, gen_path);
     sb_append(&cmd, " -o ");
@@ -1134,7 +1377,7 @@ static int build(const char *input, const char *outname, int emit_c,
         sb_append(&cmd, " ");
         sb_append(&cmd, tlsflags);
     }
-    if (want_dns)
+    if (want_dns && !target_is_musl(target_triple))
         sb_append(&cmd, " -lresolv");
     if (want_sql)
         sb_append(&cmd, " -lsqlite3"); /* the 'sql' native package;
@@ -1142,14 +1385,14 @@ static int build(const char *input, const char *outname, int emit_c,
     if (want_compress)
         sb_append(&cmd, " -lz"); /* the 'compress' native package; zlib
                                     ships with every supported platform */
-#if defined(__APPLE__)
-    if (want_fswatch)
+    if (want_fswatch && target_is_darwin(target_triple))
         sb_append(&cmd, " -framework CoreServices");
-#endif
     for (int i = 0; i < nlinks; i++) {
         sb_append(&cmd, " -l");
         sb_append(&cmd, link_libs[i]);
     }
+    if (static_build)
+        sb_append(&cmd, " -static");
     /* Compile, and if the compiler reports a slang function with a large
      * frame, regenerate it behind an entry guard and compile again. */
     int status = 0;
@@ -1214,17 +1457,24 @@ static int build(const char *input, const char *outname, int emit_c,
         fputs("slang: C compilation failed; generated code kept at ", stderr);
         fputs(gen_path, stderr);
         fputc(10, stderr);
-        if ((want_tls || want_crypto) && !openssl_source)
-            /* Worded as a condition, not a diagnosis: slangc could not
-               locate OpenSSL, but the compile may have failed for another
-               reason, or found headers through a path slangc cannot see. */
-            fputs("slang: note: this program uses TLS or crypto, and slangc "
-                  "could not locate OpenSSL.\n"
-                  "       If the error above is about openssl/ headers, install "
-                  "it (macOS: brew install openssl;\n"
-                  "       Debian/Ubuntu: apt install libssl-dev) or set "
-                  "OPENSSL_DIR=/path/to/openssl.\n",
-                  stderr);
+        if ((want_tls || want_crypto) && !openssl_source) {
+            if (target_triple && !target_matches_host(target_triple)) {
+                fputs("slang: note: this program uses TLS or crypto while cross-compiling.\n"
+                      "       Point OPENSSL_DIR=/path/to/target-openssl or --sysroot <dir> at target headers and static libs.\n",
+                      stderr);
+            } else {
+                /* Worded as a condition, not a diagnosis: slangc could not
+                   locate OpenSSL, but the compile may have failed for another
+                   reason, or found headers through a path slangc cannot see. */
+                fputs("slang: note: this program uses TLS or crypto, and slangc "
+                      "could not locate OpenSSL.\n"
+                      "       If the error above is about openssl/ headers, install "
+                      "it (macOS: brew install openssl;\n"
+                      "       Debian/Ubuntu: apt install libssl-dev) or set "
+                      "OPENSSL_DIR=/path/to/openssl.\n",
+                      stderr);
+            }
+        }
         return 1;
     }
 
@@ -1279,6 +1529,24 @@ int main(int argc, char **argv) {
     const char *race_env = getenv("SLANG_RACE");
     if (race_env && race_env[0] && strcmp(race_env, "0"))
         race_build = 1;
+    const char *static_env = getenv("SLANG_STATIC");
+    if (static_env && static_env[0] && strcmp(static_env, "0"))
+        static_build = 1;
+    const char *cc_env = getenv("SLANG_CC");
+    if (cc_env && cc_env[0])
+        cc_override = cc_env;
+    const char *sysroot_env = getenv("SLANG_SYSROOT");
+    if (sysroot_env && sysroot_env[0])
+        sysroot_dir = sysroot_env;
+    static char target_buf[128];
+    const char *target_env = getenv("SLANG_TARGET");
+    if (target_env && target_env[0]) {
+        if (!resolve_target_triple(target_env, target_buf, sizeof(target_buf))) {
+            fprintf(stderr, "slang: unknown target '%s'\n", target_env);
+            return 1;
+        }
+        target_triple = target_buf;
+    }
 
     if (argc >= 2 && !strcmp(argv[1], "get")) {
         sl_compiler_argv0 = argv[0];
@@ -1310,6 +1578,31 @@ int main(int argc, char **argv) {
                 return 1;
             }
             outname = argv[++i];
+        } else if (!strcmp(argv[i], "--target")) {
+            if (i + 1 >= argc) {
+                fputs("slang: --target requires a value\n", stderr);
+                return 1;
+            }
+            if (!resolve_target_triple(argv[++i], target_buf,
+                                       sizeof(target_buf))) {
+                fprintf(stderr, "slang: unknown target '%s'\n", argv[i]);
+                return 1;
+            }
+            target_triple = target_buf;
+        } else if (!strcmp(argv[i], "--static")) {
+            static_build = 1;
+        } else if (!strcmp(argv[i], "--cc")) {
+            if (i + 1 >= argc) {
+                fputs("slang: --cc requires a command\n", stderr);
+                return 1;
+            }
+            cc_override = argv[++i];
+        } else if (!strcmp(argv[i], "--sysroot")) {
+            if (i + 1 >= argc) {
+                fputs("slang: --sysroot requires a directory\n", stderr);
+                return 1;
+            }
+            sysroot_dir = argv[++i];
         } else if (!strcmp(argv[i], "--emit-c")) {
             emit_c = 1;
         } else if (!strcmp(argv[i], "--keep-c")) {
@@ -1348,6 +1641,23 @@ int main(int argc, char **argv) {
 
     if (!input) {
         print_usage();
+        return 1;
+    }
+
+    if (static_build && target_is_darwin(target_triple)) {
+        fputs("slang: --static is not supported on macOS/Darwin targets "
+              "(Apple does not support static libSystem)\n",
+              stderr);
+        return 1;
+    }
+    if (static_build && race_build) {
+        fputs("slang: --static cannot be combined with --race\n", stderr);
+        return 1;
+    }
+    if (run && target_triple && !target_matches_host(target_triple)) {
+        fprintf(stderr,
+                "slang: cannot use --run when cross-compiling for '%s'\n",
+                target_triple);
         return 1;
     }
 

@@ -2751,6 +2751,112 @@ slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://
 
 
 
+# Tooling
+
+# Tooling
+
+> Testing, race detection, profiling, task dumps, LSP and CLI tools.
+
+## Tooling
+
+slang ships its everyday engineering tools either directly inside `slangc`
+and the standard library (`runtime`) or as companion open-source tools in
+the ecosystem, so teams can test, race-check, profile, format, and inspect
+production binaries without wiring together external toolchains.
+
+| Tool | Role | Entry point |
+|---|---|---|
+| Compiler, deps & docs | Compile to C/native binary, fetch `pkg` pins, query stdlib signatures, JSON diagnostics | `slangc` (`new`, `get`, `doc`, `--run`, `--dev`, `--json`) |
+| Test runner | Package-level task-isolated tests with filtering and verbose timing | `slangc test` (`-v`, `--run <pat>`, `--keep`) |
+| Data-race detector | ThreadSanitizer across M:N `spawn` tasks and OS workers | `slangc test --race`, `slangc --race`, `SLANG_RACE=1` |
+| Profiler & task dumps | Live green-task snapshot (`SIGQUIT`), 100 Hz CPU profiler, sampled allocation/heap profiler, `/debug/pprof/` text handler | `import "runtime"`, `kill -QUIT <pid>` |
+| Runtime & GC tuning | Exit GC/scheduler stats, minor write-barrier verifier, `GOGC`-style pacing & soft memory limit | `SLANG_GC_STAT`, `SLANG_GC_VERIFY_MINOR`, `SLANG_GC_PERCENT`, `SLANG_GC_MEMLIMIT_MB` |
+| Language server & formatter | Diagnostics, hover, goto-definition, completion, inlay hints, semantic tokens, deterministic formatting | [`slanganalyser`](https://github.com/dolphlabs/slang-analyser) (`slang.project`) |
+| Backend CLI & arch linter | Scaffold layered services, fast live watch reloads, enforce architectural rules, run migrations | [`zokor_cli`](https://github.com/dolphlabs/zokor_cli) (`zokor newcomp`, `watch`, `check`) |
+| Schema code generators | Generate typed `.sl` structs/codecs from GraphQL SDL or `.proto` definitions | [`graphqlc`](https://github.com/dolphlabs/graphql), [`protoc-gen-slang`](https://github.com/dolphlabs/grpc) |
+
+### Compiler CLI & JSON diagnostics
+
+```sh
+slangc new billing              # scaffold slang.project, main.sl, .gitignore
+slangc get                      # fetch git pkg dependencies and write slang.lock
+slangc main.sl --dev --run      # fast unoptimized edit-run loop (about 10x faster C compiles)
+slangc main.sl -o billing       # optimized native binary (-O3)
+slangc main.sl --target linux-amd64 --static -o billing-linux   # static Linux binary (uses zig cc if installed)
+slangc main.sl --target linux-arm64 --static --sysroot /opt/arm64-sysroot -o billing-arm64
+slangc main.sl --emit-c         # write main.gen.c without invoking cc
+slangc main.sl --json           # emit compile errors as JSON lines on stderr
+slangc doc httpc client_post    # query signatures and docstrings offline
+```
+
+Cross-compiling uses `zig` (`zig cc -target <triple>`) automatically when on `PATH` or in `$SLANG_CACHE/zig/zig` (`~/.cache/slang/zig/zig`), falling back to `<triple>-gcc` for Linux targets or an explicit `--cc` / `SLANG_CC`. Note that static linking (`--static`) targets Linux (e.g. `linux-amd64` -> `x86_64-linux-musl`, `linux-arm64` -> `aarch64-linux-musl`); programs importing `crypto`, `sql`, or `compress` require target headers/archives via `OPENSSL_DIR` or `--sysroot`.
+
+`--json` outputs one compact JSON object per error so agents and editors
+can fix every file in one pass:
+
+```json
+{"file":"main.sl","line":14,"severity":"error","message":"undefined variable 'summ' (did you mean 'sum'?)"}
+```
+
+### Test runner & data-race detection
+
+`slangc test` compiles all `*_test.sl` files alongside a package, runs
+every `test_*` function in its own green task, and prints one summary
+line when everything passes:
+
+```sh
+slangc test                     # run tests in the current package
+slangc test -v --run retry      # verbose timing for tests matching "retry"
+slangc test --race stdlib/net   # compile & run tests under ThreadSanitizer
+slangc main.sl --race --run     # run a full binary with race detection enabled
+SLANG_RACE=1 ./slangc app.sl --run
+```
+
+Under `--race` / `SLANG_RACE=1`, `slangc` compiles with `-fsanitize=thread`
+and links runtime task-switch annotations (`sl_tsan_*`) so TSan tracks
+green tasks accurately when they migrate across worker OS threads:
+
+```slang
+// counter_test.sl
+fn worker(mtx: mutex, ch: chan[int]) {
+    mutex_lock(mtx);
+    // critical section protected across spawned tasks
+    mutex_unlock(mtx);
+    chan_send(ch, 1);
+}
+
+fn test_concurrent_handoff() {
+    let mtx = make_mutex();
+    let ch: chan[int] = make_chan(2);
+    spawn worker(mtx, ch);
+    spawn worker(mtx, ch);
+    assert((chan_recv(ch) ?? 0) + (chan_recv(ch) ?? 0) == 2);
+}
+```
+
+### Profiling & live task dumps (`pprof` & `SIGQUIT`)
+
+Every compiled slang binary ships built-in task inspection and sampling
+profilers without extra daemons:
+
+- **Signal dump (`SIGQUIT` / `Ctrl-\`)**: sends a live snapshot of all
+  running, runnable, and parked tasks with wait reasons (`chan send`,
+  `chan recv`, `mutex`, `select`, `join`, `sleep`, `net io`) and `.sl`
+  source file/line locations to `stderr` without terminating the process
+  (set `SLANG_SIGQUIT_EXIT=1` to exit immediately after dumping):
+
+```sh
+kill -QUIT <pid>
+```
+
+```text
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
 # Benchmarks
 
 # Benchmarks
@@ -8243,7 +8349,7 @@ unchanged when nothing needs escaping. A 100-row table page (15 KB, six
 actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 `html/template` on the same page, run alternately on one machine.
 
-## All packages
+## Built-in packages
 
 - [acme](packages/acme.md) -- source package, 12 public items
 - [balance](packages/balance.md) -- source package, 17 public items
@@ -8324,6 +8430,22 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [xml](packages/xml.md) -- source package, 25 public items
 - [yaml](packages/yaml.md) -- source package, 4 public items
 - [zip](packages/zip.md) -- source package, 15 public items
+
+## Official ecosystem & tools
+
+- [zokor](https://github.com/dolphlabs/zokor) (Web & Backend, `v0.3.0`) -- Backend web framework for slang with routing, middleware, JSON envelopes, auth, OAuth/OIDC, WebSockets, and postgres helpers. (`pkg zokor git https://github.com/dolphlabs/zokor.git tag v0.3.0 dir zokor`)
+- [amqp](https://github.com/dolphlabs/amqp) (Messaging, `v0.1.0`) -- RabbitMQ (AMQP 0-9-1) client over stdlib net with work queues, pub/sub, RPC, publisher confirms, deadlines, and TLS. (`pkg amqp git https://github.com/dolphlabs/amqp.git tag v0.1.0 dir src/amqp`)
+- [argon](https://github.com/dolphlabs/argon) (Auth & Security, `v0.1.0`) -- Typed Argon2id password hashing and PHC string verification for slang services. (`pkg argon git https://github.com/dolphlabs/argon.git tag v0.1.0 dir src/argon`)
+- [gcs](https://github.com/dolphlabs/gcs) (Cloud & Storage, `v0.1.0`) -- Google Cloud Storage JSON API client with V4 signed URLs, byte-range reads, and service-account auth. (`pkg gcs git https://github.com/dolphlabs/gcs.git tag v0.1.0 dir src/gcs`)
+- [graphql](https://github.com/dolphlabs/graphql) (API & RPC, `v0.1.0`) -- Schema-first GraphQL runtime and code generator (graphqlc) producing typed resolvers and cached execution plans. (`pkg graphql git https://github.com/dolphlabs/graphql.git tag v0.1.0 dir src/graphql`)
+- [grpc](https://github.com/dolphlabs/grpc) (API & RPC, `v0.1.0`) -- gRPC client and server with bounded protobuf wire codecs, protoc-gen-slang, and multiplexed HTTP/2 calls. (`pkg grpc git https://github.com/dolphlabs/grpc.git tag v0.1.0 dir src/grpc`)
+- [jwt](https://github.com/dolphlabs/jwt) (Auth & Security, `v0.2.0`) -- JWS Compact tokens (HS256/384/512, RS256, PS256, ES256, EdDSA), JWKS caching client, and OIDC ID-token verification. (`pkg jwt git https://github.com/dolphlabs/jwt.git tag v0.2.0 dir src/jwt`)
+- [kafka](https://github.com/dolphlabs/kafka) (Messaging, `v0.1.0`) -- Apache Kafka client with producers, consumers, consumer groups, transactions, SASL, and TLS over stdlib net. (`pkg kafka git https://github.com/dolphlabs/kafka.git tag v0.1.0 dir src/kafka`)
+- [mongo](https://github.com/dolphlabs/mongo) (Databases, `v0.1.0`) -- MongoDB driver with ordered BSON codecs, Atlas SRV discovery, and non-blocking net I/O. (`pkg mongo git https://github.com/dolphlabs/mongo.git tag v0.1.0 dir src/mongo`)
+- [sns](https://github.com/dolphlabs/sns) (Cloud & Storage, `v0.1.0`) -- Amazon SNS client for topic publishing, subscription management, and webhook signature verification. (`pkg sns git https://github.com/dolphlabs/sns.git tag v0.1.0 dir src/sns`)
+- [sqs](https://github.com/dolphlabs/sqs) (Cloud & Storage, `v0.1.0`) -- Amazon SQS JSON client with batch send, long polling, visibility control, and AWS SigV4 signing. (`pkg sqs git https://github.com/dolphlabs/sqs.git tag v0.1.0 dir src/sqs`)
+- [zokor_cli](https://github.com/dolphlabs/zokor_cli) (Developer Tools, `v0.3.0`) -- CLI for zokor services: project scaffolding (zokor new), feature generation, migrations, check, and live-reload watch.
+- [slang-analyser](https://github.com/dolphlabs/slang-analyser) (Developer Tools, `v0.2.0`) -- Language server and VS Code extension providing diagnostics, hover types, go-to-definition, completion, and formatting.
 
 ---
 

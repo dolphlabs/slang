@@ -168,6 +168,10 @@ Useful flags:
 | Flag        | Effect                                              |
 |-------------|-----------------------------------------------------|
 | `-o <name>` | Choose the output binary name                       |
+| `--target <t>` | Cross-compile (`linux-amd64`, `linux-arm64`, `darwin-arm64`, `darwin-amd64`, or C triple; `SLANG_TARGET`) |
+| `--static`  | Static link (`-static`, for Linux musl targets; `SLANG_STATIC=1`) |
+| `--cc <cmd>` | Override C compiler command (e.g. `zig cc`; `SLANG_CC`) |
+| `--sysroot <dir>` | Add `-I<dir>/include -L<dir>/lib` for target C libraries (`SLANG_SYSROOT`) |
 | `--emit-c`  | Only write the generated C file (no compilation)    |
 | `--keep-c`  | Keep the generated C file after compiling           |
 | `--run`     | Compile, then run it; exit with the program's own status |
@@ -6520,6 +6524,204 @@ ok: 2 passed (190us)
 - `--race` (or `SLANG_RACE=1`) builds with ThreadSanitizer
   (`-fsanitize=thread`) to detect data races across concurrent `spawn`
   tasks, in both `slangc test --race` and `slangc --race` / `slangc --run --race`.
+
+## Tooling
+
+slang ships its everyday engineering tools either directly inside `slangc`
+and the standard library (`runtime`) or as companion open-source tools in
+the ecosystem, so teams can test, race-check, profile, format, and inspect
+production binaries without wiring together external toolchains.
+
+| Tool | Role | Entry point |
+|---|---|---|
+| Compiler, deps & docs | Compile to C/native binary, fetch `pkg` pins, query stdlib signatures, JSON diagnostics | `slangc` (`new`, `get`, `doc`, `--run`, `--dev`, `--json`) |
+| Test runner | Package-level task-isolated tests with filtering and verbose timing | `slangc test` (`-v`, `--run <pat>`, `--keep`) |
+| Data-race detector | ThreadSanitizer across M:N `spawn` tasks and OS workers | `slangc test --race`, `slangc --race`, `SLANG_RACE=1` |
+| Profiler & task dumps | Live green-task snapshot (`SIGQUIT`), 100 Hz CPU profiler, sampled allocation/heap profiler, `/debug/pprof/` text handler | `import "runtime"`, `kill -QUIT <pid>` |
+| Runtime & GC tuning | Exit GC/scheduler stats, minor write-barrier verifier, `GOGC`-style pacing & soft memory limit | `SLANG_GC_STAT`, `SLANG_GC_VERIFY_MINOR`, `SLANG_GC_PERCENT`, `SLANG_GC_MEMLIMIT_MB` |
+| Language server & formatter | Diagnostics, hover, goto-definition, completion, inlay hints, semantic tokens, deterministic formatting | [`slanganalyser`](https://github.com/dolphlabs/slang-analyser) (`slang.project`) |
+| Backend CLI & arch linter | Scaffold layered services, fast live watch reloads, enforce architectural rules, run migrations | [`zokor_cli`](https://github.com/dolphlabs/zokor_cli) (`zokor newcomp`, `watch`, `check`) |
+| Schema code generators | Generate typed `.sl` structs/codecs from GraphQL SDL or `.proto` definitions | [`graphqlc`](https://github.com/dolphlabs/graphql), [`protoc-gen-slang`](https://github.com/dolphlabs/grpc) |
+
+### Compiler CLI & JSON diagnostics
+
+```sh
+slangc new billing              # scaffold slang.project, main.sl, .gitignore
+slangc get                      # fetch git pkg dependencies and write slang.lock
+slangc main.sl --dev --run      # fast unoptimized edit-run loop (about 10x faster C compiles)
+slangc main.sl -o billing       # optimized native binary (-O3)
+slangc main.sl --target linux-amd64 --static -o billing-linux   # static Linux binary (uses zig cc if installed)
+slangc main.sl --target linux-arm64 --static --sysroot /opt/arm64-sysroot -o billing-arm64
+slangc main.sl --emit-c         # write main.gen.c without invoking cc
+slangc main.sl --json           # emit compile errors as JSON lines on stderr
+slangc doc httpc client_post    # query signatures and docstrings offline
+```
+
+Cross-compiling uses `zig` (`zig cc -target <triple>`) automatically when on `PATH` or in `$SLANG_CACHE/zig/zig` (`~/.cache/slang/zig/zig`), falling back to `<triple>-gcc` for Linux targets or an explicit `--cc` / `SLANG_CC`. Note that static linking (`--static`) targets Linux (e.g. `linux-amd64` -> `x86_64-linux-musl`, `linux-arm64` -> `aarch64-linux-musl`); programs importing `crypto`, `sql`, or `compress` require target headers/archives via `OPENSSL_DIR` or `--sysroot`.
+
+`--json` outputs one compact JSON object per error so agents and editors
+can fix every file in one pass:
+
+```json
+{"file":"main.sl","line":14,"severity":"error","message":"undefined variable 'summ' (did you mean 'sum'?)"}
+```
+
+### Test runner & data-race detection
+
+`slangc test` compiles all `*_test.sl` files alongside a package, runs
+every `test_*` function in its own green task, and prints one summary
+line when everything passes:
+
+```sh
+slangc test                     # run tests in the current package
+slangc test -v --run retry      # verbose timing for tests matching "retry"
+slangc test --race stdlib/net   # compile & run tests under ThreadSanitizer
+slangc main.sl --race --run     # run a full binary with race detection enabled
+SLANG_RACE=1 ./slangc app.sl --run
+```
+
+Under `--race` / `SLANG_RACE=1`, `slangc` compiles with `-fsanitize=thread`
+and links runtime task-switch annotations (`sl_tsan_*`) so TSan tracks
+green tasks accurately when they migrate across worker OS threads:
+
+```slang
+// counter_test.sl
+fn worker(mtx: mutex, ch: chan[int]) {
+    mutex_lock(mtx);
+    // critical section protected across spawned tasks
+    mutex_unlock(mtx);
+    chan_send(ch, 1);
+}
+
+fn test_concurrent_handoff() {
+    let mtx = make_mutex();
+    let ch: chan[int] = make_chan(2);
+    spawn worker(mtx, ch);
+    spawn worker(mtx, ch);
+    assert((chan_recv(ch) ?? 0) + (chan_recv(ch) ?? 0) == 2);
+}
+```
+
+### Profiling & live task dumps (`pprof` & `SIGQUIT`)
+
+Every compiled slang binary ships built-in task inspection and sampling
+profilers without extra daemons:
+
+- **Signal dump (`SIGQUIT` / `Ctrl-\`)**: sends a live snapshot of all
+  running, runnable, and parked tasks with wait reasons (`chan send`,
+  `chan recv`, `mutex`, `select`, `join`, `sleep`, `net io`) and `.sl`
+  source file/line locations to `stderr` without terminating the process
+  (set `SLANG_SIGQUIT_EXIT=1` to exit immediately after dumping):
+
+```sh
+kill -QUIT <pid>
+```
+
+```text
+# tasks: total=4 running=1 runnable=0 parked=3 workers=4
+task 12 [parked: chan recv] src/worker.sl:18 (handle_job)
+```
+
+- **HTTP `/debug/pprof/` endpoints**: use `runtime.pprof_text(path)` from
+  `stdlib/runtime` to serve `/debug/pprof/`, `/debug/pprof/tasks`,
+  `/debug/pprof/heap`, `/debug/pprof/cpu?ms=500` (100 Hz `SIGPROF`
+  sampling, 10..60000 ms), and `/debug/pprof/stats`:
+
+```slang
+import "http";
+import "net";
+import "runtime";
+import "strings";
+
+fn handle_pprof(cfd: i32, raw_req: bytes) {
+    guard let req = http.parse(raw_req) else {
+        net.close(cfd);
+        return;
+    }
+    if strings.has_prefix(req.path, "/debug/pprof") {
+        let rr = runtime.pprof_text(req.path);
+        guard let body = rr else let err_msg = err_of(rr) {
+            let hdr = "HTTP/1.1 404 Not Found\r\nContent-Length: " +
+                      to_str(len(err_msg)) + "\r\nConnection: close\r\n\r\n";
+            let _ = net.send(cfd, to_bytes(hdr + err_msg));
+            net.close(cfd);
+            return;
+        }
+        let hdr = "HTTP/1.1 200 OK\r\nContent-Length: " +
+                  to_str(len(body)) + "\r\nConnection: close\r\n\r\n";
+        let _ = net.send(cfd, to_bytes(hdr + body));
+    }
+    net.close(cfd);
+}
+```
+
+- **Programmatic & env controls**: call `runtime.task_dump()`,
+  `runtime.cpu_profile(duration_ms)`, `runtime.heap_profile()`, and
+  `runtime.stats()` in code. Tune allocation profiling overhead with
+  `SLANG_ALLOC_PROFILE_RATE` (bytes per sample, default `524288` = 512 KB).
+
+### GC & runtime diagnostics
+
+| Environment variable | Purpose |
+|---|---|
+| `SLANG_GC_STAT=1` | Print major/minor counts, pause buckets, phase timings, `sweep_helps`, `mark_helps`, `major_mark_helps`, and `mark_steals` at exit |
+| `SLANG_GC_VERIFY_MINOR=1` | Cross-check every minor GC against a full trace (`missed=0` verifies write barriers) |
+| `SLANG_GC_PERCENT=n` | Set target heap growth ratio before next major GC (default `100`; `off` or `<=0` disables ratio majors) |
+| `SLANG_GC_MEMLIMIT_MB=n` | Soft live-heap memory target that tightens major GC headroom as retained memory nears `n` MB |
+| `SLANG_WORKERS=n` | Override worker OS thread pool size (default derives from CPU affinity / container quota) |
+| `SLANG_PREEMPT_QUANTUM_MS=n` | Async task preemption time slice in milliseconds |
+
+### Editor LSP & formatter (`slanganalyser`)
+
+[`slanganalyser`](https://github.com/dolphlabs/slang-analyser) is the
+Rust-based Language Server Protocol (`--stdio`) and deterministic
+formatter (`slang_fmt`) for `.sl` workspaces rooted at `slang.project`:
+
+- **VS Code / Cursor / Windsurf**: install `dolphlabs.slang-analyser`
+  from the Marketplace or Open VSX (auto-downloads SHA-256-verified
+  binaries, with optional `slang.serverPath` override).
+- **Neovim 0.11+**: install `slanganalyser` (`cargo install --path crates/slanganalyser`)
+  on `PATH` and register the client for `.sl` files:
+
+```lua
+vim.filetype.add({ extension = { sl = "slang" } })
+vim.lsp.config("slanganalyser", {
+  cmd = { "slanganalyser" },
+  filetypes = { "slang" },
+  root_markers = { "slang.project", ".git" },
+})
+vim.lsp.enable("slanganalyser")
+```
+
+Provided LSP features: live type diagnostics, hover signatures/docs,
+goto-definition, completion, inlay hints, semantic tokens, and formatting.
+
+### Companion CLI & codegen (`zokor_cli`, `graphqlc`, `protoc-gen-slang`)
+
+For web services built with [**zokor**](https://github.com/dolphlabs/zokor),
+install [`zokor_cli`](https://github.com/dolphlabs/zokor_cli):
+
+```sh
+zokor newcomp billing --db pg   # layered service with domain/service/store/server + auth
+cd billing && slangc get
+zokor watch                     # FSEvents/inotify rebuilds with SLANG_DEV=1 & atomic swap
+zokor add feature invoices --entity invoice
+zokor add route invoices POST /invoices create_invoice
+zokor check --json              # enforce layer boundaries, pure domain, config & zokor.rules
+zokor migrate                   # run pending SQL migrations against DATABASE_URL
+```
+
+Schema-first code generators emit plain `.sl` structs and codecs ahead of
+time (with no runtime reflection):
+
+```sh
+# GraphQL SDL -> typed slang structs & resolvers (checks CI freshness with -check)
+graphqlc -schema schema.graphql -out src/generated/schema.gen.sl
+
+# Protobuf / gRPC -> typed messages & HTTP/2 unary RPC bindings
+protoc --plugin=protoc-gen-slang=./bin/protoc-gen-slang \
+  --proto_path=proto --slang_out=src/generated proto/user.proto
+```
 
 ## C interop
 
