@@ -11,7 +11,7 @@ static void sl_log_line(const char *level, const char *msg) {
     fprintf(stderr, "%s.%09ld %s %s\n", stamp, (long)ts.tv_nsec, level, msg);
 }
 
-static void sl_log_debug(const char *msg) { sl_log_line("DEBUG", msg); }
-static void sl_log_info(const char *msg) { sl_log_line("INFO", msg); }
-static void sl_log_warn(const char *msg) { sl_log_line("WARN", msg); }
-static void sl_log_error(const char *msg) { sl_log_line("ERROR", msg); }
+SL_API void sl_log_debug(const char *msg) { sl_log_line("DEBUG", msg); }
+SL_API void sl_log_info(const char *msg) { sl_log_line("INFO", msg); }
+SL_API void sl_log_warn(const char *msg) { sl_log_line("WARN", msg); }
+SL_API void sl_log_error(const char *msg) { sl_log_line("ERROR", msg); }

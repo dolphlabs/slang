@@ -441,12 +441,12 @@ static const char *sl_uc_empty(void) {
 
 /* ---- the package ---------------------------------------------------------- */
 
-static bool sl_unicode_valid(const char *s) {
+SL_API bool sl_unicode_valid(const char *s) {
     if (!s) return true;
     return sl_uc_valid_n((const unsigned char *)s, strlen(s));
 }
 
-static bool sl_unicode_valid_bytes(sl_bytes *b) {
+SL_API bool sl_unicode_valid_bytes(sl_bytes *b) {
     if (!b) return true;
     return sl_uc_valid_n(b->ptr, (size_t)b->len);
 }
@@ -469,7 +469,7 @@ static long long sl_uc_count_valid(const unsigned char *p, size_t n) {
 
 /* Characters (code points); each invalid subpart counts as one, as it
    would after repair. Valid input, the norm, takes the fast count. */
-static long long sl_unicode_count(const char *s) {
+SL_API long long sl_unicode_count(const char *s) {
     if (!s) return 0;
     const unsigned char *p = (const unsigned char *)s;
     size_t n = strlen(s), i = 0;
@@ -484,7 +484,7 @@ static long long sl_unicode_count(const char *s) {
 }
 
 /* The code points of s, invalid subparts as U+FFFD (65533). */
-static sl_arr *sl_unicode_runes(const char *s) {
+SL_API sl_arr *sl_unicode_runes(const char *s) {
     size_t n = s ? strlen(s) : 0;
     /* numbers only: pointer-free, so the collector never scans the
        elements; sized once from the count */
@@ -503,7 +503,7 @@ static sl_arr *sl_unicode_runes(const char *s) {
 
 /* The UTF-8 for one code point, or none: negative, a surrogate, past
    U+10FFFF, or U+0000, which a str (NUL-terminated) cannot hold. */
-static sl_opt_str *sl_unicode_encode(long long cp) {
+SL_API sl_opt_str *sl_unicode_encode(long long cp) {
     sl_opt_str *o =
         (sl_opt_str *)sl_gc_alloc(sizeof(sl_opt_str), sl_gc_trace_sl_opt_str);
     o->has = false;
@@ -518,7 +518,7 @@ static sl_opt_str *sl_unicode_encode(long long cp) {
 
 /* The first n characters of s. s itself when it is valid and no longer
    than that; a negative n reads as 0. */
-static const char *sl_unicode_truncate(const char *s, long long n) {
+SL_API const char *sl_unicode_truncate(const char *s, long long n) {
     if (!s || n <= 0) return sl_uc_empty();
     const unsigned char *p = (const unsigned char *)s;
     size_t len = strlen(s), i = 0;
@@ -545,7 +545,7 @@ static const char *sl_unicode_truncate(const char *s, long long n) {
     return out;
 }
 
-static const char *sl_unicode_fold(const char *s) {
+SL_API const char *sl_unicode_fold(const char *s) {
     if (!s) return sl_uc_empty();
     const unsigned char *p = (const unsigned char *)s;
     size_t n = strlen(s);
@@ -572,7 +572,7 @@ static const char *sl_unicode_fold(const char *s) {
     return r;
 }
 
-static const char *sl_unicode_nfd(const char *s) {
+SL_API const char *sl_unicode_nfd(const char *s) {
     if (!s) return sl_uc_empty();
     const unsigned char *p = (const unsigned char *)s;
     size_t n = strlen(s);
@@ -588,7 +588,7 @@ static const char *sl_unicode_nfd(const char *s) {
     return r;
 }
 
-static const char *sl_unicode_nfc(const char *s) {
+SL_API const char *sl_unicode_nfc(const char *s) {
     if (!s) return sl_uc_empty();
     const unsigned char *p = (const unsigned char *)s;
     size_t n = strlen(s);
@@ -602,7 +602,7 @@ static const char *sl_unicode_nfc(const char *s) {
     return r;
 }
 
-static bool sl_unicode_is_nfc(const char *s) {
+SL_API bool sl_unicode_is_nfc(const char *s) {
     if (!s) return true;
     const unsigned char *p = (const unsigned char *)s;
     size_t n = strlen(s);
@@ -776,7 +776,7 @@ sl_uc_equal_fold_stream(const unsigned char *p, const unsigned char *q) {
     return eq;
 }
 
-static bool sl_unicode_equal_fold(const char *x, const char *y) {
+SL_API bool sl_unicode_equal_fold(const char *x, const char *y) {
     if (!x) x = "";
     if (!y) y = "";
     const unsigned char *p = (const unsigned char *)x;

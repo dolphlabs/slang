@@ -304,7 +304,7 @@ static char *sl_x509_fmt_ll(long long v) {
 /* Every CERTIFICATE block of a PEM text, as concatenated DER. Text
  * outside the blocks (comments, other block types) is skipped, as
  * OpenSSL's PEM reader does; a block that does not decode is an error. */
-static sl_res_bytes_str *sl_crypto_x509_der(const char *pem) {
+SL_API sl_res_bytes_str *sl_crypto_x509_der(const char *pem) {
     SL_CRYPTO_STACK();
     if (!pem)
         return sl_crypto_err_bytes("x509: no CERTIFICATE block in the PEM");
@@ -368,7 +368,7 @@ static sl_res_bytes_str *sl_crypto_x509_der(const char *pem) {
  * public_key_pem, signature_alg, fingerprint), then tagged entries --
  * "dns:", "ip:", "email:", "uri:" for subjectAltName and "ku:", "eku:"
  * for key usages. */
-static sl_res__str__str *sl_crypto_x509_fields(sl_bytes *der) {
+SL_API sl_res__str__str *sl_crypto_x509_fields(sl_bytes *der) {
     SL_CRYPTO_STACK();
     if (!der || der->len <= 0)
         return sl_x509_err_list("x509: empty DER");
@@ -464,7 +464,7 @@ static int sl_x509_dns_match(const char *pat, size_t plen, const char *host, siz
  * longer trust for names. An IP literal matches IP entries only, byte
  * for byte, so "::1" and "0:0::1" are one address. OpenSSL 4.1
  * deprecated X509_check_host without a replacement, so this is ours. */
-static bool sl_crypto_x509_check_host(sl_bytes *der, const char *host) {
+SL_API bool sl_crypto_x509_check_host(sl_bytes *der, const char *host) {
     SL_CRYPTO_STACK();
     if (!der || der->len <= 0 || !host || !host[0] || strchr(host, '*'))
         return false;
@@ -585,7 +585,7 @@ static const char *sl_x509_reason(int code) {
 /* `chain` is the leaf's DER followed by any intermediates'. ok(true), or
  * OpenSSL's reason the chain does not verify. `at` 0 checks validity
  * now; `purpose` is "server", "client" or "" for none. */
-static sl_res_bool_str *sl_crypto_x509_verify(sl_bytes *chain, const char *roots_pem,
+SL_API sl_res_bool_str *sl_crypto_x509_verify(sl_bytes *chain, const char *roots_pem,
                                               const char *host, long long at,
                                               const char *purpose) {
     SL_CRYPTO_STACK();
@@ -733,7 +733,7 @@ static int sl_x509_key_ok(EVP_PKEY *k) {
 /* A PKCS#10 request for `cn` and `sans`, signed with `key_pem`. What an
  * ACME server (or any CA) is sent; it takes the names from here and the
  * public key the request carries. */
-static sl_res_str_str *sl_crypto_x509_csr(const char *key_pem, const char *cn, sl_arr *sans) {
+SL_API sl_res_str_str *sl_crypto_x509_csr(const char *key_pem, const char *cn, sl_arr *sans) {
     SL_CRYPTO_STACK();
     sl_x509_init();
     const char *fail = NULL;
@@ -805,7 +805,7 @@ static int sl_x509_add_ext(X509 *x, int nid, const char *value) {
  * placeholder an ACME client serves before its first certificate. It
  * is a leaf (CA:FALSE) good for server and client auth; verify it by
  * passing its own PEM as the roots. */
-static sl_res_str_str *sl_crypto_x509_self_signed(const char *key_pem, const char *cn,
+SL_API sl_res_str_str *sl_crypto_x509_self_signed(const char *key_pem, const char *cn,
                                                   sl_arr *sans, long long days) {
     SL_CRYPTO_STACK();
     if (days < 1 || days > 36500)

@@ -504,7 +504,7 @@ static void sl_runq_shutdown(sl_runq *q) {
     pthread_mutex_unlock(&q->mu);
 }
 
-static void sl_task_submit(void (*entry)(void *), void *arg) {
+SL_API void sl_task_submit(void (*entry)(void *), void *arg) {
     sl_task *t = sl_task_acquire(entry, arg);
     t->entry_arg = arg;
     sl_rt_preempt_disable();
@@ -515,7 +515,7 @@ static void sl_task_submit(void (*entry)(void *), void *arg) {
                                   memory_order_relaxed);
 }
 
-static void sl_task_submit_copy_to(void (*entry)(void *), const void *src,
+SL_API void sl_task_submit_copy_to(void (*entry)(void *), const void *src,
                                    size_t n,
                                    void (*trace)(void *, void (*)(void *)),
                                    int wake, const char *spawn_at) {
@@ -544,7 +544,7 @@ static void sl_task_submit_copy_to(void (*entry)(void *), const void *src,
                                   memory_order_relaxed);
 }
 
-static void sl_task_submit_copy(void (*entry)(void *), const void *src,
+SL_API void sl_task_submit_copy(void (*entry)(void *), const void *src,
                                 size_t n,
                                 void (*trace)(void *, void (*)(void *)),
                                 const char *spawn_at) {
@@ -558,7 +558,7 @@ static void sl_task_submit_copy(void (*entry)(void *), const void *src,
     sl_runq_ready_to. If anything else stops the spawner first (a
     preemption yield, a collection), the worker still reaches its run
     loop and the slot the same way. */
-static void sl_task_submit_copy_joined(void (*entry)(void *),
+SL_API void sl_task_submit_copy_joined(void (*entry)(void *),
                                        const void *src, size_t n,
                                        void (*trace)(void *,
                                                      void (*)(void *))) {
@@ -820,7 +820,9 @@ static void sl_worker_after_switch(sl_task *t) {
  * SL_POOL_MAX_WORKERS and the slot type available at its own
  * definition site, same ordering reason as every other forward-
  * declaration in this codebase. */
+/* SL_DEV_DECL_BEGIN */
 #define SL_POOL_MAX_WORKERS 256
+/* SL_DEV_DECL_END */
 _Static_assert(SL_RUNNEXT_SLOTS == SL_POOL_MAX_WORKERS + 1,
                "one runnext slot per pool worker, plus main's");
 static pthread_t sl_pool_workers[SL_POOL_MAX_WORKERS];
@@ -851,7 +853,9 @@ typedef struct sl_pool_slot {
  * looks at it (its loop stops at SL_POOL_MAX_WORKERS), but sl_gc_stw_sync
  * reads it to hold back its stop signal while main's thread runs a task
  * inside a preempt bracket. */
+/* SL_DEV_DECL_BEGIN */
 #define SL_POOL_MAIN_SLOT SL_POOL_MAX_WORKERS
+/* SL_DEV_DECL_END */
 static sl_pool_slot sl_pool_slots[SL_POOL_MAX_WORKERS + 1];
 
 /* Tier 11 eighth slice: a genuine use-after-free the atomic .cur field
@@ -924,17 +928,17 @@ static sl_pool_slot sl_pool_slots[SL_POOL_MAX_WORKERS + 1];
  * before any signal based on it could land), and after the switch back,
  * clear it and finish t's switch under the slot's mutex (see the mutex
  * comment above for the use-after-free that closes). */
-static inline void sl_pool_slot_occupy(long slot, sl_task *t) {
+SL_API_INLINE void sl_pool_slot_occupy(long slot, sl_task *t) {
     atomic_store_explicit(&sl_pool_slots[slot].cur, t, memory_order_release);
 }
-static inline void sl_pool_slot_vacate(long slot, sl_task *t) {
+SL_API_INLINE void sl_pool_slot_vacate(long slot, sl_task *t) {
     pthread_mutex_lock(&sl_pool_slots[slot].mu);
     atomic_store_explicit(&sl_pool_slots[slot].cur, NULL, memory_order_release);
     sl_worker_after_switch(t);
     pthread_mutex_unlock(&sl_pool_slots[slot].mu);
 }
 
-static void sl_worker_run_loop(long slot_idx) {
+SL_API void sl_worker_run_loop(long slot_idx) {
     /* Main's thread (-1) books its tasks in SL_POOL_MAIN_SLOT, which the
      * ticker does not scan: its tasks stay cooperative-only, as before. */
     long occ = slot_idx >= 0 ? slot_idx : SL_POOL_MAIN_SLOT;
@@ -2126,7 +2130,7 @@ static long sl_cgroup_cpu_limit(void) {
 }
 #endif
 
-static void sl_pool_start(void) {
+SL_API void sl_pool_start(void) {
     /* Writing to a socket whose peer has hung up raises SIGPIPE, and the
      * default disposition is to KILL THE PROCESS. For a server that is
      * catastrophic and routine at once: a client closing a browser tab

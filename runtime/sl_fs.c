@@ -52,7 +52,7 @@ static sl_res_bool_str *sl_fs_err_bool(const char *msg) {
     return r;
 }
 
-static sl_res_i32_str *sl_fs_open(const char *path) {
+SL_API sl_res_i32_str *sl_fs_open(const char *path) {
     if (!path)
         return sl_fs_err_i32("invalid path");
     int fd = open(path, O_RDONLY | O_CLOEXEC);
@@ -61,7 +61,7 @@ static sl_res_i32_str *sl_fs_open(const char *path) {
     return sl_fs_ok_i32((int32_t)fd);
 }
 
-static sl_res_i32_str *sl_fs_create(const char *path) {
+SL_API sl_res_i32_str *sl_fs_create(const char *path) {
     if (!path)
         return sl_fs_err_i32("invalid path");
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
@@ -70,7 +70,7 @@ static sl_res_i32_str *sl_fs_create(const char *path) {
     return sl_fs_ok_i32((int32_t)fd);
 }
 
-static sl_res_bytes_str *sl_fs_read(int fd, int max) {
+SL_API sl_res_bytes_str *sl_fs_read(int fd, int max) {
     if (fd < 0)
         return sl_fs_err_bytes("invalid fd");
     if (max < 0)
@@ -95,7 +95,7 @@ static sl_res_bytes_str *sl_fs_read(int fd, int max) {
 /* Up to `len` bytes starting at `offset`, without moving the file
  * position -- so several tasks can read different ranges of one fd at
  * once. Loops over short reads; fewer bytes than asked only at EOF. */
-static sl_res_bytes_str *sl_fs_pread(int fd, long long offset, long long len) {
+SL_API sl_res_bytes_str *sl_fs_pread(int fd, long long offset, long long len) {
     if (fd < 0)
         return sl_fs_err_bytes("invalid fd");
     if (offset < 0 || len < 0)
@@ -122,7 +122,7 @@ static sl_res_bytes_str *sl_fs_pread(int fd, long long offset, long long len) {
     return sl_fs_ok_bytes(b);
 }
 
-static sl_res_i32_str *sl_fs_write(int fd, sl_bytes *data) {
+SL_API sl_res_i32_str *sl_fs_write(int fd, sl_bytes *data) {
     if (fd < 0)
         return sl_fs_err_i32("invalid fd");
     if (!data)
@@ -142,7 +142,7 @@ static sl_res_i32_str *sl_fs_write(int fd, sl_bytes *data) {
     return sl_fs_ok_i32((int32_t)off);
 }
 
-static sl_res_bool_str *sl_fs_close(int fd) {
+SL_API sl_res_bool_str *sl_fs_close(int fd) {
     if (fd < 0)
         return sl_fs_err_bool("invalid fd");
     /* fs.close of a socket from net.accept/dial must drop its reactor
@@ -154,7 +154,7 @@ static sl_res_bool_str *sl_fs_close(int fd) {
     return sl_fs_ok_bool(true);
 }
 
-static sl_res_bool_str *sl_fs_mkdir(const char *path) {
+SL_API sl_res_bool_str *sl_fs_mkdir(const char *path) {
     if (!path)
         return sl_fs_err_bool("invalid path");
     if (mkdir(path, 0755) != 0)
@@ -183,7 +183,7 @@ static sl_res_str_str *sl_fs_err_str(const char *msg) {
 /* fs.realpath(path): the absolute path with every symlink, "." and ".."
  * resolved -- what a server compares against its root to refuse a file
  * that a link leads outside it. err when the path does not exist. */
-static sl_res_str_str *sl_fs_realpath(const char *path) {
+SL_API sl_res_str_str *sl_fs_realpath(const char *path) {
     if (!path || !path[0])
         return sl_fs_err_str("invalid path");
     /* libc's realpath keeps PATH_MAX-sized buffers on the stack: more
@@ -206,7 +206,7 @@ static sl_res_str_str *sl_fs_realpath(const char *path) {
  * kind 0 a regular file, 1 a directory, 2 anything else -- or [] when fd
  * is not open. Of the file already opened, so what is served is what
  * was checked. */
-static sl_arr *sl_fs_fstat(int fd) {
+SL_API sl_arr *sl_fs_fstat(int fd) {
     sl_arr *a = sl_arr_new(sizeof(long long), SL_ELEM_NOPTR);
     struct stat st;
     if (fstat(fd, &st) != 0)

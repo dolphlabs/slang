@@ -3,6 +3,7 @@
 
 /* ---- json: generic parse tree ---- */
 
+/* SL_DEV_DECL_BEGIN */
 typedef enum { SL_JV_NULL, SL_JV_BOOL, SL_JV_NUM, SL_JV_STR, SL_JV_ARR, SL_JV_OBJ } sl_jv_kind;
 typedef struct sl_json_val sl_json_val;
 struct sl_json_val {
@@ -18,6 +19,7 @@ struct sl_json_val {
         struct { char **keys; sl_json_val **vals; long long len; } obj;
     } as;
 };
+/* SL_DEV_DECL_END */
 
 /* Tier 10: sl_json_val is a hand-rolled tree, not a slang-declared
  * type, so it gets its own hand-written tracer (mirrors sl_arr/
@@ -59,6 +61,7 @@ static void sl_gc_trace_json_val(void *p, void (*mark)(void *)) {
     }
 }
 
+/* SL_DEV_DECL_BEGIN */
 #define SL_JSON_MAX_DEPTH 512
 
 typedef struct {
@@ -68,6 +71,7 @@ typedef struct {
     long long depth;
     char *err;
 } sl_jparser;
+/* SL_DEV_DECL_END */
 
 /* Tier 11 eighth slice: bracketed entry-to-return -- vsnprintf/
  * snprintf's own libc implementation touches locale state behind an
@@ -166,7 +170,7 @@ static void sl_jbuf_byte(char **buf, long long *len, long long *cap, int c) {
     (*buf)[(*len)++] = (char)c;
 }
 
-static char *sl_jparse_string_raw(sl_jparser *p) {
+SL_API char *sl_jparse_string_raw(sl_jparser *p) {
     /* Most strings have no escapes: find the closing quote first and copy
      * them in one allocation of the right size. Anything else (an escape,
      * a control character, no closing quote) takes the loop below from
@@ -501,7 +505,7 @@ fail:
     goto done;
 }
 
-static sl_json_val *sl_json_parse(const char *s, long long len, char **errmsg) {
+SL_API sl_json_val *sl_json_parse(const char *s, long long len, char **errmsg) {
     sl_jparser p = { s, len, 0, 0, NULL };
     sl_json_val *v = sl_jparse_value(&p);
     if (!v) { *errmsg = p.err; return NULL; }
@@ -517,14 +521,14 @@ static sl_json_val *sl_json_parse(const char *s, long long len, char **errmsg) {
 
 /* ---- json: struct-object field lookup ---- */
 
-static sl_json_val *sl_json_obj_get(sl_json_val *v, const char *key) {
+SL_API sl_json_val *sl_json_obj_get(sl_json_val *v, const char *key) {
     for (long long i = 0; i < v->as.obj.len; i++)
         if (!strcmp(v->as.obj.keys[i], key))
             return v->as.obj.vals[i];
     return NULL;
 }
 
-static const char *sl_json_kind_name(sl_json_val *v) {
+SL_API const char *sl_json_kind_name(sl_json_val *v) {
     switch (v->kind) {
     case SL_JV_NULL: return "null";
     case SL_JV_BOOL: return "a boolean";
@@ -540,7 +544,7 @@ static const char *sl_json_kind_name(sl_json_val *v) {
 
 /* Tier 11 eighth slice: bracketed -- see sl_jerr's own comment above
  * for why (vsnprintf/snprintf's internal locale locking). */
-static char *sl_json_errf(const char *fmt, ...) {
+SL_API char *sl_json_errf(const char *fmt, ...) {
     sl_rt_preempt_disable();
     char buf[256];
     va_list ap;
@@ -551,7 +555,7 @@ static char *sl_json_errf(const char *fmt, ...) {
     return sl_strdup(buf);
 }
 
-static char *sl_json_wrap_err(const char *ctx, char *inner) {
+SL_API char *sl_json_wrap_err(const char *ctx, char *inner) {
     size_t n = strlen(ctx) + strlen(inner) + 4;
     char *m = (char *)sl_gc_alloc(n, NULL);
     sl_rt_preempt_disable();
@@ -562,7 +566,7 @@ static char *sl_json_wrap_err(const char *ctx, char *inner) {
 
 /* ---- json: scalar decode helpers ---- */
 
-static bool sl_json_dec_num(sl_json_val *v, double *out, char **err) {
+SL_API bool sl_json_dec_num(sl_json_val *v, double *out, char **err) {
     if (v->kind != SL_JV_NUM) {
         *err = sl_json_errf("expected a number, got %s", sl_json_kind_name(v));
         return false;
@@ -571,7 +575,7 @@ static bool sl_json_dec_num(sl_json_val *v, double *out, char **err) {
     return true;
 }
 
-static bool sl_json_dec_bool(sl_json_val *v, bool *out, char **err) {
+SL_API bool sl_json_dec_bool(sl_json_val *v, bool *out, char **err) {
     if (v->kind != SL_JV_BOOL) {
         *err = sl_json_errf("expected a boolean, got %s", sl_json_kind_name(v));
         return false;
@@ -580,7 +584,7 @@ static bool sl_json_dec_bool(sl_json_val *v, bool *out, char **err) {
     return true;
 }
 
-static bool sl_json_dec_str(sl_json_val *v, const char **out, char **err) {
+SL_API bool sl_json_dec_str(sl_json_val *v, const char **out, char **err) {
     if (v->kind != SL_JV_STR) {
         *err = sl_json_errf("expected a string, got %s", sl_json_kind_name(v));
         return false;
@@ -718,7 +722,7 @@ static char *sl_jt_error(int why, const char *s) {
     }
 }
 
-static bool sl_json_dec_time(sl_json_val *v, long long *sec, long long *nsec, char **err) {
+SL_API bool sl_json_dec_time(sl_json_val *v, long long *sec, long long *nsec, char **err) {
     if (v->kind != SL_JV_STR) {
         *err = sl_json_errf("expected an RFC 3339 timestamp string, got %s",
                             sl_json_kind_name(v));
@@ -745,11 +749,13 @@ static bool sl_json_dec_time(sl_json_val *v, long long *sec, long long *nsec, ch
  * The struct is five base-10^9 limbs (l0 least significant), a scale and
  * a sign; tests/json_decimal checks this parser against decimal.parse. */
 
+/* SL_DEV_DECL_BEGIN */
 typedef struct {
     long long l[5];
     long long scale;
     bool neg;
 } sl_jdec;
+/* SL_DEV_DECL_END */
 
 enum {
     SL_JDEC_OK = 0,
@@ -867,7 +873,7 @@ static char *sl_jdec_error(int why, const char *s, size_t n) {
                         what);
 }
 
-static bool sl_json_dec_decimal(sl_json_val *v, sl_jdec *out, char **err) {
+SL_API bool sl_json_dec_decimal(sl_json_val *v, sl_jdec *out, char **err) {
     const char *text;
     if (v->kind == SL_JV_STR) {
         text = v->as.str;
@@ -929,7 +935,7 @@ static bool sl_json_b64(const char *s, sl_bytes **out) {
     return true;
 }
 
-static bool sl_json_dec_bytes(sl_json_val *v, sl_bytes **out, char **err) {
+SL_API bool sl_json_dec_bytes(sl_json_val *v, sl_bytes **out, char **err) {
     if (v->kind != SL_JV_STR) {
         *err = sl_json_errf("expected a base64 string, got %s",
                             sl_json_kind_name(v));
@@ -1083,7 +1089,7 @@ static bool sl_json_dec_unsigned(sl_json_val *v, unsigned long long hi,
 }
 
 #define SL_JSON_SIGNED_DEC(NAME, T, LO, HI, TNAME)                          \
-    static bool NAME(sl_json_val *v, T *out, char **err) {                  \
+    SL_API bool NAME(sl_json_val *v, T *out, char **err) {                  \
         long long x;                                                        \
         if (!sl_json_dec_signed(v, (LO), (HI), TNAME, &x, err))             \
             return false;                                                   \
@@ -1092,7 +1098,7 @@ static bool sl_json_dec_unsigned(sl_json_val *v, unsigned long long hi,
     }
 
 #define SL_JSON_UNSIGNED_DEC(NAME, T, HI, TNAME)                            \
-    static bool NAME(sl_json_val *v, T *out, char **err) {                  \
+    SL_API bool NAME(sl_json_val *v, T *out, char **err) {                  \
         unsigned long long x;                                               \
         if (!sl_json_dec_unsigned(v, (HI), TNAME, &x, err))                 \
             return false;                                                   \
@@ -1119,14 +1125,26 @@ SL_JSON_UNSIGNED_DEC(sl_json_dec_u64, uint64_t, UINT64_MAX, "u64")
  * is i64's; stdint.h's limits avoid adding limits.h to every program. */
 SL_JSON_SIGNED_DEC(sl_json_dec_int, long long, INT64_MIN, INT64_MAX, "int")
 
-static bool sl_json_dec_f32(sl_json_val *v, float *out, char **err) {
+/* SL_DEV_DECL_BEGIN */
+SL_API_DECL bool sl_json_dec_i8(sl_json_val *v, int8_t *out, char **err);
+SL_API_DECL bool sl_json_dec_i16(sl_json_val *v, int16_t *out, char **err);
+SL_API_DECL bool sl_json_dec_i32(sl_json_val *v, int32_t *out, char **err);
+SL_API_DECL bool sl_json_dec_u8(sl_json_val *v, uint8_t *out, char **err);
+SL_API_DECL bool sl_json_dec_u16(sl_json_val *v, uint16_t *out, char **err);
+SL_API_DECL bool sl_json_dec_u32(sl_json_val *v, uint32_t *out, char **err);
+SL_API_DECL bool sl_json_dec_i64(sl_json_val *v, int64_t *out, char **err);
+SL_API_DECL bool sl_json_dec_u64(sl_json_val *v, uint64_t *out, char **err);
+SL_API_DECL bool sl_json_dec_int(sl_json_val *v, long long *out, char **err);
+/* SL_DEV_DECL_END */
+
+SL_API bool sl_json_dec_f32(sl_json_val *v, float *out, char **err) {
     double d;
     if (!sl_json_dec_num(v, &d, err)) return false;
     *out = (float)d;
     return true;
 }
 
-static bool sl_json_dec_f64(sl_json_val *v, double *out, char **err) {
+SL_API bool sl_json_dec_f64(sl_json_val *v, double *out, char **err) {
     return sl_json_dec_num(v, out, err);
 }
 
@@ -1147,13 +1165,13 @@ static bool sl_json_dec_f64(sl_json_val *v, double *out, char **err) {
  * mirrors the tree parser's; rejecting more only costs a fallback. */
 
 /* Skip whitespace and return the next byte (-1 at the end), unread. */
-static int sl_jd_peek(sl_jparser *p) {
+SL_API int sl_jd_peek(sl_jparser *p) {
     sl_jskip_ws(p);
     return sl_jpeek(p);
 }
 
 /* Consume `c` after any whitespace. */
-static bool sl_jd_eat(sl_jparser *p, int c) {
+SL_API bool sl_jd_eat(sl_jparser *p, int c) {
     if (sl_jd_peek(p) != c) return false;
     p->pos++;
     return true;
@@ -1161,13 +1179,13 @@ static bool sl_jd_eat(sl_jparser *p, int c) {
 
 /* Open an array or object: the bracket and one level of the tree's depth
  * limit, which bounds the C stack for recursive types too. */
-static bool sl_jd_open(sl_jparser *p, int c) {
+SL_API bool sl_jd_open(sl_jparser *p, int c) {
     if (!sl_jd_eat(p, c)) return false;
     return ++p->depth <= SL_JSON_MAX_DEPTH;
 }
 
 /* The closing bracket right after an opening one: an empty container. */
-static bool sl_jd_empty(sl_jparser *p, int close) {
+SL_API bool sl_jd_empty(sl_jparser *p, int close) {
     if (sl_jd_peek(p) != close) return false;
     p->pos++;
     p->depth--;
@@ -1176,7 +1194,7 @@ static bool sl_jd_empty(sl_jparser *p, int close) {
 
 /* After an element or member: true on `,` (another follows), false with
  * *done set on the closing bracket, false with *done clear otherwise. */
-static bool sl_jd_more(sl_jparser *p, int close, bool *done) {
+SL_API bool sl_jd_more(sl_jparser *p, int close, bool *done) {
     sl_jskip_ws(p);
     int c = sl_jnext(p);
     *done = c == close;
@@ -1269,8 +1287,7 @@ static bool sl_jd_skip_string(sl_jparser *p) {
  * call this. Containers are tested after the scalars because most
  * values are scalars; in that order this is a little faster than the
  * recursive version was on a 97KB body. */
-__attribute__((noinline))
-static bool sl_jd_skip(sl_jparser *p) {
+SL_API __attribute__((noinline)) bool sl_jd_skip(sl_jparser *p) {
     unsigned char obj_stack[(SL_JSON_MAX_DEPTH + 7) / 8];
     int depth = 0;  /* levels this call has opened and not yet closed */
     int in_obj = 0; /* whether the innermost of them is an object */
@@ -1327,7 +1344,7 @@ static bool sl_jd_skip(sl_jparser *p) {
 /* The key of the next member and its colon. A key without escapes is read
  * in place (*k points into the input, *klen bytes); one with escapes is
  * decoded like the tree's key, \u0000 as U+FFFD. */
-static bool sl_jd_key(sl_jparser *p, const char **k, long long *klen) {
+SL_API bool sl_jd_key(sl_jparser *p, const char **k, long long *klen) {
     if (!sl_jd_eat(p, '"')) return false;
     long long start = p->pos;
     long long end = start;
@@ -1360,16 +1377,14 @@ static bool sl_jd_key(sl_jparser *p, const char **k, long long *klen) {
  * call was not inlined even for a 5-byte constant key, and libc's
  * memcmp was 11% of the quote server's CPU on Linux. A plain loop with
  * a constant n (every call site's) is unrolled into a few compares. */
-__attribute__((always_inline))
-static inline int sl_jbytes_eq(const char *a, const char *b, long long n) {
+SL_API_ALWAYS_INLINE int sl_jbytes_eq(const char *a, const char *b, long long n) {
     for (long long i = 0; i < n; i++)
         if (a[i] != b[i])
             return 0;
     return 1;
 }
 
-__attribute__((always_inline))
-static inline int sl_jd_key_is(sl_jparser *p, const char *q, long long qn) {
+SL_API_ALWAYS_INLINE int sl_jd_key_is(sl_jparser *p, const char *q, long long qn) {
     sl_jskip_ws(p);
     if (p->len - p->pos < qn || !sl_jbytes_eq(p->s + p->pos, q, qn))
         return 0;
@@ -1378,7 +1393,7 @@ static inline int sl_jd_key_is(sl_jparser *p, const char *q, long long qn) {
 }
 
 /* The end of the whole input: only whitespace may follow the value. */
-static bool sl_jd_end(sl_jparser *p) {
+SL_API bool sl_jd_end(sl_jparser *p) {
     sl_jskip_ws(p);
     return p->pos == p->len;
 }
@@ -1434,7 +1449,7 @@ static long long sl_json_depth(const char *s, long long n) {
 #define SL_JSON_LEVEL_SCALE 1
 #endif
 
-static void sl_json_stack_for(const char *s, long long n, size_t per_level) {
+SL_API void sl_json_stack_for(const char *s, long long n, size_t per_level) {
     per_level *= SL_JSON_LEVEL_SCALE;
     sl_task *t = sl_rt_cur();
     if (!t || !t->stack_base) return;
@@ -1450,18 +1465,18 @@ static void sl_json_stack_for(const char *s, long long n, size_t per_level) {
     sl_rt_stack_reserve((size_t)levels * per_level);
 }
 
-static bool sl_jd_null(sl_jparser *p) {
+SL_API bool sl_jd_null(sl_jparser *p) {
     return sl_jd_peek(p) == 'n' && sl_jmatch_lit(p, "null");
 }
 
-static bool sl_jd_bool(sl_jparser *p, bool *out) {
+SL_API bool sl_jd_bool(sl_jparser *p, bool *out) {
     int c = sl_jd_peek(p);
     if (c == 't' && sl_jmatch_lit(p, "true")) { *out = true; return true; }
     if (c == 'f' && sl_jmatch_lit(p, "false")) { *out = false; return true; }
     return false;
 }
 
-static bool sl_jd_str(sl_jparser *p, const char **out) {
+SL_API bool sl_jd_str(sl_jparser *p, const char **out) {
     if (!sl_jd_eat(p, '"')) return false;
     char *s = sl_jparse_string_raw(p);
     if (!s) return false;
@@ -1469,14 +1484,14 @@ static bool sl_jd_str(sl_jparser *p, const char **out) {
     return true;
 }
 
-static bool sl_jd_bytes(sl_jparser *p, sl_bytes **out) {
+SL_API bool sl_jd_bytes(sl_jparser *p, sl_bytes **out) {
     const char *s;
     return sl_jd_str(p, &s) && sl_json_b64(s, out);
 }
 
 /* A timestamp has no escapes, so it is read in place, with no string
  * built; one that has any goes through the string reader first. */
-static bool sl_jd_time(sl_jparser *p, long long *sec, long long *nsec) {
+SL_API bool sl_jd_time(sl_jparser *p, long long *sec, long long *nsec) {
     long long save = p->pos;
     if (!sl_jd_eat(p, '"')) return false;
     long long start = p->pos, i = start;
@@ -1499,7 +1514,7 @@ static bool sl_jd_time(sl_jparser *p, long long *sec, long long *nsec) {
 /* decimal.Decimal on the fast path: a string without escapes, or a
  * number, parsed in place. Anything else falls back (false, position
  * restored) to the tree decoder, which says why. */
-static bool sl_jd_decimal(sl_jparser *p, sl_jdec *out) {
+SL_API bool sl_jd_decimal(sl_jparser *p, sl_jdec *out) {
     long long save = p->pos;
     sl_jskip_ws(p);
     if (sl_jpeek(p) == '"') {
@@ -1600,7 +1615,7 @@ static bool sl_jd_unsigned(sl_jparser *p, unsigned long long hi,
 }
 
 #define SL_JD_SIGNED(NAME, T, LO, HI)                                       \
-    static bool NAME(sl_jparser *p, T *out) {                               \
+    SL_API bool NAME(sl_jparser *p, T *out) {                               \
         long long x;                                                        \
         if (!sl_jd_signed(p, (LO), (HI), &x)) return false;                 \
         *out = (T)x;                                                        \
@@ -1608,7 +1623,7 @@ static bool sl_jd_unsigned(sl_jparser *p, unsigned long long hi,
     }
 
 #define SL_JD_UNSIGNED(NAME, T, HI)                                         \
-    static bool NAME(sl_jparser *p, T *out) {                               \
+    SL_API bool NAME(sl_jparser *p, T *out) {                               \
         unsigned long long x;                                               \
         if (!sl_jd_unsigned(p, (HI), &x)) return false;                     \
         *out = (T)x;                                                        \
@@ -1626,9 +1641,21 @@ SL_JD_UNSIGNED(sl_jd_u64, uint64_t, UINT64_MAX)
 /* int is long long, i64 int64_t: see sl_json_dec_int. */
 SL_JD_SIGNED(sl_jd_int, long long, INT64_MIN, INT64_MAX)
 
+/* SL_DEV_DECL_BEGIN */
+SL_API_DECL bool sl_jd_i8(sl_jparser *p, int8_t *out);
+SL_API_DECL bool sl_jd_i16(sl_jparser *p, int16_t *out);
+SL_API_DECL bool sl_jd_i32(sl_jparser *p, int32_t *out);
+SL_API_DECL bool sl_jd_u8(sl_jparser *p, uint8_t *out);
+SL_API_DECL bool sl_jd_u16(sl_jparser *p, uint16_t *out);
+SL_API_DECL bool sl_jd_u32(sl_jparser *p, uint32_t *out);
+SL_API_DECL bool sl_jd_i64(sl_jparser *p, int64_t *out);
+SL_API_DECL bool sl_jd_u64(sl_jparser *p, uint64_t *out);
+SL_API_DECL bool sl_jd_int(sl_jparser *p, long long *out);
+/* SL_DEV_DECL_END */
+
 /* strtod reads a terminated copy of the text, the same text the tree
  * parser hands it, so the double is the same one. */
-static bool sl_jd_f64(sl_jparser *p, double *out) {
+SL_API bool sl_jd_f64(sl_jparser *p, double *out) {
     long long start;
     if (!sl_jd_number(p, &start)) return false;
     long long n = p->pos - start;
@@ -1645,7 +1672,7 @@ static bool sl_jd_f64(sl_jparser *p, double *out) {
     return true;
 }
 
-static bool sl_jd_f32(sl_jparser *p, float *out) {
+SL_API bool sl_jd_f32(sl_jparser *p, float *out) {
     double d;
     if (!sl_jd_f64(p, &d)) return false;
     *out = (float)d;
@@ -1654,9 +1681,11 @@ static bool sl_jd_f32(sl_jparser *p, float *out) {
 
 /* ---- json: output string builder ---- */
 
+/* SL_DEV_DECL_BEGIN */
 typedef struct { char *data; long long len, cap; } sl_json_sb;
+/* SL_DEV_DECL_END */
 
-static void sl_json_sb_init(sl_json_sb *sb) {
+SL_API void sl_json_sb_init(sl_json_sb *sb) {
     sb->data = NULL;
     sb->len = 0;
     sb->cap = 0;
@@ -1675,7 +1704,7 @@ static void sl_json_sb_grow(sl_json_sb *sb, long long need) {
  * call site passes a skeleton estimate from the static type): a ~200-byte
  * quote response fits its first buffer instead of climbing 64->128->256.
  * An underestimate just grows as before, so this never changes output. */
-static void sl_json_sb_reserve(sl_json_sb *sb, long long need) {
+SL_API void sl_json_sb_reserve(sl_json_sb *sb, long long need) {
     if (need > 0 && sb->len + need + 1 > sb->cap) {
         sb->data = (char *)sl_gc_realloc(sb->data, (size_t)(sb->len + need + 1));
         sb->cap = sb->len + need + 1;
@@ -1686,7 +1715,7 @@ static void sl_json_sb_reserve(sl_json_sb *sb, long long need) {
  * see. Reserve an item skeleton up front; variable-length strings can still
  * grow the builder normally. Refuse the estimate if its arithmetic would
  * overflow, leaving the existing growth path to handle the output. */
-static void sl_json_sb_reserve_items(sl_json_sb *sb, long long count,
+SL_API void sl_json_sb_reserve_items(sl_json_sb *sb, long long count,
                                     long long per_item) {
     if (count <= 0 || per_item <= 0 || sb->len < 0 || sb->len >= LLONG_MAX)
         return;
@@ -1695,14 +1724,14 @@ static void sl_json_sb_reserve_items(sl_json_sb *sb, long long count,
     sl_json_sb_reserve(sb, count * per_item);
 }
 
-static void sl_json_sb_append_n(sl_json_sb *sb, const char *s, long long n) {
+SL_API void sl_json_sb_append_n(sl_json_sb *sb, const char *s, long long n) {
     sl_json_sb_grow(sb, n);
     memcpy(sb->data + sb->len, s, (size_t)n);
     sb->len += n;
     sb->data[sb->len] = 0;
 }
 
-static void sl_json_sb_append(sl_json_sb *sb, const char *s) {
+SL_API void sl_json_sb_append(sl_json_sb *sb, const char *s) {
     sl_json_sb_append_n(sb, s, (long long)strlen(s));
 }
 
@@ -1724,7 +1753,7 @@ static void sl_json_enc_str_clean(const char *s, long long n, sl_json_sb *out) {
 
 /* ---- json: scalar encode helpers ---- */
 
-static void sl_json_enc_bytes(sl_bytes *b, sl_json_sb *out) {
+SL_API void sl_json_enc_bytes(sl_bytes *b, sl_json_sb *out) {
     sl_json_sb_append_n(out, "\"", 1);
     long long i = 0;
     while (i + 3 <= b->len) {
@@ -1752,7 +1781,7 @@ static void sl_json_enc_bytes(sl_bytes *b, sl_json_sb *out) {
     sl_json_sb_append_n(out, "\"", 1);
 }
 
-static void sl_json_enc_str(const char *s, sl_json_sb *out) {
+SL_API void sl_json_enc_str(const char *s, sl_json_sb *out) {
     long long n = (long long)strlen(s);
     long long i = 0;
     /* Strings with no escape (every SKU and region on the quote path)
@@ -1772,7 +1801,7 @@ static void sl_json_enc_str(const char *s, sl_json_sb *out) {
 
 /* decimal.format()'s text, quoted: every digit of the scale, "0." before
  * a value under 1, a '-' only on a nonzero negative. */
-static void sl_json_enc_decimal(long long l0, long long l1, long long l2,
+SL_API void sl_json_enc_decimal(long long l0, long long l1, long long l2,
                                 long long l3, long long l4, long long scale,
                                 bool neg, sl_json_sb *out) {
     long long limbs[5] = {l0, l1, l2, l3, l4};
@@ -1807,7 +1836,7 @@ static void sl_json_enc_decimal(long long l0, long long l1, long long l2,
 /* timez's rfc3339_nano(): "YYYY-MM-DDTHH:MM:SS[.fraction]Z", the year
  * zero-padded to 4 digits (with a '-' before it for one before year 0),
  * the fraction without trailing zeros, quoted. */
-static void sl_json_enc_time(long long sec, long long nsec, sl_json_sb *out) {
+SL_API void sl_json_enc_time(long long sec, long long nsec, sl_json_sb *out) {
     long long days = sec >= 0 ? sec / 86400 : -((-sec + 86399) / 86400);
     long long rem = sec - days * 86400;
     long long y;
@@ -1900,7 +1929,7 @@ static void sl_json_enc_str_esc(const char *s, long long n, long long i,
  * entirely below with a digit loop: snprintf's locale lock is the reason
  * the bracket existed at all, and %lld pays a full format parse per
  * value. A quote body carries 4000 of them. */
-static void sl_json_enc_i64(long long v, sl_json_sb *out) {
+SL_API void sl_json_enc_i64(long long v, sl_json_sb *out) {
     /* 20 bytes covers sign + 19 digits. */
     sl_json_sb_grow(out, 20);
     char *w = out->data + out->len;
@@ -1924,7 +1953,7 @@ static void sl_json_enc_i64(long long v, sl_json_sb *out) {
     out->len += w - dst;
 }
 
-static void sl_json_enc_u64(unsigned long long v, sl_json_sb *out) {
+SL_API void sl_json_enc_u64(unsigned long long v, sl_json_sb *out) {
     sl_json_sb_grow(out, 20);
     char *w = out->data + out->len;
     char *dst = w;
@@ -1942,7 +1971,7 @@ static void sl_json_enc_u64(unsigned long long v, sl_json_sb *out) {
 /* JSON has no NaN or infinity: "nan" and "inf" were written as they came
  * and made the whole document unparseable. They are written as null, as
  * JavaScript's JSON.stringify does. */
-static void sl_json_enc_f64(double v, sl_json_sb *out) {
+SL_API void sl_json_enc_f64(double v, sl_json_sb *out) {
     if (v != v || v - v != 0) {
         sl_json_sb_append_n(out, "null", 4);
         return;
@@ -1954,7 +1983,7 @@ static void sl_json_enc_f64(double v, sl_json_sb *out) {
     sl_json_sb_append(out, buf);
 }
 
-static void sl_json_enc_f32(float v, sl_json_sb *out) {
+SL_API void sl_json_enc_f32(float v, sl_json_sb *out) {
     if (v != v || v - v != 0) {
         sl_json_sb_append_n(out, "null", 4);
         return;
@@ -1966,7 +1995,7 @@ static void sl_json_enc_f32(float v, sl_json_sb *out) {
     sl_json_sb_append(out, buf);
 }
 
-static void sl_json_enc_bool(bool v, sl_json_sb *out) {
+SL_API void sl_json_enc_bool(bool v, sl_json_sb *out) {
     if (v) {
         sl_json_sb_append_n(out, "true", 4);
     } else {
@@ -1974,7 +2003,7 @@ static void sl_json_enc_bool(bool v, sl_json_sb *out) {
     }
 }
 
-static void sl_json_enc_null(sl_json_sb *out) {
+SL_API void sl_json_enc_null(sl_json_sb *out) {
     sl_json_sb_append_n(out, "null", 4);
 }
 
@@ -1986,12 +2015,12 @@ static void sl_json_enc_str_old(const char *s, sl_json_sb *out);
 /* ---- json: map iteration helpers (sl_map is defined earlier in
  * RUNTIME; these read its fields directly, in insertion order) ---- */
 
-static const char *sl_json_map_key_at(sl_map *m, long long i) {
+SL_API const char *sl_json_map_key_at(sl_map *m, long long i) {
     long long slot = m->order[i];
     return *(const char **)(m->keys + (size_t)slot * m->ksz);
 }
 
-static void *sl_json_map_val_at(sl_map *m, long long i) {
+SL_API void *sl_json_map_val_at(sl_map *m, long long i) {
     long long slot = m->order[i];
     return m->vals + (size_t)slot * m->vsz;
 }

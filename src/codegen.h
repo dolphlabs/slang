@@ -23,6 +23,18 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
                      int *out_want_sql, int *out_want_compress,
                      int *out_want_fswatch);
 
+/* Split local --dev codegen: emits the standalone C runtime + native
+ * opt/result types into `rt_out` (for precompiled `<cache>/rt/<hash>.o`
+ * caching) and the thin user program into `prog_out` (compiled once and
+ * linked against that `.o`). Release, --emit-c, --keep-c, --race,
+ * --static, and cross-compile builds continue using codegen_program. */
+void codegen_program_dev_split(Package *pkgs, int npkgs, int main_index,
+                               StrBuf *rt_out, StrBuf *prog_out,
+                               int *out_want_tls, int *out_want_dns,
+                               int *out_want_crypto,
+                               int *out_want_sql, int *out_want_compress,
+                               int *out_want_fswatch);
+
 /* Frame guards. A slang function, or a generated codec (json, pg rows,
  * inspect), whose C frame turns out to be large is emitted as a noinline
  * body behind a thin wrapper that reserves stack before the body's frame is

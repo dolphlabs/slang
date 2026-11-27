@@ -644,6 +644,22 @@ static char *sha_hex(const unsigned char d[32]) {
     return s;
 }
 
+char *project_sha256_hex(const void *data, size_t len) {
+    static const char *h = "0123456789abcdef";
+    Sha256 ctx;
+    sha_init(&ctx);
+    sha_update(&ctx, data, len);
+    unsigned char d[32];
+    sha_final(&ctx, d);
+    char *s = (char *)xmalloc(65);
+    for (int i = 0; i < 32; i++) {
+        s[i * 2] = h[d[i] >> 4];
+        s[i * 2 + 1] = h[d[i] & 15];
+    }
+    s[64] = '\0';
+    return s;
+}
+
 static int cmp_str(const void *a, const void *b) {
     return strcmp(*(const char *const *)a, *(const char *const *)b);
 }
