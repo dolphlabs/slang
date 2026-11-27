@@ -59,7 +59,7 @@ static void *sl_sig_thread(void *arg) {
     return NULL; /* unreachable -- runs until process exit */
 }
 
-static void sl_proc_install_signal_handlers(void) {
+SL_API void sl_proc_install_signal_handlers(void) {
     pthread_t th;
     if (sl_rt_thread_spawn(&th, sl_sig_thread, NULL) != 0) {
         fprintf(stderr, "slang: failed to start signal thread\n");
@@ -67,15 +67,15 @@ static void sl_proc_install_signal_handlers(void) {
     }
 }
 
-static bool sl_proc_shutdown_requested(void) {
+SL_API bool sl_proc_shutdown_requested(void) {
     return atomic_load_explicit(&sl_rt_shutdown_flag, memory_order_acquire) != 0;
 }
 
-static long long sl_proc_active_tasks(void) {
+SL_API long long sl_proc_active_tasks(void) {
     return sl_rt_active_others();
 }
 
-static void sl_proc_wait_idle(void) {
+SL_API void sl_proc_wait_idle(void) {
     sl_rt_wait_idle();
 }
 
@@ -83,7 +83,7 @@ static void sl_proc_wait_idle(void) {
  * test as wait_idle) before the deadline. It looks every 5 ms, parking on
  * a pipe nothing writes to as its timer: a drain is rare and short, and
  * this keeps wait_idle's own lock-step wake-up untouched. */
-static bool sl_proc_wait_idle_until(sl_until u) {
+SL_API bool sl_proc_wait_idle_until(sl_until u) {
     static int tick_rd = -1;
     for (;;) {
         long long others = atomic_load(&sl_rt_active_spawns) -
@@ -114,10 +114,10 @@ static bool sl_proc_wait_idle_until(sl_until u) {
     }
 }
 
-static int sl_proc_argc;
-static char **sl_proc_argv;
+SL_API int sl_proc_argc;
+SL_API char **sl_proc_argv;
 
-static sl_arr *sl_proc_args(void) {
+SL_API sl_arr *sl_proc_args(void) {
     sl_arr *a = sl_arr_new(sizeof(char *), 1);
     for (int i = 0; i < sl_proc_argc; i++) {
         char *s = sl_strdup(sl_proc_argv[i]);
@@ -142,7 +142,7 @@ static sl_res_str_str *sl_proc_err_str(const char *msg) {
     return r;
 }
 
-static sl_res_str_str *sl_proc_cwd(void) {
+SL_API sl_res_str_str *sl_proc_cwd(void) {
     size_t cap = 256;
     for (;;) {
         char *buf = (char *)malloc(cap);
@@ -163,7 +163,7 @@ static sl_res_str_str *sl_proc_cwd(void) {
     }
 }
 
-static sl_opt_str *sl_proc_getenv(const char *name) {
+SL_API sl_opt_str *sl_proc_getenv(const char *name) {
     sl_opt_str *o = (sl_opt_str *)sl_gc_alloc(sizeof(sl_opt_str),
                                               sl_gc_trace_sl_opt_str);
     const char *v = getenv(name);
@@ -234,7 +234,7 @@ static sl_res_int_str *sl_proc_spawn_impl(sl_arr *argv_arr, sl_arr *env_arr,
                                           const char *dir, int flags,
                                           sl_arr *fds_arr);
 
-static sl_res_int_str *sl_proc_spawn(sl_arr *argv_arr, sl_arr *env_arr, const char *dir, int flags) {
+SL_API sl_res_int_str *sl_proc_spawn(sl_arr *argv_arr, sl_arr *env_arr, const char *dir, int flags) {
     return sl_proc_spawn_impl(argv_arr, env_arr, dir, flags, NULL);
 }
 
@@ -242,7 +242,7 @@ static sl_res_int_str *sl_proc_spawn(sl_arr *argv_arr, sl_arr *env_arr, const ch
  * LISTEN_FDS to their count: the systemd socket-activation convention,
  * which net.inherited() reads. Used to hand listening sockets to a new
  * version of a server so it accepts on the same ports with no gap. */
-static sl_res_int_str *sl_proc_spawn_fds(sl_arr *argv_arr, sl_arr *env_arr,
+SL_API sl_res_int_str *sl_proc_spawn_fds(sl_arr *argv_arr, sl_arr *env_arr,
                                          const char *dir, int flags,
                                          sl_arr *fds_arr) {
     if (!fds_arr || fds_arr->len == 0)
@@ -464,7 +464,7 @@ static long long sl_proc_rss_now(void) {
 
 /* proc.runtime_stats: the runtime's counters, in a fixed order the
  * `runtime` package names (stdlib/runtime). */
-static sl_arr *sl_proc_runtime_stats(void) {
+SL_API sl_arr *sl_proc_runtime_stats(void) {
     long long v[10];
     v[0] = (long long)atomic_load_explicit(&sl_gc_rt_majors, memory_order_relaxed);
     v[1] = (long long)atomic_load_explicit(&sl_gc_minors_done, memory_order_relaxed);
@@ -499,21 +499,21 @@ static char *sl_prof_take_cstr(char *buf) {
     return s;
 }
 
-static char *sl_proc_task_dump(void) {
+SL_API char *sl_proc_task_dump(void) {
     char *buf = NULL;
     size_t len = 0;
     sl_rt_format_tasks(&buf, &len);
     return sl_prof_take_cstr(buf);
 }
 
-static char *sl_proc_cpu_profile(long long duration_ms) {
+SL_API char *sl_proc_cpu_profile(long long duration_ms) {
     char *buf = NULL;
     size_t len = 0;
     sl_prof_cpu_sample(duration_ms, &buf, &len);
     return sl_prof_take_cstr(buf);
 }
 
-static char *sl_proc_heap_profile(void) {
+SL_API char *sl_proc_heap_profile(void) {
     sl_rt_preempt_disable();
     long long rss = sl_proc_rss_now();
     struct rusage ru;
@@ -532,7 +532,7 @@ static char *sl_proc_heap_profile(void) {
     return sl_prof_take_cstr(buf);
 }
 
-static sl_res_bool_str *sl_proc_kill(long long pid, int sig) {
+SL_API sl_res_bool_str *sl_proc_kill(long long pid, int sig) {
     if (pid == 0)
         return sl_proc_err_bool("proc.kill: invalid pid 0");
 
@@ -559,7 +559,7 @@ static sl_res_bool_str *sl_proc_kill(long long pid, int sig) {
     return sl_proc_ok_bool(true);
 }
 
-static sl_res_int_str *sl_proc_wait(long long pid_val, sl_until deadline) {
+SL_API sl_res_int_str *sl_proc_wait(long long pid_val, sl_until deadline) {
     if (pid_val <= 0)
         return sl_proc_err_int("proc.wait: invalid pid");
 

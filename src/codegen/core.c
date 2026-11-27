@@ -1792,6 +1792,7 @@ const char *opt_cname(CG *cg, const char *inner) {
     o->inner = xstrdup(inner);
     o->cname = xasprintf("sl_opt_%s", sanitize_pkg(inner));
     o->body_state = 0;
+    o->is_native = 0;
     return o->cname;
 }
 
@@ -1813,6 +1814,7 @@ const char *res_cname(CG *cg, const char *tv, const char *te) {
     r->cname =
         xasprintf("sl_res_%s_%s", sanitize_pkg(tv), sanitize_pkg(te));
     r->body_state = 0;
+    r->is_native = 0;
     return r->cname;
 }
 

@@ -17,6 +17,7 @@
 #include <limits.h>
 #include <math.h>
 
+/* SL_DEV_DECL_BEGIN */
 /* The reentrant lgamma (see sl_math_lgamma_*): in libm on Linux and macOS
  * alike, but macOS's <math.h> declares it only under _REENTRANT. */
 extern double lgamma_r(double, int *);
@@ -777,6 +778,7 @@ static inline double sl_math_binomial(long long n, long long k) {
         r = r * (double)(n - k + i) / (double)i;
     return round(r);
 }
+/* SL_DEV_DECL_END */
 
 /* ---- formatting: the functions here that allocate ---- */
 
@@ -794,19 +796,19 @@ static inline char *sl_math_format_with(const char *fmt, int prec, double x) {
 }
 
 /* `digits` significant digits (1..17), %g's style */
-static inline char *sl_math_format(double x, long long digits) {
+SL_API_INLINE char *sl_math_format(double x, long long digits) {
     int d = digits < 1 ? 1 : digits > 17 ? 17 : (int)digits;
     return sl_math_format_with("%.*g", d, x);
 }
 
 /* `decimals` places after the point (0..100), never an exponent */
-static inline char *sl_math_format_fixed(double x, long long decimals) {
+SL_API_INLINE char *sl_math_format_fixed(double x, long long decimals) {
     int d = decimals < 0 ? 0 : decimals > 100 ? 100 : (int)decimals;
     return sl_math_format_with("%.*f", d, x);
 }
 
 /* scientific, `digits` after the point (0..40): 1.25e+03 */
-static inline char *sl_math_format_sci(double x, long long digits) {
+SL_API_INLINE char *sl_math_format_sci(double x, long long digits) {
     int d = digits < 0 ? 0 : digits > 40 ? 40 : (int)digits;
     return sl_math_format_with("%.*e", d, x);
 }

@@ -142,7 +142,7 @@ static sl_bytes *sl_enc_bytes_raw(long long n) {
 /* Float byte conversion goes through the IEEE-754 bit pattern and then
  * shifts bytes explicitly. memcpy avoids aliasing violations, and the
  * shifts make the result independent of host endianness. */
-static sl_bytes *sl_encoding_float64_to_le(double value) {
+SL_API sl_bytes *sl_encoding_float64_to_le(double value) {
     uint64_t bits;
     memcpy(&bits, &value, sizeof(bits));
     sl_bytes *out = sl_enc_bytes_raw(8);
@@ -153,7 +153,7 @@ static sl_bytes *sl_encoding_float64_to_le(double value) {
     return out;
 }
 
-static sl_res_float_str *sl_encoding_float64_from_le(sl_bytes *bytes) {
+SL_API sl_res_float_str *sl_encoding_float64_from_le(sl_bytes *bytes) {
     if (!bytes || bytes->len != 8)
         return sl_enc_err_float(
             "encoding.float64_from_le: expected exactly 8 bytes");
@@ -167,7 +167,7 @@ static sl_res_float_str *sl_encoding_float64_from_le(sl_bytes *bytes) {
 
 /* ---- hex ------------------------------------------------------------ */
 
-static char *sl_encoding_hex_encode(sl_bytes *b) {
+SL_API char *sl_encoding_hex_encode(sl_bytes *b) {
     long long n = b ? b->len : 0;
     char *out = (char *)sl_gc_alloc((size_t)n * 2 + 1, NULL);
     for (long long i = 0; i < n; i++) {
@@ -189,7 +189,7 @@ static int sl_enc_hex_digit(int c) {
     return -1;
 }
 
-static sl_res_bytes_str *sl_encoding_hex_decode(const char *s) {
+SL_API sl_res_bytes_str *sl_encoding_hex_decode(const char *s) {
     if (!s) return sl_enc_ok_bytes(sl_bytes_new(NULL, 0));
     size_t n = strlen(s);
     if (n % 2)
@@ -317,19 +317,19 @@ static sl_res_bytes_str *sl_enc_b64_decode(const char *s, const char *alpha,
     return sl_enc_ok_bytes(out);
 }
 
-static char *sl_encoding_base64_encode(sl_bytes *b) {
+SL_API char *sl_encoding_base64_encode(sl_bytes *b) {
     return sl_enc_b64(b, SL_ENC_B64_STD, 1);
 }
 
-static sl_res_bytes_str *sl_encoding_base64_decode(const char *s) {
+SL_API sl_res_bytes_str *sl_encoding_base64_decode(const char *s) {
     return sl_enc_b64_decode(s, SL_ENC_B64_STD, 1, "base64_decode");
 }
 
-static char *sl_encoding_base64url_encode(sl_bytes *b) {
+SL_API char *sl_encoding_base64url_encode(sl_bytes *b) {
     return sl_enc_b64(b, SL_ENC_B64_URL, 0);
 }
 
-static sl_res_bytes_str *sl_encoding_base64url_decode(const char *s) {
+SL_API sl_res_bytes_str *sl_encoding_base64url_decode(const char *s) {
     return sl_enc_b64_decode(s, SL_ENC_B64_URL, 0, "base64url_decode");
 }
 
@@ -424,19 +424,19 @@ static sl_res_str_str *sl_enc_decode_str(const char *s, int plus_space) {
     return sl_enc_ok_str(out);
 }
 
-static char *sl_encoding_url_encode(const char *s) {
+SL_API char *sl_encoding_url_encode(const char *s) {
     return sl_enc_percent(s, 0);
 }
 
-static sl_res_str_str *sl_encoding_url_decode(const char *s) {
+SL_API sl_res_str_str *sl_encoding_url_decode(const char *s) {
     return sl_enc_decode_str(s, 0);
 }
 
-static char *sl_encoding_form_encode(const char *s) {
+SL_API char *sl_encoding_form_encode(const char *s) {
     return sl_enc_percent(s, 1);
 }
 
-static sl_res_str_str *sl_encoding_form_decode(const char *s) {
+SL_API sl_res_str_str *sl_encoding_form_decode(const char *s) {
     return sl_enc_decode_str(s, 1);
 }
 
@@ -477,7 +477,7 @@ static int sl_enc_query_next(const char *q, size_t n, size_t *i,
     return 1;
 }
 
-static sl_opt_str *sl_encoding_query_get(const char *url, const char *key) {
+SL_API sl_opt_str *sl_encoding_query_get(const char *url, const char *key) {
     sl_opt_str *o =
         (sl_opt_str *)sl_gc_alloc(sizeof(sl_opt_str), sl_gc_trace_sl_opt_str);
     o->has = false;
@@ -515,7 +515,7 @@ static sl_opt_str *sl_encoding_query_get(const char *url, const char *key) {
 /* Bracketed for the same reason sl_strings_split is: sl_arr_push
    allocates and can grow the backing store, and the partially-built
    list is reachable only from this C frame. */
-static sl_arr *sl_encoding_query_keys(const char *url) {
+SL_API sl_arr *sl_encoding_query_keys(const char *url) {
     sl_arr *out = sl_arr_new(sizeof(char *), 1);
     if (!url) return out;
     void *roots[1];
@@ -666,7 +666,7 @@ static sl_res__int__str *sl_jt_err(const char *what, size_t at) {
     return r;
 }
 
-static sl_res__int__str *sl_encoding_json_tape(const char *text) {
+SL_API sl_res__int__str *sl_encoding_json_tape(const char *text) {
     const unsigned char *s = (const unsigned char *)(text ? text : "");
     size_t n = strlen((const char *)s);
     sl_jt_buf t = {0};
@@ -805,7 +805,7 @@ fail:
  * each word starts at a multiple of 8 into data. That holds for keys
  * whose length divides 8 (1, 2, 4, 8); other lengths take the byte
  * loop. An empty key copies data unchanged. */
-static sl_bytes *sl_encoding_xor_mask(sl_bytes *head, sl_bytes *data, sl_bytes *key) {
+SL_API sl_bytes *sl_encoding_xor_mask(sl_bytes *head, sl_bytes *data, sl_bytes *key) {
     long long hn = head ? head->len : 0;
     long long dn = data ? data->len : 0;
     long long kn = key ? key->len : 0;
@@ -962,16 +962,16 @@ static sl_res_bytes_str *sl_enc_b32_decode(const char *s, const char *alpha, int
     return sl_enc_ok_bytes(out);
 }
 
-static char *sl_encoding_base32_encode(sl_bytes *b) { return sl_enc_b32(b, SL_ENC_B32_STD, 1); }
-static sl_res_bytes_str *sl_encoding_base32_decode(const char *s) {
+SL_API char *sl_encoding_base32_encode(sl_bytes *b) { return sl_enc_b32(b, SL_ENC_B32_STD, 1); }
+SL_API sl_res_bytes_str *sl_encoding_base32_decode(const char *s) {
     return sl_enc_b32_decode(s, SL_ENC_B32_STD, 0, "base32_decode");
 }
-static char *sl_encoding_base32hex_encode(sl_bytes *b) { return sl_enc_b32(b, SL_ENC_B32_HEX, 1); }
-static sl_res_bytes_str *sl_encoding_base32hex_decode(const char *s) {
+SL_API char *sl_encoding_base32hex_encode(sl_bytes *b) { return sl_enc_b32(b, SL_ENC_B32_HEX, 1); }
+SL_API sl_res_bytes_str *sl_encoding_base32hex_decode(const char *s) {
     return sl_enc_b32_decode(s, SL_ENC_B32_HEX, 0, "base32hex_decode");
 }
-static char *sl_encoding_crockford_encode(sl_bytes *b) { return sl_enc_b32(b, SL_ENC_B32_CROCKFORD, 0); }
-static sl_res_bytes_str *sl_encoding_crockford_decode(const char *s) {
+SL_API char *sl_encoding_crockford_encode(sl_bytes *b) { return sl_enc_b32(b, SL_ENC_B32_CROCKFORD, 0); }
+SL_API sl_res_bytes_str *sl_encoding_crockford_decode(const char *s) {
     return sl_enc_b32_decode(s, SL_ENC_B32_CROCKFORD, 1, "crockford_decode");
 }
 /* ---- CSV records ------------------------------------------------------
@@ -1000,7 +1000,7 @@ static sl_res_bytes_str *sl_encoding_crockford_decode(const char *s) {
  * Line endings are CRLF or LF; a CR not before LF is data. lazy accepts
  * a quote inside an unquoted field and text after a closing quote, as
  * data, the way Go's LazyQuotes does. */
-static sl_arr *sl_encoding_csv_record(sl_bytes *data, long long from, long long sep,
+SL_API sl_arr *sl_encoding_csv_record(sl_bytes *data, long long from, long long sep,
                                       long long quote, long long flags) {
     bool lazy = (flags & 1) != 0, final = (flags & 2) != 0;
     long long n = data ? data->len : 0;

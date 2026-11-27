@@ -732,9 +732,11 @@ void emit_struct_and_value_res_types(CG *cg) {
      * time, exactly like the struct `state` array below, or the real
      * run would see the dry run's marks and emit nothing. */
     for (int i = 0; i < cg->res.count; i++)
-        cg->res.items[i].body_state = 0;
+        cg->res.items[i].body_state =
+            (cg->split_emit_mode == 2 && cg->res.items[i].is_native) ? 2 : 0;
     for (int i = 0; i < cg->opts.count; i++)
-        cg->opts.items[i].body_state = 0;
+        cg->opts.items[i].body_state =
+            (cg->split_emit_mode == 2 && cg->opts.items[i].is_native) ? 2 : 0;
     for (int i = 0; i < cg->enums.count; i++)
         cg->enums.items[i].body_state = 0;
     unsigned char *sstate = NULL;
@@ -1096,13 +1098,23 @@ void emit_fn_types(CG *cg) {
     emit_line(cg, "");
 }
 
-void emit_opt_res_forward_decls(CG *cg) {
-    for (int i = 0; i < cg->opts.count; i++)
+static void emit_opt_res_forward_decls_filtered(CG *cg, int native_only) {
+    for (int i = 0; i < cg->opts.count; i++) {
+        if (native_only >= 0 && cg->opts.items[i].is_native != native_only)
+            continue;
         emit_line(cg, "typedef struct %s %s;", cg->opts.items[i].cname,
                   cg->opts.items[i].cname);
-    for (int i = 0; i < cg->res.count; i++)
+    }
+    for (int i = 0; i < cg->res.count; i++) {
+        if (native_only >= 0 && cg->res.items[i].is_native != native_only)
+            continue;
         emit_line(cg, "typedef struct %s %s;", cg->res.items[i].cname,
                   cg->res.items[i].cname);
+    }
+}
+
+void emit_opt_res_forward_decls(CG *cg) {
+    emit_opt_res_forward_decls_filtered(cg, -1);
 }
 
 void emit_opt_res_types(CG *cg) {
@@ -1110,6 +1122,8 @@ void emit_opt_res_types(CG *cg) {
      * order (emit_struct_and_value_res_types) */
     for (int i = 0; i < cg->res.count; i++) {
         ResInst *r = &cg->res.items[i];
+        if (cg->split_emit_mode == 2 && r->is_native)
+            continue;
         if (res_inst_is_value(cg, r))
             continue;
         emit_res_struct_body(cg, r);
@@ -1152,6 +1166,8 @@ static void emit_payload_marks(CG *cg, const char *field, const char *t) {
 void emit_opt_res_tracers(CG *cg) {
     for (int i = 0; i < cg->opts.count; i++) {
         OptInst *o = &cg->opts.items[i];
+        if (cg->split_emit_mode == 2 && o->is_native)
+            continue;
         if (!type_has_gc_roots(cg, o->inner))
             continue;
         emit_line(cg, "static void sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
@@ -1165,6 +1181,8 @@ void emit_opt_res_tracers(CG *cg) {
     }
     for (int i = 0; i < cg->res.count; i++) {
         ResInst *r = &cg->res.items[i];
+        if (cg->split_emit_mode == 2 && r->is_native)
+            continue;
         if (!type_has_gc_roots(cg, r->tv) && !type_has_gc_roots(cg, r->te))
             continue;
         emit_line(cg, "static void sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
@@ -1176,6 +1194,88 @@ void emit_opt_res_tracers(CG *cg) {
         cg->indent--;
         emit_line(cg, "}");
         emit_line(cg, "");
+    }
+}
+
+static void mark_native_opt(CG *cg, const char *inner) {
+    const char *cn = opt_cname(cg, inner);
+    for (int i = 0; i < cg->opts.count; i++) {
+        if (cg->opts.items[i].cname == cn) {
+            cg->opts.items[i].is_native = 1;
+            return;
+        }
+    }
+}
+
+static void mark_native_res(CG *cg, const char *tv, const char *te) {
+    const char *cn = res_cname(cg, tv, te);
+    for (int i = 0; i < cg->res.count; i++) {
+        if (cg->res.items[i].cname == cn) {
+            cg->res.items[i].is_native = 1;
+            return;
+        }
+    }
+}
+
+static void emit_native_opt_res_defs(CG *cg, int is_rt) {
+    for (int i = 0; i < cg->opts.count; i++) {
+        OptInst *o = &cg->opts.items[i];
+        if (!o->is_native)
+            continue;
+        const char *ctypes[2] = {"bool", ctype_of(cg, o->inner)};
+        const char *names[2] = {"has", "v"};
+        emit_value_body(cg, o->cname, type_has_gc_roots(cg, o->inner), 2,
+                        ctypes, names);
+    }
+    for (int i = 0; i < cg->res.count; i++) {
+        ResInst *r = &cg->res.items[i];
+        if (!r->is_native)
+            continue;
+        emit_res_struct_body(cg, r);
+    }
+    for (int i = 0; i < cg->opts.count; i++) {
+        OptInst *o = &cg->opts.items[i];
+        if (!o->is_native || !type_has_gc_roots(cg, o->inner))
+            continue;
+        if (is_rt) {
+            emit_line(cg,
+                      "SL_API __attribute__((unused)) void "
+                      "sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
+                      o->cname);
+            cg->indent++;
+            emit_line(cg, "%s *o = (%s *)p;", o->cname, o->cname);
+            emit_payload_marks(cg, "v", o->inner);
+            cg->indent--;
+            emit_line(cg, "}");
+            emit_line(cg, "");
+        } else {
+            emit_line(cg,
+                      "extern void sl_gc_trace_%s(void *p, void (*mark)(void *));",
+                      o->cname);
+        }
+    }
+    for (int i = 0; i < cg->res.count; i++) {
+        ResInst *r = &cg->res.items[i];
+        if (!r->is_native ||
+            (!type_has_gc_roots(cg, r->tv) && !type_has_gc_roots(cg, r->te)))
+            continue;
+        if (is_rt) {
+            emit_line(cg,
+                      "SL_API __attribute__((unused)) void "
+                      "sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
+                      r->cname);
+            cg->indent++;
+            emit_line(cg, "%s *o = (%s *)p;", r->cname, r->cname);
+            emit_payload_marks(cg, "v", r->tv);
+            emit_payload_marks(cg, "e", r->te);
+            cg->indent--;
+            emit_line(cg, "}");
+            emit_line(cg, "");
+        } else {
+            emit_line(cg,
+                      "extern void sl_gc_trace_%s(void *p, void (*mark)(void *));",
+                      r->cname);
+        }
     }
 }
 
@@ -1195,47 +1295,47 @@ static int needs_reactor(CG *cg) {
 
 void force_native_result_types(CG *cg) {
     if (needs_reactor(cg)) {
-        res_cname(cg, "i32", "str");
-        res_cname(cg, "bytes", "str");
-        res_cname(cg, "bool", "str");
-        res_cname(cg, "link", "fault");
-        res_cname(cg, "int", "fault");
-        res_cname(cg, "int", "str"); /* net.get_opt */
-        res_cname(cg, "[bytes]", "str"); /* net.recv_from */
+        mark_native_res(cg, "i32", "str");
+        mark_native_res(cg, "bytes", "str");
+        mark_native_res(cg, "bool", "str");
+        mark_native_res(cg, "link", "fault");
+        mark_native_res(cg, "int", "fault");
+        mark_native_res(cg, "int", "str"); /* net.get_opt */
+        mark_native_res(cg, "[bytes]", "str"); /* net.recv_from */
         /* cg->want_tls is only known for certain after the dry run
          * has walked every statement (same "populate now, read back
          * on the real run" pattern as opts/res/spawns above) */
         if (cg->want_tls)
-            res_cname(cg, "rawptr", "str");
-        res_cname(cg, "int", "str"); /* net.send_file */
+            mark_native_res(cg, "rawptr", "str");
+        mark_native_res(cg, "int", "str"); /* net.send_file */
     }
     if (cg->want_dns)
-        res_cname(cg, "[str]", "str");
+        mark_native_res(cg, "[str]", "str");
     if (want_pkg(cg, "proc")) {
-        opt_cname(cg, "str");
-        res_cname(cg, "str", "str");
-        res_cname(cg, "int", "str");
-        res_cname(cg, "bool", "str");
+        mark_native_opt(cg, "str");
+        mark_native_res(cg, "str", "str");
+        mark_native_res(cg, "int", "str");
+        mark_native_res(cg, "bool", "str");
     }
     if (want_pkg(cg, "fs")) {
-        res_cname(cg, "i32", "str");
-        res_cname(cg, "bytes", "str");
-        res_cname(cg, "bool", "str");
-        res_cname(cg, "str", "str"); /* realpath */
+        mark_native_res(cg, "i32", "str");
+        mark_native_res(cg, "bytes", "str");
+        mark_native_res(cg, "bool", "str");
+        mark_native_res(cg, "str", "str"); /* realpath */
     }
     if (want_pkg(cg, "crypto")) {
-        res_cname(cg, "bytes", "str");
-        res_cname(cg, "bool", "str");
-        res_cname(cg, "str", "str");   /* rsa_generate's PEM */
-        res_cname(cg, "[str]", "str"); /* x509_fields */
+        mark_native_res(cg, "bytes", "str");
+        mark_native_res(cg, "bool", "str");
+        mark_native_res(cg, "str", "str");   /* rsa_generate's PEM */
+        mark_native_res(cg, "[str]", "str"); /* x509_fields */
     }
     if (want_pkg(cg, "sql")) {
-        res_cname(cg, "rawptr", "str");
-        res_cname(cg, "bool", "str");
-        res_cname(cg, "int", "str");
+        mark_native_res(cg, "rawptr", "str");
+        mark_native_res(cg, "bool", "str");
+        mark_native_res(cg, "int", "str");
     }
     if (want_pkg(cg, "regex")) {
-        res_cname(cg, "rawptr", "str");
+        mark_native_res(cg, "rawptr", "str");
     }
     if (want_pkg(cg, "strings")) {
         /* split returns [str]; nothing here is fallible, so no result
@@ -1248,34 +1348,34 @@ void force_native_result_types(CG *cg) {
            yields result[_, str]. query_get is opt because a missing
            parameter is absent data, not bad data -- the README's
            opt-vs-result rule. */
-        res_cname(cg, "bytes", "str");
-        res_cname(cg, "str", "str");
-        res_cname(cg, "float", "str");
+        mark_native_res(cg, "bytes", "str");
+        mark_native_res(cg, "str", "str");
+        mark_native_res(cg, "float", "str");
         /* json_tape */
-        res_cname(cg, "[int]", "str");
-        opt_cname(cg, "str");
+        mark_native_res(cg, "[int]", "str");
+        mark_native_opt(cg, "str");
     }
     if (want_pkg(cg, "compress")) {
         /* every entry point is result[bytes, str] */
-        res_cname(cg, "bytes", "str");
+        mark_native_res(cg, "bytes", "str");
     }
     if (want_pkg(cg, "unicode")) {
         /* encode: a code point with no str (a surrogate, U+0000, out of
            range) is absent, not an error */
-        opt_cname(cg, "str");
+        mark_native_opt(cg, "str");
     }
     if (want_pkg(cg, "io")) {
-        opt_cname(cg, "str");
-        opt_cname(cg, "int");
-        res_cname(cg, "opt[str]", "str");
-        res_cname(cg, "bytes", "str");
-        res_cname(cg, "bool", "str");
+        mark_native_opt(cg, "str");
+        mark_native_opt(cg, "int");
+        mark_native_res(cg, "opt[str]", "str");
+        mark_native_res(cg, "bytes", "str");
+        mark_native_res(cg, "bool", "str");
     }
     if (want_pkg(cg, "os")) {
-        res_cname(cg, "bool", "str");
-        res_cname(cg, "int", "str");
-        res_cname(cg, "str", "str");
-        res_cname(cg, "[str]", "str");
+        mark_native_res(cg, "bool", "str");
+        mark_native_res(cg, "int", "str");
+        mark_native_res(cg, "str", "str");
+        mark_native_res(cg, "[str]", "str");
     }
 }
 
@@ -1957,31 +2057,8 @@ static int inst_cost_cmp(const void *a, const void *b) {
     return (x < y) - (x > y);
 }
 
-void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
-                              int main_index) {
-    emit_prelude(cg);
-
-    force_native_result_types(cg);
-    emit_opt_res_forward_decls(cg);
-    emit_struct_fwd_decls(cg);
-    emit_enum_fwd_decls(cg);
-    emit_fn_types(cg); /* between the struct names and the struct bodies */
-    emit_struct_and_value_res_types(cg);
-    emit_struct_tracers(cg);
-    emit_enum_tables(cg);
-
-    emit_opt_res_types(cg);
-    emit_opt_res_tracers(cg);
-
-    emit_native_runtime(cg);
-
-    emit_json_runtime(cg);
-    emit_json_codecs(cg);
-    emit_pg_rows_codecs(cg);
-
-    emit_inspect_runtime(cg);
-    emit_inspect_codecs(cg);
-
+static void emit_program_body_and_main(CG *cg, Package *pkgs, int npkgs,
+                                       int main_index) {
     cg->prog_c_start = cg->out->len;
     emit_globals(cg, pkgs, npkgs, main_index);
 
@@ -2214,40 +2291,297 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
     emit_line(cg, "}");
 }
 
-void codegen_program(Package *pkgs, int npkgs, int main_index,
-                     StrBuf *out, int *out_want_tls, int *out_want_dns,
-                     int *out_want_crypto,
-                     int *out_want_sql, int *out_want_compress,
-                     int *out_want_fswatch) {
-    CG cg;
-    memset(&cg, 0, sizeof(CG));
-    cg.out = out;
-    cg.cur_pkg = pkgs[main_index].name;
-    cg.main_pkg = pkgs[main_index].name;
-    cg.main_body = pkgs[main_index].prog ? pkgs[main_index].prog->main_body
-                                         : NULL;
+void gen_whole_program(CG *cg, Package *pkgs, int npkgs, int main_index) {
+    emit_prelude(cg);
+
+    force_native_result_types(cg);
+    emit_opt_res_forward_decls(cg);
+    emit_struct_fwd_decls(cg);
+    emit_enum_fwd_decls(cg);
+    emit_fn_types(cg); /* between the struct names and the struct bodies */
+    emit_struct_and_value_res_types(cg);
+    emit_struct_tracers(cg);
+    emit_enum_tables(cg);
+
+    emit_opt_res_types(cg);
+    emit_opt_res_tracers(cg);
+
+    emit_native_runtime(cg);
+
+    emit_json_runtime(cg);
+    emit_json_codecs(cg);
+    emit_pg_rows_codecs(cg);
+
+    emit_inspect_runtime(cg);
+    emit_inspect_codecs(cg);
+
+    emit_program_body_and_main(cg, pkgs, npkgs, main_index);
+}
+
+static int line_has_marker(const char *line, size_t len, const char *marker) {
+    size_t mlen = strlen(marker);
+    while (len > 0 && (*line == ' ' || *line == '\t')) {
+        line++;
+        len--;
+    }
+    while (len > 0 &&
+           (line[len - 1] == '\r' || line[len - 1] == ' ' || line[len - 1] == '\t'))
+        len--;
+    return len == mlen && memcmp(line, marker, mlen) == 0;
+}
+
+static int line_starts_kw(const char *line, size_t len, const char *kw) {
+    size_t klen = strlen(kw);
+    while (len > 0 && (*line == ' ' || *line == '\t')) {
+        line++;
+        len--;
+    }
+    if (len < klen || memcmp(line, kw, klen) != 0)
+        return 0;
+    return len == klen ||
+           (!isalnum((unsigned char)line[klen]) && line[klen] != '_');
+}
+
+/* Extracts types, macros, and extern declarations for split --dev builds
+ * from tagged runtime C source (SL_DEV_DECL_BEGIN..END blocks and
+ * column-0 SL_API* definitions), skipping `#ifdef SLANG_NET_DNS` decls
+ * unless the runtime chunk defines `SLANG_NET_DNS 1`. */
+static void extract_dev_decls(StrBuf *dst, const char *src, size_t len,
+                              int has_dns) {
+    int in_decl_block = 0;
+    int dns_depth = 0;
+    size_t pos = 0;
+    while (pos < len) {
+        const char *ls = src + pos;
+        const char *nl = (const char *)memchr(ls, '\n', len - pos);
+        size_t next_pos = nl ? (size_t)(nl - src) + 1 : len;
+        size_t line_len = nl ? (size_t)(nl - ls) : (len - pos);
+        if (line_len > 0 && ls[line_len - 1] == '\r')
+            line_len--;
+
+        if (!in_decl_block) {
+            if (dns_depth == 0) {
+                if (line_starts_kw(ls, line_len, "#ifdef SLANG_NET_DNS")) {
+                    dns_depth = 1;
+                    pos = next_pos;
+                    continue;
+                }
+            } else {
+                if (line_starts_kw(ls, line_len, "#if") ||
+                    line_starts_kw(ls, line_len, "#ifdef") ||
+                    line_starts_kw(ls, line_len, "#ifndef")) {
+                    dns_depth++;
+                    pos = next_pos;
+                    continue;
+                }
+                if (line_starts_kw(ls, line_len, "#endif")) {
+                    dns_depth--;
+                    pos = next_pos;
+                    continue;
+                }
+            }
+        }
+
+        if (!in_decl_block && line_has_marker(ls, line_len, "/* SL_DEV_DECL_BEGIN */")) {
+            in_decl_block = 1;
+            pos = next_pos;
+            continue;
+        }
+        if (in_decl_block) {
+            if (line_has_marker(ls, line_len, "/* SL_DEV_DECL_END */")) {
+                in_decl_block = 0;
+                pos = next_pos;
+                continue;
+            }
+            if (!(dns_depth > 0 && !has_dns))
+                sb_append_n(dst, src + pos, next_pos - pos);
+            pos = next_pos;
+            continue;
+        }
+
+        if (dns_depth > 0 && !has_dns) {
+            pos = next_pos;
+            continue;
+        }
+
+        size_t pfx = 0;
+        if (line_len >= 7 && memcmp(ls, "SL_API ", 7) == 0)
+            pfx = 7;
+        else if (line_len >= 14 && memcmp(ls, "SL_API_INLINE ", 14) == 0)
+            pfx = 14;
+        else if (line_len >= 21 && memcmp(ls, "SL_API_ALWAYS_INLINE ", 21) == 0)
+            pfx = 21;
+        else {
+            pos = next_pos;
+            continue;
+        }
+
+        size_t q = pos + pfx;
+        while (q < len && (src[q] == ' ' || src[q] == '\t'))
+            q++;
+        size_t start = q;
+        int paren = 0, in_str = 0, in_chr = 0, in_blk = 0, in_ln = 0;
+        char term = 0;
+        while (q < len) {
+            char c = src[q];
+            if (in_ln) {
+                if (c == '\n')
+                    in_ln = 0;
+                q++;
+                continue;
+            }
+            if (in_blk) {
+                if (c == '*' && q + 1 < len && src[q + 1] == '/') {
+                    in_blk = 0;
+                    q += 2;
+                } else {
+                    q++;
+                }
+                continue;
+            }
+            if (in_str) {
+                if (c == '\\' && q + 1 < len)
+                    q += 2;
+                else {
+                    if (c == '"')
+                        in_str = 0;
+                    q++;
+                }
+                continue;
+            }
+            if (in_chr) {
+                if (c == '\\' && q + 1 < len)
+                    q += 2;
+                else {
+                    if (c == '\'')
+                        in_chr = 0;
+                    q++;
+                }
+                continue;
+            }
+            if (c == '/' && q + 1 < len && src[q + 1] == '/') {
+                in_ln = 1;
+                q += 2;
+                continue;
+            }
+            if (c == '/' && q + 1 < len && src[q + 1] == '*') {
+                in_blk = 1;
+                q += 2;
+                continue;
+            }
+            if (c == '"') {
+                in_str = 1;
+                q++;
+                continue;
+            }
+            if (c == '\'') {
+                in_chr = 1;
+                q++;
+                continue;
+            }
+            if (c == '(')
+                paren++;
+            else if (c == ')' && paren > 0)
+                paren--;
+            else if (paren == 0 && (c == '=' || c == '{' || c == ';')) {
+                term = c;
+                break;
+            }
+            q++;
+        }
+        if (term) {
+            size_t end_decl = q;
+            while (end_decl > start &&
+                   (src[end_decl - 1] == ' ' || src[end_decl - 1] == '\t' ||
+                    src[end_decl - 1] == '\r' || src[end_decl - 1] == '\n'))
+                end_decl--;
+            if (end_decl > start) {
+                sb_append(dst, "extern ");
+                sb_append_n(dst, src + start, end_decl - start);
+                sb_append(dst, ";\n");
+            }
+            if (term == '=') {
+                q++;
+                int s = 0, ch = 0, b = 0, l = 0;
+                while (q < len) {
+                    char c = src[q];
+                    if (l) { if (c == '\n') l = 0; q++; continue; }
+                    if (b) { if (c == '*' && q + 1 < len && src[q + 1] == '/') { b = 0; q += 2; } else q++; continue; }
+                    if (s) { if (c == '\\' && q + 1 < len) q += 2; else { if (c == '"') s = 0; q++; } continue; }
+                    if (ch) { if (c == '\\' && q + 1 < len) q += 2; else { if (c == '\'') ch = 0; q++; } continue; }
+                    if (c == '/' && q + 1 < len && src[q + 1] == '/') { l = 1; q += 2; continue; }
+                    if (c == '/' && q + 1 < len && src[q + 1] == '*') { b = 1; q += 2; continue; }
+                    if (c == '"') { s = 1; q++; continue; }
+                    if (c == '\'') { ch = 1; q++; continue; }
+                    if (c == ';') { q++; break; }
+                    q++;
+                }
+            }
+            const char *after = (const char *)memchr(src + q, '\n', len - q);
+            pos = after ? (size_t)(after - src) + 1 : len;
+        } else {
+            pos = next_pos;
+        }
+    }
+}
+
+static void emit_prog_split_headers(CG *cg) {
+    emit_line(cg, "#define _GNU_SOURCE");
+    emit_line(cg, "#define _XOPEN_SOURCE 700");
+    emit_line(cg, "#define _DARWIN_C_SOURCE");
+    emit_line(cg, "#include <stdio.h>");
+    emit_line(cg, "#include <stdarg.h>");
+    emit_line(cg, "#include <stdlib.h>");
+    emit_line(cg, "#include <string.h>");
+    emit_line(cg, "#include <errno.h>");
+    emit_line(cg, "#include <sys/mman.h>");
+    emit_line(cg, "#include <stdbool.h>");
+    emit_line(cg, "#include <stdint.h>");
+    emit_line(cg, "#include <stdatomic.h>");
+    emit_line(cg, "#include <pthread.h>");
+    emit_line(cg, "#include <signal.h>");
+    emit_line(cg, "#include <stddef.h>");
+    emit_line(cg, "#include <ucontext.h>");
+    emit_line(cg, "#include <unistd.h>");
+    emit_line(cg, "#include <sys/socket.h>");
+    emit_line(cg, "#include <time.h>");
+    emit_line(cg, "#include <limits.h>");
+    emit_line(cg, "#include <math.h>");
+    emit_line(cg, "#ifndef SL_NO_TSAN");
+    emit_line(cg, "#define SL_NO_TSAN");
+    emit_line(cg, "#endif");
+    emit_line(cg, "#define SL_API_DECL extern");
+    emit_line(cg, "");
+}
+
+static size_t codegen_prepare(CG *cg, Package *pkgs, int npkgs, int main_index) {
+    memset(cg, 0, sizeof(CG));
+    cg->cur_pkg = pkgs[main_index].name;
+    cg->main_pkg = pkgs[main_index].name;
+    cg->main_body = pkgs[main_index].prog ? pkgs[main_index].prog->main_body
+                                          : NULL;
 
     /* record which packages are compiler-provided natives */
     for (int i = 0; i < npkgs; i++) {
         if (!pkgs[i].native)
             continue;
-        cg.nat_pkgs = (char **)xrealloc(
-            cg.nat_pkgs, (size_t)(cg.nnat + 1) * sizeof(char *));
-        cg.nat_pkgs[cg.nnat++] = pkgs[i].name;
+        cg->nat_pkgs = (char **)xrealloc(
+            cg->nat_pkgs, (size_t)(cg->nnat + 1) * sizeof(char *));
+        cg->nat_pkgs[cg->nnat++] = pkgs[i].name;
     }
 
-    collect_decls(&cg, pkgs, npkgs);
+    collect_decls(cg, pkgs, npkgs);
 
     /* Rewrite every `Type.Variant`/`Type.from_int`/`Type.from_str`
      * reference into plain literal/sentinel-call nodes (see enum.c)
      * before anything else walks the tree, so infer/borrow/liveness/
      * move/mir/escape/codegen never need to know enums exist as a
      * dotted-name concept -- they only ever see the rewritten shapes.
-     * Must run once, after collect_decls has populated cg.enums and
+     * Must run once, after collect_decls has populated cg->enums and
      * before the dry run below (which is just gen_whole_program
      * generating into a scratch buffer -- both it and the real run
      * must see the same, already-rewritten tree). */
-    resolve_enum_refs(&cg, pkgs, npkgs);
+    resolve_enum_refs(cg, pkgs, npkgs);
 
     /* Dry run: generation populates the opt/result monomorphization
      * tables as it goes, but typedefs must be emitted before any use.
@@ -2256,15 +2590,15 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
     StrBuf scratch;
     sb_init(&scratch);
     sb_reserve(&scratch, 1u << 20);
-    cg.out = &scratch;
-    cg.collect_errors = 1;
-    gen_whole_program(&cg, pkgs, npkgs, main_index);
-    cg.collect_errors = 0;
+    cg->out = &scratch;
+    cg->collect_errors = 1;
+    gen_whole_program(cg, pkgs, npkgs, main_index);
+    cg->collect_errors = 0;
     size_t est = scratch.len + 65536;
     free(scratch.data);
     if (diag_count())
         exit(1); /* every error found was reported by cg_error */
-    cg.dry_done = 1;
+    cg->dry_done = 1;
 
     /* Tier 10: populate Expr.live_set (used by gen_call's call-site
      * safepoint brackets) once, before the real gen_whole_program pass
@@ -2272,26 +2606,26 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
      * it once and letting the real run read the same already-computed
      * data is safe. Must run here, after the dry run and before the
      * glob-bookkeeping reset just below: package-level (non-main)
-     * globals only exist in cg.globs once emit_globals (called from
+     * globals only exist in cg->globs once emit_globals (called from
      * gen_whole_program) has registered them via glob_push, and a
      * function body referencing one of its own package's globals
      * (e.g. httpkit's find_blank_line reading the package-level `CR`)
      * needs that to already be resolvable, exactly like the real
      * gen_function pass just below will. Running it any earlier
-     * (before the dry run ever populates cg.globs at all) makes
+     * (before the dry run ever populates cg->globs at all) makes
      * compute_liveness reject any such program with a spurious
      * "undefined variable" -- caught by demo/main.sl specifically,
      * which is exactly this shape (httpkit.sl's CR/LF/SPACE). */
-    compute_liveness(&cg, pkgs, npkgs, main_index);
-    compute_escape(&cg, pkgs, npkgs, main_index);
-    compute_moves(&cg, pkgs, npkgs, main_index);
-    compute_mir(&cg, pkgs, npkgs, main_index);
-    compute_borrowck(&cg, pkgs, npkgs, main_index);
+    compute_liveness(cg, pkgs, npkgs, main_index);
+    compute_escape(cg, pkgs, npkgs, main_index);
+    compute_moves(cg, pkgs, npkgs, main_index);
+    compute_mir(cg, pkgs, npkgs, main_index);
+    compute_borrowck(cg, pkgs, npkgs, main_index);
 
     /* Every instance the program needs was discovered by the dry run, and
      * the passes just above have now walked them all. One appearing later
      * would be generated but never checked or rooted, so say so instead. */
-    cg.insts_frozen = 1;
+    cg->insts_frozen = 1;
 
     /* emit_globals (called from gen_whole_program) registers package
      * globals as it emits them; undo that bookkeeping before the real
@@ -2299,21 +2633,22 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
      * own duplicate-declaration check. opts/res are deliberately left
      * to accumulate across both passes (that's the point of the dry
      * run); globs has no such purpose here. */
-    cg.globs.count = 0;
-    cg_cache_clear_one(&cg.glob_map);
+    cg->globs.count = 0;
+    cg_cache_clear_one(&cg->glob_map);
+    return est;
+}
 
-    sb_reserve(out, est);
-    out->len = 0;
-    out->data[0] = '\0';
-    cg.out = out;
-    gen_whole_program(&cg, pkgs, npkgs, main_index);
-    *out_want_tls = cg.want_tls;
-    *out_want_dns = cg.want_dns;
-    *out_want_crypto = want_pkg(&cg, "crypto");
-    *out_want_sql = want_pkg(&cg, "sql");
-    *out_want_compress = want_pkg(&cg, "compress");
+static void codegen_finish(CG *cg, StrBuf *prog_out, int *out_want_tls,
+                           int *out_want_dns, int *out_want_crypto,
+                           int *out_want_sql, int *out_want_compress,
+                           int *out_want_fswatch) {
+    *out_want_tls = cg->want_tls;
+    *out_want_dns = cg->want_dns;
+    *out_want_crypto = want_pkg(cg, "crypto");
+    *out_want_sql = want_pkg(cg, "sql");
+    *out_want_compress = want_pkg(cg, "compress");
     if (out_want_fswatch)
-        *out_want_fswatch = cg.want_fswatch;
+        *out_want_fswatch = cg->want_fswatch;
 
     /* Generics hardening: every instance is its own copy in the binary, so
      * a program that instantiates a big template at many types bloats
@@ -2326,7 +2661,9 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
      * 7% of its C. A warning, not an error, since big is sometimes exactly
      * what was asked for. */
     {
-        size_t prog = out->len > cg.prog_c_start ? out->len - cg.prog_c_start : 0;
+        size_t prog = prog_out->len > cg->prog_c_start
+                          ? prog_out->len - cg->prog_c_start
+                          : 0;
         long pct = 25;
         const char *env = getenv("SLANG_INSTANCE_WARN");
         if (env && env[0]) {
@@ -2338,25 +2675,105 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
         /* a test sets the percentage to 0 to see the report on a small
            program; the size floor applies only to the default */
         size_t floor = env && env[0] ? 0 : (size_t)512 * 1024;
-        if (prog > 0 && cg.inst_c_bytes > floor &&
-            cg.inst_c_bytes * 100 > (size_t)pct * prog) {
-            qsort(cg.inst_costs, (size_t)cg.ninst_costs,
-                  sizeof(*cg.inst_costs), inst_cost_cmp);
+        if (prog > 0 && cg->inst_c_bytes > floor &&
+            cg->inst_c_bytes * 100 > (size_t)pct * prog) {
+            qsort(cg->inst_costs, (size_t)cg->ninst_costs,
+                  sizeof(*cg->inst_costs), inst_cost_cmp);
             int ninst = 0;
-            for (int i = 0; i < cg.ninst_costs; i++)
-                ninst += cg.inst_costs[i].count;
+            for (int i = 0; i < cg->ninst_costs; i++)
+                ninst += cg->inst_costs[i].count;
             fprintf(stderr,
                     "slang: warning: generic instances are %d%% of this "
                     "program's C (%d copies, %s of %s); the largest:\n",
-                    (int)(cg.inst_c_bytes * 100 / prog), ninst,
-                    inst_size(cg.inst_c_bytes), inst_size(prog));
-            for (int i = 0; i < cg.ninst_costs && i < 5; i++)
-                fprintf(stderr, "  %s: %d %s, %s\n", cg.inst_costs[i].tmpl,
-                        cg.inst_costs[i].count,
-                        cg.inst_costs[i].count == 1 ? "copy" : "copies",
-                        inst_size(cg.inst_costs[i].bytes));
+                    (int)(cg->inst_c_bytes * 100 / prog), ninst,
+                    inst_size(cg->inst_c_bytes), inst_size(prog));
+            for (int i = 0; i < cg->ninst_costs && i < 5; i++)
+                fprintf(stderr, "  %s: %d %s, %s\n", cg->inst_costs[i].tmpl,
+                        cg->inst_costs[i].count,
+                        cg->inst_costs[i].count == 1 ? "copy" : "copies",
+                        inst_size(cg->inst_costs[i].bytes));
         }
     }
+}
+
+void codegen_program(Package *pkgs, int npkgs, int main_index,
+                     StrBuf *out, int *out_want_tls, int *out_want_dns,
+                     int *out_want_crypto,
+                     int *out_want_sql, int *out_want_compress,
+                     int *out_want_fswatch) {
+    CG cg;
+    size_t est = codegen_prepare(&cg, pkgs, npkgs, main_index);
+    sb_reserve(out, est);
+    out->len = 0;
+    out->data[0] = '\0';
+    cg.out = out;
+    gen_whole_program(&cg, pkgs, npkgs, main_index);
+    codegen_finish(&cg, out, out_want_tls, out_want_dns, out_want_crypto,
+                   out_want_sql, out_want_compress, out_want_fswatch);
+}
+
+void codegen_program_dev_split(Package *pkgs, int npkgs, int main_index,
+                               StrBuf *rt_out, StrBuf *prog_out,
+                               int *out_want_tls, int *out_want_dns,
+                               int *out_want_crypto,
+                               int *out_want_sql, int *out_want_compress,
+                               int *out_want_fswatch) {
+    CG cg;
+    size_t est = codegen_prepare(&cg, pkgs, npkgs, main_index);
+
+    force_native_result_types(&cg);
+
+    sb_reserve(rt_out, 512u * 1024u);
+    rt_out->len = 0;
+    rt_out->data[0] = '\0';
+    cg.split_emit_mode = 1;
+    cg.out = rt_out;
+    emit_line(&cg, "#define SL_API");
+    emit_line(&cg, "#define SL_API_DECL extern");
+    emit_line(&cg, "#define SL_API_INLINE");
+    emit_line(&cg, "#define SL_API_ALWAYS_INLINE");
+    emit_line(&cg, "");
+    emit_prelude(&cg);
+    size_t rt_core_end = rt_out->len;
+    emit_opt_res_forward_decls_filtered(&cg, 1);
+    emit_native_opt_res_defs(&cg, 1);
+    size_t rt_pkgs_start = rt_out->len;
+    emit_native_runtime(&cg);
+    emit_json_runtime(&cg);
+    emit_pg_rows_runtime(&cg);
+    emit_inspect_runtime(&cg);
+
+    int has_dns = (rt_out->len > rt_pkgs_start &&
+                   strstr(rt_out->data + rt_pkgs_start,
+                          "#define SLANG_NET_DNS 1") != NULL);
+
+    sb_reserve(prog_out, est);
+    prog_out->len = 0;
+    prog_out->data[0] = '\0';
+    cg.split_emit_mode = 2;
+    cg.out = prog_out;
+    emit_prog_split_headers(&cg);
+    extract_dev_decls(prog_out, rt_out->data, rt_core_end, has_dns);
+    emit_opt_res_forward_decls_filtered(&cg, 1);
+    emit_native_opt_res_defs(&cg, 0);
+    if (rt_out->len > rt_pkgs_start)
+        extract_dev_decls(prog_out, rt_out->data + rt_pkgs_start,
+                          rt_out->len - rt_pkgs_start, has_dns);
+    emit_opt_res_forward_decls_filtered(&cg, 0);
+    emit_struct_fwd_decls(&cg);
+    emit_enum_fwd_decls(&cg);
+    emit_fn_types(&cg);
+    emit_struct_and_value_res_types(&cg);
+    emit_struct_tracers(&cg);
+    emit_enum_tables(&cg);
+    emit_opt_res_types(&cg);
+    emit_opt_res_tracers(&cg);
+    emit_json_codecs(&cg);
+    emit_pg_rows_codecs(&cg);
+    emit_inspect_codecs(&cg);
+    emit_program_body_and_main(&cg, pkgs, npkgs, main_index);
+    codegen_finish(&cg, prog_out, out_want_tls, out_want_dns, out_want_crypto,
+                   out_want_sql, out_want_compress, out_want_fswatch);
 }
 
 /* ---- leaf functions ------------------------------------------------

@@ -307,6 +307,7 @@ typedef struct {
     /* 0 = not emitted, 1 = in progress, 2 = emitted (opts are held by
      * value, so bodies go in dependency order like results') */
     int body_state;
+    int is_native; /* 1 when needed by native runtime packages */
 } OptInst;
 
 typedef struct {
@@ -324,6 +325,7 @@ typedef struct {
      * 1 = emission in progress (re-entry is a by-value cycle),
      * 2 = emitted. See emit_struct_and_value_res_types in program.c. */
     int body_state;
+    int is_native; /* 1 when needed by native runtime packages */
 } ResInst;
 
 typedef struct {
@@ -613,6 +615,7 @@ struct CG {
     int fn_defer_cap;
     int in_defer_cleanup;
     void *exit_live_set;
+    int split_emit_mode; /* 0 = single-TU, 1 = rt_out, 2 = prog_out */
 };
 
 /* C typedef name for a distinct opt[T] instantiation. */
@@ -1097,6 +1100,7 @@ void emit_json_codecs(CG *cg);
 
 const char *pg_rows_infer(CG *cg, Expr *e);
 char *pg_rows_gen(CG *cg, Expr *e);
+void emit_pg_rows_runtime(CG *cg);
 void emit_pg_rows_codecs(CG *cg);
 int json_decode_stack_bytes(CG *cg, const char *t);
 const char *json_fast_dec_fn(CG *cg, const char *t);

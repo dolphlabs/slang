@@ -1282,15 +1282,33 @@ static int build(const char *input, const char *outname, int emit_c,
 
     StrBuf out;
     sb_init(&out);
+    StrBuf rt_out;
+    sb_init(&rt_out);
     int want_tls = 0;
     int want_dns = 0;
     int want_crypto = 0;
     int want_sql = 0;
     int want_compress = 0;
     int want_fswatch = 0;
-    codegen_program(pkgs.items, pkgs.count, main_index, &out, &want_tls,
-                    &want_dns, &want_crypto, &want_sql, &want_compress,
-                    &want_fswatch);
+    char *rt_dir = NULL;
+    int use_rt_cache = dev_build && !emit_c && !keep_c && !race_build &&
+                       !static_build && !target_triple &&
+                       (!sysroot_dir || !*sysroot_dir) &&
+                       !getenv("SLANG_NO_RT_CACHE");
+    if (use_rt_cache) {
+        rt_dir = project_cache_subdir("rt");
+        if (!rt_dir)
+            use_rt_cache = 0;
+    }
+    if (use_rt_cache) {
+        codegen_program_dev_split(pkgs.items, pkgs.count, main_index, &rt_out,
+                                  &out, &want_tls, &want_dns, &want_crypto,
+                                  &want_sql, &want_compress, &want_fswatch);
+    } else {
+        codegen_program(pkgs.items, pkgs.count, main_index, &out, &want_tls,
+                        &want_dns, &want_crypto, &want_sql, &want_compress,
+                        &want_fswatch);
+    }
 
     /* ---- output ---- */
     char *stem = derive_stem(input);
@@ -1320,8 +1338,136 @@ static int build(const char *input, const char *outname, int emit_c,
         openssl_source = find_openssl(tlsflags, sizeof(tlsflags));
 
     char cc_cmd[PATH_MAX];
-    if (!resolve_cc(cc_cmd, sizeof(cc_cmd)))
+    if (!resolve_cc(cc_cmd, sizeof(cc_cmd))) {
+        free(rt_out.data);
+        free(rt_dir);
         return 1;
+    }
+
+    char rt_obj[PATH_MAX] = "";
+    if (use_rt_cache) {
+        StrBuf tcflags;
+        sb_init(&tcflags);
+        if (want_tls || want_crypto) {
+            const char *p = tlsflags;
+            while (*p) {
+                while (*p == ' ' || *p == '\t')
+                    p++;
+                if (!*p)
+                    break;
+                const char *tok = p;
+                int in_sq = 0, in_dq = 0;
+                while (*p) {
+                    if (*p == '\'' && !in_dq)
+                        in_sq = !in_sq;
+                    else if (*p == '"' && !in_sq)
+                        in_dq = !in_dq;
+                    else if ((*p == ' ' || *p == '\t') && !in_sq && !in_dq)
+                        break;
+                    p++;
+                }
+                size_t tlen = (size_t)(p - tok);
+                int take_one = (tlen >= 2 && tok[0] == '-' &&
+                                (tok[1] == 'I' || tok[1] == 'D')) ||
+                               (tlen >= 8 && strncmp(tok, "-isystem", 8) == 0);
+                int need_next = (tlen == 2 && tok[0] == '-' &&
+                                 (tok[1] == 'I' || tok[1] == 'D')) ||
+                                (tlen == 8 && strncmp(tok, "-isystem", 8) == 0);
+                if (take_one) {
+                    if (tcflags.len)
+                        sb_append(&tcflags, " ");
+                    sb_append_n(&tcflags, tok, tlen);
+                    if (need_next) {
+                        while (*p == ' ' || *p == '\t')
+                            p++;
+                        const char *arg = p;
+                        in_sq = 0;
+                        in_dq = 0;
+                        while (*p) {
+                            if (*p == '\'' && !in_dq)
+                                in_sq = !in_sq;
+                            else if (*p == '"' && !in_sq)
+                                in_dq = !in_dq;
+                            else if ((*p == ' ' || *p == '\t') && !in_sq && !in_dq)
+                                break;
+                            p++;
+                        }
+                        if (p > arg) {
+                            sb_append(&tcflags, " ");
+                            sb_append_n(&tcflags, arg, (size_t)(p - arg));
+                        }
+                    }
+                }
+            }
+        }
+        const char *tc = tcflags.data ? tcflags.data : "";
+        const char *cflags = "-O0 -fwrapv -DSL_DEV_BUILD=1";
+        StrBuf hbuf;
+        sb_init(&hbuf);
+        sb_reserve(&hbuf, strlen(cc_cmd) + strlen(cflags) + strlen(tc) +
+                              rt_out.len + 16);
+        sb_append(&hbuf, "rt-v1");
+        sb_append_n(&hbuf, "\0", 1);
+        sb_append(&hbuf, cc_cmd);
+        sb_append_n(&hbuf, "\0", 1);
+        sb_append(&hbuf, cflags);
+        sb_append_n(&hbuf, "\0", 1);
+        sb_append(&hbuf, tc);
+        sb_append_n(&hbuf, "\0", 1);
+        sb_append_n(&hbuf, rt_out.data, rt_out.len);
+        char *rt_hex = project_sha256_hex(hbuf.data, hbuf.len);
+        free(hbuf.data);
+        snprintf(rt_obj, sizeof(rt_obj), "%s/%s.o", rt_dir, rt_hex);
+        if (!exists(rt_obj)) {
+            char rt_tmp_c[PATH_MAX];
+            char rt_tmp_o[PATH_MAX];
+            snprintf(rt_tmp_c, sizeof(rt_tmp_c), "%s/%s.%ld.c", rt_dir, rt_hex,
+                     (long)getpid());
+            snprintf(rt_tmp_o, sizeof(rt_tmp_o), "%s/%s.%ld.o", rt_dir, rt_hex,
+                     (long)getpid());
+            write_file(rt_tmp_c, rt_out.data, rt_out.len);
+            StrBuf rcmd;
+            sb_init(&rcmd);
+            sb_append(&rcmd, cc_cmd);
+            sb_append(&rcmd, " ");
+            sb_append(&rcmd, cflags);
+            if (*tc) {
+                sb_append(&rcmd, " ");
+                sb_append(&rcmd, tc);
+            }
+            sb_append(&rcmd, " -c ");
+            sb_append(&rcmd, rt_tmp_c);
+            sb_append(&rcmd, " -o ");
+            sb_append(&rcmd, rt_tmp_o);
+            char *rt_cc_out = NULL;
+            int rt_status = run_capture(rcmd.data, &rt_cc_out);
+            remove(rt_tmp_c);
+            free(rcmd.data);
+            if (rt_status != 0) {
+                if (rt_cc_out)
+                    fputs(rt_cc_out, stderr);
+                remove(rt_tmp_o);
+                free(rt_cc_out);
+                free(rt_hex);
+                free(tcflags.data);
+                free(rt_out.data);
+                free(rt_dir);
+                remove(gen_path);
+                return 1;
+            }
+            free(rt_cc_out);
+            if (rename(rt_tmp_o, rt_obj) != 0) {
+                if (exists(rt_obj))
+                    remove(rt_tmp_o);
+                else
+                    snprintf(rt_obj, sizeof(rt_obj), "%s", rt_tmp_o);
+            }
+        }
+        free(rt_hex);
+        free(tcflags.data);
+    }
+    free(rt_out.data);
+    free(rt_dir);
 
     int nlinks = 0;
     char **link_libs = collect_link_libs(&pkgs, &nlinks);
@@ -1362,6 +1508,10 @@ static int build(const char *input, const char *outname, int emit_c,
                                 : release_flags);
     sb_append(&cmd, xasprintf("-Wframe-larger-than=%d ", frame_limit()));
     sb_append(&cmd, gen_path);
+    if (use_rt_cache && rt_obj[0]) {
+        sb_append(&cmd, " ");
+        sb_append(&cmd, rt_obj);
+    }
     sb_append(&cmd, " -o ");
     sb_append(&cmd, outname);
     sb_append(&cmd, " -lpthread"); /* 'spawn' always links against pthreads,
@@ -1439,8 +1589,17 @@ static int build(const char *input, const char *outname, int emit_c,
         StrBuf out2;
         sb_init(&out2);
         int t2 = 0, d2 = 0, c2 = 0, s2 = 0, z2 = 0, w2 = 0;
-        codegen_program(pkgs2.items, pkgs2.count, main2, &out2, &t2, &d2,
-                        &c2, &s2, &z2, &w2);
+        if (use_rt_cache) {
+            StrBuf rt_unused;
+            sb_init(&rt_unused);
+            codegen_program_dev_split(pkgs2.items, pkgs2.count, main2,
+                                      &rt_unused, &out2, &t2, &d2, &c2, &s2,
+                                      &z2, &w2);
+            free(rt_unused.data);
+        } else {
+            codegen_program(pkgs2.items, pkgs2.count, main2, &out2, &t2, &d2,
+                            &c2, &s2, &z2, &w2);
+        }
         write_file(gen_path, out2.data, out2.len);
     }
     if (status == 0 && frame_cache)

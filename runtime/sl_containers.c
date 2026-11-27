@@ -33,6 +33,7 @@
  *      it. Pop first, resume last, never look again.
  */
 
+/* SL_DEV_DECL_BEGIN */
 struct sl_select;
 
 typedef struct sl_waiter {
@@ -64,6 +65,7 @@ typedef struct {
  * scanned: an [int] of a million entries used to offer every word to
  * mark, a page-registry lookup each, on every major (fix-gc.md 1.8). */
 #define SL_ELEM_NOPTR 2
+/* SL_DEV_DECL_END */
 
 /* Mark what one container slot (an element, a key, a value) holds.
  * `is_ptr` is the container's "may hold pointers" flag. Codegen sets it
@@ -104,7 +106,7 @@ static void sl_gc_trace_chan(void *p, void (*mark)(void *)) {
     }
 }
 
-static sl_chan *sl_chan_new(size_t elemsz, int cap, int elem_is_ptr) {
+SL_API sl_chan *sl_chan_new(size_t elemsz, int cap, int elem_is_ptr) {
     if (cap < 1) cap = 1;
     sl_chan *c = (sl_chan *)sl_gc_alloc(sizeof(sl_chan), sl_gc_trace_chan);
     c->buf = (unsigned char *)sl_gc_alloc_owned(elemsz * (size_t)cap, c);
@@ -163,6 +165,7 @@ static void sl_wl_remove(sl_waiter **head, sl_waiter **tail,
 
 /* The select bookkeeping a waiter points at. Lives on the selecting
  * task's own stack, like the nodes themselves. */
+/* SL_DEV_DECL_BEGIN */
 typedef struct sl_select {
     pthread_mutex_t mu;
     int woken;  /* some channel has claimed this select; at most one may */
@@ -170,6 +173,7 @@ typedef struct sl_select {
                    legal -- see sl_select_run for why this is separate */
     sl_task *task;
 } sl_select;
+/* SL_DEV_DECL_END */
 
 /* Wake one waiter, under the owning channel's lock.
  *
@@ -238,7 +242,7 @@ static void sl_wl_wake_one(sl_waiter **head, sl_waiter **tail) {
  * (a lost-wakeup race, and main()'s own top-level task having no
  * dispatch loop to resume into) a dedicated review pass found before
  * any of this was implemented. */
-static void sl_chan_send(sl_chan *c, const void *val) {
+SL_API void sl_chan_send(sl_chan *c, const void *val) {
     /* Tier 11 eighth slice: bracketed entry-to-every-return -- NOT
      * just around sl_task_park's own internal body (already covered
      * there). The bracket covers the whole park transition, which is
@@ -288,7 +292,7 @@ static void sl_chan_send(sl_chan *c, const void *val) {
 }
 
 /* returns 1 with *out populated, or 0 if closed and drained empty */
-static int sl_chan_recv(sl_chan *c, void *out) {
+SL_API int sl_chan_recv(sl_chan *c, void *out) {
     /* Tier 11 eighth slice: same bracket, same reason, as
      * sl_chan_send's own comment above -- entry-to-every-return, not
      * just sl_task_park's own internal coverage. This is the far more
@@ -331,7 +335,7 @@ static int sl_chan_recv(sl_chan *c, void *out) {
  * skipped (sl_waiter_wake returns 0) rather than retried -- it is about
  * to re-poll every one of its cases anyway, and will see the close
  * then. */
-static void sl_chan_close(sl_chan *c) {
+SL_API void sl_chan_close(sl_chan *c) {
     pthread_mutex_lock(&c->mu);
     c->closed = 1;
     sl_waiter *w;
@@ -365,14 +369,16 @@ static void sl_chan_close(sl_chan *c) {
  * struct needs no GC tracer: it holds no GC pointers, and parked
  * waiters are already roots via sl_parked. */
 
+/* SL_DEV_DECL_BEGIN */
 typedef struct {
     pthread_mutex_t mu;   /* guards the fields below, never user code */
     int held;
     sl_task *owner;       /* identity only; see the note above */
     sl_waiter *waiters, *waiters_tail;
 } sl_mutex;
+/* SL_DEV_DECL_END */
 
-static sl_mutex *sl_mutex_new(void) {
+SL_API sl_mutex *sl_mutex_new(void) {
     sl_mutex *m = (sl_mutex *)sl_gc_alloc(sizeof(sl_mutex), NULL);
     m->held = 0;
     m->owner = NULL;
@@ -389,7 +395,7 @@ static sl_mutex *sl_mutex_new(void) {
  * a run-queue link. See sl_chan_send's own comment for the full
  * reasoning -- same hazard, same fix, same sl_rt_cur() rule across the
  * park (the task may resume on a different worker). */
-static void sl_mutex_lock(sl_mutex *m) {
+SL_API void sl_mutex_lock(sl_mutex *m) {
     sl_waiter self;
     self.sel = NULL;
     sl_rt_preempt_disable();
@@ -415,7 +421,7 @@ static void sl_mutex_lock(sl_mutex *m) {
 }
 
 /* returns 1 if the lock was taken, 0 if it is held by someone else */
-static int sl_mutex_trylock(sl_mutex *m) {
+SL_API int sl_mutex_trylock(sl_mutex *m) {
     int got = 0;
     sl_rt_preempt_disable();
     pthread_mutex_lock(&m->mu);
@@ -429,7 +435,7 @@ static int sl_mutex_trylock(sl_mutex *m) {
     return got;
 }
 
-static void sl_mutex_unlock(sl_mutex *m) {
+SL_API void sl_mutex_unlock(sl_mutex *m) {
     sl_rt_preempt_disable();
     pthread_mutex_lock(&m->mu);
     if (!m->held) {
@@ -480,6 +486,7 @@ static void sl_mutex_unlock(sl_mutex *m) {
  * every later arm indefinitely. The counter is deliberately relaxed:
  * it only has to vary, never to be exact. */
 
+/* SL_DEV_DECL_BEGIN */
 typedef struct {
     sl_chan *ch;         /* channel (kind 0/1); NULL for timeout/disabled */
     int kind;            /* 0 = recv, 1 = send, 2 = timeout (after/until) */
@@ -488,6 +495,7 @@ typedef struct {
     void *val;           /* recv: output slot; send: value ptr; timeout: NULL */
     int closed;          /* recv result: channel closed & drained -> none */
 } sl_sel_case;
+/* SL_DEV_DECL_END */
 
 typedef struct sl_sel_timer {
     struct sl_sel_timer *next;
@@ -697,7 +705,7 @@ static void sl_sel_dequeue(sl_sel_case *cs, sl_waiter *nodes, int n) {
  * With no default and no arm ever becoming ready, this parks forever --
  * except if all arms are disabled (`when false` / `until_never`) and there
  * is no default, which fails immediately instead of deadlocking forever. */
-static int sl_select_run(sl_sel_case *cs, sl_waiter *nodes, int n,
+SL_API int sl_select_run(sl_sel_case *cs, sl_waiter *nodes, int n,
                          int has_default) {
     int t_idx = -1, n_chan_enabled = 0;
     long long t_deadline = 0;
@@ -803,7 +811,9 @@ static int sl_select_run(sl_sel_case *cs, sl_waiter *nodes, int n,
 
 /* ---- bytes: length-prefixed, binary-safe sequences ---- */
 
+/* SL_DEV_DECL_BEGIN */
 typedef struct { long long len; unsigned char *ptr; } sl_bytes;
+/* SL_DEV_DECL_END */
 
 static void sl_gc_trace_bytes(void *p, void (*mark)(void *)) {
     sl_bytes *b = (sl_bytes *)p;
@@ -821,7 +831,7 @@ static void sl_gc_trace_bytes(void *p, void (*mark)(void *)) {
 _Static_assert(sizeof(sl_bytes) == 2 * sizeof(void *) &&
                offsetof(sl_bytes, ptr) == sizeof(void *),
                "sl_gc_mark_inline_bytes reads ptr at this offset");
-static sl_bytes *sl_bytes_alloc(long long n) {
+SL_API sl_bytes *sl_bytes_alloc(long long n) {
     sl_bytes *b = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes) + (size_t)(n > 0 ? n : 1),
                                           sl_gc_trace_bytes);
     b->len = n;
@@ -831,7 +841,7 @@ static sl_bytes *sl_bytes_alloc(long long n) {
 
 /* sl_bytes_alloc for data the caller fills in full at once: the data is
  * not cleared (sl_gc_alloc_leaf_uninit), only the header is set. */
-static sl_bytes *sl_bytes_alloc_uninit(long long n) {
+SL_API sl_bytes *sl_bytes_alloc_uninit(long long n) {
     sl_bytes *b = (sl_bytes *)sl_gc_alloc_leaf_uninit(
         sizeof(sl_bytes) + (size_t)(n > 0 ? n : 1), sl_gc_trace_bytes);
     b->len = n;
@@ -839,7 +849,7 @@ static sl_bytes *sl_bytes_alloc_uninit(long long n) {
     return b;
 }
 
-static sl_bytes *sl_bytes_new(const unsigned char *p, long long n) {
+SL_API sl_bytes *sl_bytes_new(const unsigned char *p, long long n) {
     sl_bytes *b = sl_bytes_alloc_uninit(n);
     if (n > 0) memcpy(b->ptr, p, (size_t)n);
     return b;
@@ -854,35 +864,35 @@ static sl_bytes *sl_bytes_new(const unsigned char *p, long long n) {
  * barrier ever takes a bytes as its container, since a bytes holds no
  * pointers. */
 static unsigned char sl_bytes_empty_data[1];
-static sl_bytes sl_bytes_empty = { 0, sl_bytes_empty_data };
+SL_API sl_bytes sl_bytes_empty = { 0, sl_bytes_empty_data };
 
-static sl_bytes sl_bytes_static(const unsigned char *p, long long n) {
+SL_API sl_bytes sl_bytes_static(const unsigned char *p, long long n) {
     sl_bytes b;
     b.len = n;
     b.ptr = (unsigned char *)p;
     return b;
 }
 
-static int sl_bytes_at(sl_bytes *b, long long i, const char *at) {
+SL_API int sl_bytes_at(sl_bytes *b, long long i, const char *at) {
     if (i < 0 || i >= b->len)
         sl_rt_error_at("byte index out of bounds", i, b->len, at);
     return (int)b->ptr[i];
 }
 
-static void sl_bytes_set(sl_bytes *b, long long i, unsigned char v) {
+SL_API void sl_bytes_set(sl_bytes *b, long long i, unsigned char v) {
     if (i < 0 || i >= b->len)
         sl_rt_error("byte index out of bounds", i, b->len);
     b->ptr[i] = v;
 }
 
-static sl_bytes *sl_bytes_concat(sl_bytes *a, sl_bytes *b) {
+SL_API sl_bytes *sl_bytes_concat(sl_bytes *a, sl_bytes *b) {
     sl_bytes *r = sl_bytes_alloc(a->len + b->len);
     if (a->len) memcpy(r->ptr, a->ptr, (size_t)a->len);
     if (b->len) memcpy(r->ptr + a->len, b->ptr, (size_t)b->len);
     return r;
 }
 
-static sl_bytes *sl_bytes_slice(sl_bytes *b, long long s, long long e) {
+SL_API sl_bytes *sl_bytes_slice(sl_bytes *b, long long s, long long e) {
     if (s < 0) s = 0;
     if (e > b->len) e = b->len;
     if (e < s) e = s;
@@ -891,7 +901,7 @@ static sl_bytes *sl_bytes_slice(sl_bytes *b, long long s, long long e) {
     return r;
 }
 
-static int sl_bytes_eq(sl_bytes *a, sl_bytes *b) {
+SL_API int sl_bytes_eq(sl_bytes *a, sl_bytes *b) {
     if (a->len != b->len) return 0;
     return a->len == 0 || memcmp(a->ptr, b->ptr, (size_t)a->len) == 0;
 }
@@ -935,7 +945,7 @@ static size_t sl_nul_fffd_copy(unsigned char *dst, const unsigned char *p,
 }
 
 /* A new str from n outside bytes. */
-static char *sl_str_from_n(const void *src, size_t n) {
+SL_API char *sl_str_from_n(const void *src, size_t n) {
     const unsigned char *p = (const unsigned char *)src;
     if (!n || !memchr(p, 0, n)) {
         char *out = (char *)sl_gc_alloc_leaf_uninit(n + 1, NULL);
@@ -952,7 +962,7 @@ static char *sl_str_from_n(const void *src, size_t n) {
 
 /* buf (GC, n + 1 bytes) filled by a decoder: terminated in place when it
  * holds no zero byte, else copied with each one replaced. */
-static char *sl_str_seal(char *buf, size_t n) {
+SL_API char *sl_str_seal(char *buf, size_t n) {
     if (!n || !memchr(buf, 0, n)) {
         buf[n] = 0;
         return buf;
@@ -960,7 +970,7 @@ static char *sl_str_seal(char *buf, size_t n) {
     return sl_str_from_n(buf, n);
 }
 
-static char *sl_str_from_bytes(sl_bytes *b) {
+SL_API char *sl_str_from_bytes(sl_bytes *b) {
     return sl_str_from_n(b->ptr, (size_t)b->len);
 }
 
@@ -968,14 +978,14 @@ static char *sl_str_from_bytes(sl_bytes *b) {
  * this is the one allocation -- there is no header to also allocate the
  * way sl_bytes has one, which is what makes to_str(w[a..b]) one
  * allocation where to_str(to_bytes(w[a..b])) was three. */
-static char *sl_str_from_wire(sl_wire w) {
+SL_API char *sl_str_from_wire(sl_wire w) {
     return sl_str_from_n(w.ptr, (size_t)w.len);
 }
 
 /* to_str(peer): "1.2.3.4:5678", as println and inspect render a peer.
  * snprintf inside a preempt bracket (it can take libc's locale lock); the
  * one GC allocation after it. */
-static char *sl_str_from_peer(sl_peer p) {
+SL_API char *sl_str_from_peer(sl_peer p) {
     char buf[32];
     sl_rt_preempt_disable();
     int n = snprintf(buf, sizeof(buf), "%u.%u.%u.%u:%u",
@@ -997,7 +1007,7 @@ static char *sl_str_from_peer(sl_peer p) {
 /* wire_put_bytes: the sl_bytes counterpart of sl_wire_put (sl_core.c) --
  * split across the two files because sl_bytes isn't defined yet where
  * sl_wire is. Same contract: writes only what fits, returns the count. */
-static long long sl_wire_put_bytes(sl_wire w, long long off, sl_bytes *b) {
+SL_API long long sl_wire_put_bytes(sl_wire w, long long off, sl_bytes *b) {
     long long room, n;
     if (!b || off < 0 || off > w.len)
         return 0;
@@ -1010,25 +1020,25 @@ static long long sl_wire_put_bytes(sl_wire w, long long off, sl_bytes *b) {
     return n;
 }
 
-static sl_bytes *sl_bytes_from_str(const char *s) {
+SL_API sl_bytes *sl_bytes_from_str(const char *s) {
     return sl_bytes_new((const unsigned char *)s, (long long)strlen(s));
 }
 
-static sl_bytes *sl_to_le(unsigned long long v) {
+SL_API sl_bytes *sl_to_le(unsigned long long v) {
     unsigned char buf[8];
     for (int i = 0; i < 8; i++)
         buf[i] = (unsigned char)((v >> (8 * i)) & 0xff);
     return sl_bytes_new(buf, 8);
 }
 
-static sl_bytes *sl_to_be(unsigned long long v) {
+SL_API sl_bytes *sl_to_be(unsigned long long v) {
     unsigned char buf[8];
     for (int i = 0; i < 8; i++)
         buf[7 - i] = (unsigned char)((v >> (8 * i)) & 0xff);
     return sl_bytes_new(buf, 8);
 }
 
-static unsigned long long sl_from_le(sl_bytes *b) {
+SL_API unsigned long long sl_from_le(sl_bytes *b) {
     if (b->len != 8)
         sl_rt_error("from_le expects exactly 8 bytes", b->len, 8);
     unsigned long long v = 0;
@@ -1036,7 +1046,7 @@ static unsigned long long sl_from_le(sl_bytes *b) {
     return v;
 }
 
-static unsigned long long sl_from_be(sl_bytes *b) {
+SL_API unsigned long long sl_from_be(sl_bytes *b) {
     if (b->len != 8)
         sl_rt_error("from_be expects exactly 8 bytes", b->len, 8);
     unsigned long long v = 0;
@@ -1062,6 +1072,7 @@ static unsigned long long sl_from_be(sl_bytes *b) {
  * traced by a minor is always safe. An int, in padding the struct
  * already had (the size asserts below): positions past INT32_MAX are
  * always traced. */
+/* SL_DEV_DECL_BEGIN */
 typedef struct {
     long long len, cap;
     unsigned char *data; /* elements stored inline */
@@ -1072,6 +1083,7 @@ typedef struct {
 
 _Static_assert(sizeof(sl_arr) == 5 * sizeof(long long),
                "sl_arr: gc_clean must fit in the existing padding");
+/* SL_DEV_DECL_END */
 
 static int sl_gc_clean_at(long long n) {
     return n > INT32_MAX ? INT32_MAX : (int)n;
@@ -1138,13 +1150,13 @@ static int sl_gc_trace_arr_minor(void *p, void (*mark)(void *),
 
 /* The barrier for a store into element i. Caller holds the preempt
  * bracket (sl_gc_remember_obj's own requirement). */
-static void sl_arr_remember_at(sl_arr *a, long long i) {
+SL_API void sl_arr_remember_at(sl_arr *a, long long i) {
     if (i < a->gc_clean)
         a->gc_clean = (int)i;
     sl_gc_remember_obj((sl_gc_obj *)a - 1);
 }
 
-static sl_arr *sl_arr_new(size_t esz, int elem_is_ptr) {
+SL_API sl_arr *sl_arr_new(size_t esz, int elem_is_ptr) {
     sl_arr *a = (sl_arr *)sl_gc_alloc(sizeof(sl_arr), sl_gc_trace_arr);
     a->len = 0;
     a->cap = 0;
@@ -1154,7 +1166,7 @@ static sl_arr *sl_arr_new(size_t esz, int elem_is_ptr) {
     return a;
 }
 
-static void sl_arr_reserve(sl_arr *a, long long need) {
+SL_API void sl_arr_reserve(sl_arr *a, long long need) {
     if (need <= a->cap) return;
     long long cap = a->cap ? a->cap : 8;
     while (cap < need) cap *= 2;
@@ -1179,7 +1191,7 @@ static void sl_arr_reserve(sl_arr *a, long long need) {
     sl_rt_preempt_enable();
 }
 
-static void *sl_arr_get(sl_arr *a, long long i, size_t esz, const char *at) {
+SL_API void *sl_arr_get(sl_arr *a, long long i, size_t esz, const char *at) {
     if (esz != a->esz)
         sl_rt_error("internal: element size mismatch", (long long)esz,
                     (long long)a->esz);
@@ -1188,11 +1200,11 @@ static void *sl_arr_get(sl_arr *a, long long i, size_t esz, const char *at) {
     return a->data + (size_t)i * esz;
 }
 
-static void *sl_arr_at(sl_arr *a, long long i, size_t esz) {
+SL_API void *sl_arr_at(sl_arr *a, long long i, size_t esz) {
     return a->data + (size_t)i * esz;
 }
 
-static void sl_arr_push(sl_arr *a, void *val, size_t esz) {
+SL_API void sl_arr_push(sl_arr *a, void *val, size_t esz) {
     if (esz != a->esz)
         sl_rt_error("internal: element size mismatch", (long long)esz,
                     (long long)a->esz);
@@ -1213,7 +1225,7 @@ static void sl_arr_push(sl_arr *a, void *val, size_t esz) {
     }
 }
 
-static void *sl_arr_pop(sl_arr *a, size_t esz) {
+SL_API void *sl_arr_pop(sl_arr *a, size_t esz) {
     if (esz != a->esz)
         sl_rt_error("internal: element size mismatch", (long long)esz,
                     (long long)a->esz);
@@ -1222,7 +1234,7 @@ static void *sl_arr_pop(sl_arr *a, size_t esz) {
     return a->data + (size_t)a->len * esz;
 }
 
-static sl_arr *sl_arr_from(void *buf, long long n, size_t esz, int elem_is_ptr) {
+SL_API sl_arr *sl_arr_from(void *buf, long long n, size_t esz, int elem_is_ptr) {
     sl_arr *a = sl_arr_new(esz, elem_is_ptr);
     sl_arr_reserve(a, n);
     if (n > 0) memcpy(a->data, buf, (size_t)n * esz);
@@ -1230,7 +1242,7 @@ static sl_arr *sl_arr_from(void *buf, long long n, size_t esz, int elem_is_ptr) 
     return a;
 }
 
-static sl_arr *sl_arr_slice(sl_arr *a, long long s, long long e) {
+SL_API sl_arr *sl_arr_slice(sl_arr *a, long long s, long long e) {
     if (s < 0) s = 0;
     if (e > a->len) e = a->len;
     if (e < s) e = s;
@@ -1243,7 +1255,7 @@ static sl_arr *sl_arr_slice(sl_arr *a, long long s, long long e) {
     return r;
 }
 
-static sl_arr *sl_arr_concat(sl_arr *a, sl_arr *b) {
+SL_API sl_arr *sl_arr_concat(sl_arr *a, sl_arr *b) {
     if (a->esz != b->esz)
         sl_rt_error("cannot concatenate lists of different element types",
                     (long long)a->esz, (long long)b->esz);
@@ -1259,6 +1271,7 @@ static sl_arr *sl_arr_concat(sl_arr *a, sl_arr *b) {
 
 /* ---- maps: open-addressing hash tables over GC memory ---- */
 
+/* SL_DEV_DECL_BEGIN */
 typedef struct {
     long long count, cap;
     size_t ksz, vsz;
@@ -1280,6 +1293,7 @@ typedef struct {
 
 _Static_assert(sizeof(sl_map) == 12 * sizeof(long long),
                "sl_map: gc_clean must fit in the existing padding");
+/* SL_DEV_DECL_END */
 
 /* Entries at order positions [from, olen), keys and values. Value-struct
  * interiors (same as sl_gc_trace_arr): every word of every occupied slot
@@ -1403,7 +1417,7 @@ static unsigned char sl_map_tag(unsigned long long h) {
     return (unsigned char)(0x80 | (h >> 57));
 }
 
-static sl_map *sl_map_new(size_t ksz, size_t vsz, int kstr,
+SL_API sl_map *sl_map_new(size_t ksz, size_t vsz, int kstr,
                            int key_is_ptr, int val_is_ptr) {
     sl_map *m = (sl_map *)sl_gc_alloc(sizeof(sl_map), sl_gc_trace_map);
     m->count = 0;
@@ -1541,7 +1555,7 @@ static void sl_map_compact(sl_map *m) {
     m->olen = w;
 }
 
-static void sl_map_put(sl_map *m, const void *k, const void *v) {
+SL_API void sl_map_put(sl_map *m, const void *k, const void *v) {
     /* Tier 11 eighth slice: bracketed entry-to-every-return -- not
      * just sl_map_grow's own internal bracket (which only covers
      * ITS OWN four-alloc sequence). This closes the whole family of
@@ -1591,12 +1605,12 @@ static void sl_map_put(sl_map *m, const void *k, const void *v) {
  * address sl_map_get returned (`m[k].f = v`). Like an update through
  * sl_map_put, the slot's order position is not known, so the whole map
  * is dirty. Caller holds the preempt bracket. */
-static void sl_map_value_stored(sl_map *m) {
+SL_API void sl_map_value_stored(sl_map *m) {
     m->gc_clean = 0;
     sl_gc_remember_obj((sl_gc_obj *)m - 1);
 }
 
-static void *sl_map_get(sl_map *m, const void *k) {
+SL_API void *sl_map_get(sl_map *m, const void *k) {
     unsigned long long h = sl_map_hash(m, k);
     long long s = sl_map_probe(m, k, h);
     if (s < 0)
@@ -1604,7 +1618,7 @@ static void *sl_map_get(sl_map *m, const void *k) {
     return m->vals + (size_t)s * m->vsz;
 }
 
-static int sl_map_has(sl_map *m, const void *k) {
+SL_API int sl_map_has(sl_map *m, const void *k) {
     return sl_map_get(m, k) != NULL;
 }
 
@@ -1633,7 +1647,7 @@ static void sl_map_order_move(sl_map *m, long long slot, long long to) {
  * its home without tombstones. A moved entry keeps its position in the
  * order array (only the slot it names changes), so iteration order is
  * untouched. The deleted key's own order entry becomes a gap (-1). */
-static void sl_map_del(sl_map *m, const void *k) {
+SL_API void sl_map_del(sl_map *m, const void *k) {
     /* Tier 11 eighth slice: bracketed entry-to-every-return -- same
      * reasoning as sl_map_put's own bracket just above. */
     sl_rt_preempt_disable();
@@ -1676,7 +1690,7 @@ static void sl_map_del(sl_map *m, const void *k) {
 
 /* ---- strings ---- */
 
-static char *sl_strdup(const char *s) {
+SL_API char *sl_strdup(const char *s) {
     size_t n = strlen(s) + 1;
     char *p = (char *)sl_gc_alloc(n, NULL);
     memcpy(p, s, n);
@@ -1717,7 +1731,7 @@ static char *sl_strdup(const char *s) {
  * codegen in expr.c), which doesn't exist yet when this file is
  * spliced in. */
 
-static const char *sl_enum_name(int32_t ord, const char **names,
+SL_API const char *sl_enum_name(int32_t ord, const char **names,
                                 const int32_t *values, int n) {
     for (int i = 0; i < n; i++) {
         if (values[i] == ord)
@@ -1732,7 +1746,7 @@ static const char *sl_enum_name(int32_t ord, const char **names,
     return NULL; /* unreachable */
 }
 
-static int sl_enum_from_int(int32_t v, const int32_t *values, int n,
+SL_API int sl_enum_from_int(int32_t v, const int32_t *values, int n,
                             int32_t *out_idx) {
     for (int i = 0; i < n; i++) {
         if (values[i] == v) {
@@ -1743,7 +1757,7 @@ static int sl_enum_from_int(int32_t v, const int32_t *values, int n,
     return 0;
 }
 
-static int sl_enum_from_str(const char *s, const char **names, int n,
+SL_API int sl_enum_from_str(const char *s, const char **names, int n,
                             int32_t *out_idx) {
     for (int i = 0; i < n; i++) {
         if (!strcmp(names[i], s)) {
@@ -1754,7 +1768,7 @@ static int sl_enum_from_str(const char *s, const char **names, int n,
     return 0;
 }
 
-static int sl_str_parse_int(const char *s, long long *out,
+SL_API int sl_str_parse_int(const char *s, long long *out,
                             const char **err) {
     if (!s || !*s) { *err = "cannot parse an empty string as int"; return 0; }
     const char *p = s;
@@ -1778,7 +1792,7 @@ static int sl_str_parse_int(const char *s, long long *out,
     return 1;
 }
 
-static int sl_str_parse_f64(const char *s, double *out, const char **err) {
+SL_API int sl_str_parse_f64(const char *s, double *out, const char **err) {
     if (!s || !*s) { *err = "cannot parse an empty string as float"; return 0; }
     /* strtod accepts "inf", "nan" and hex floats. Those are almost never
        what a config value or a request field meant, and accepting them
@@ -1801,7 +1815,7 @@ static int sl_str_parse_f64(const char *s, double *out, const char **err) {
     return 1;
 }
 
-static char *sl_str_concat(const char *a, const char *b) {
+SL_API char *sl_str_concat(const char *a, const char *b) {
     size_t la = strlen(a), lb = strlen(b);
     char *p = (char *)sl_gc_alloc(la + lb + 1, NULL);
     memcpy(p, a, la);
@@ -1821,7 +1835,7 @@ static char *sl_str_concat(const char *a, const char *b) {
  * LATER, unrelated snprintf call on the same OS thread after an
  * earlier one was interrupted mid-call and abandoned by a task
  * migrating to a different worker). */
-static char *sl_str_from_int(long long v) {
+SL_API char *sl_str_from_int(long long v) {
     sl_rt_preempt_disable();
     char buf[32];
     snprintf(buf, sizeof(buf), "%lld", v);
@@ -1829,7 +1843,7 @@ static char *sl_str_from_int(long long v) {
     return sl_strdup(buf);
 }
 
-static char *sl_str_from_uint(unsigned long long v) {
+SL_API char *sl_str_from_uint(unsigned long long v) {
     sl_rt_preempt_disable();
     char buf[32];
     snprintf(buf, sizeof(buf), "%llu", v);
@@ -1878,7 +1892,7 @@ static void sl_fmt_f32(char *buf, size_t cap, float v) {
     sl_ryu_f32(buf, cap, v);
 }
 
-static char *sl_str_from_float(double v) {
+SL_API char *sl_str_from_float(double v) {
     sl_rt_preempt_disable();
     char buf[64];
     sl_fmt_f64(buf, sizeof(buf), v);
@@ -1886,7 +1900,7 @@ static char *sl_str_from_float(double v) {
     return sl_strdup(buf);
 }
 
-static char *sl_str_from_f32(float v) {
+SL_API char *sl_str_from_f32(float v) {
     sl_rt_preempt_disable();
     char buf[64];
     sl_fmt_f32(buf, sizeof(buf), v);
@@ -1895,7 +1909,7 @@ static char *sl_str_from_f32(float v) {
 }
 
 /* println / print of a float: formatted on the stack, no allocation. */
-static void sl_print_f64(double v, int newline) {
+SL_API void sl_print_f64(double v, int newline) {
     sl_rt_preempt_disable();
     char buf[64];
     sl_fmt_f64(buf, sizeof(buf), v);
@@ -1905,7 +1919,7 @@ static void sl_print_f64(double v, int newline) {
     sl_rt_preempt_enable();
 }
 
-static void sl_print_f32(float v, int newline) {
+SL_API void sl_print_f32(float v, int newline) {
     sl_rt_preempt_disable();
     char buf[64];
     sl_fmt_f32(buf, sizeof(buf), v);
@@ -1915,11 +1929,11 @@ static void sl_print_f32(float v, int newline) {
     sl_rt_preempt_enable();
 }
 
-static char *sl_str_from_bool(bool v) {
+SL_API char *sl_str_from_bool(bool v) {
     return sl_strdup(v ? "true" : "false");
 }
 
-static char *sl_str_from_fault(sl_fault f) {
+SL_API char *sl_str_from_fault(sl_fault f) {
     const char *d = f.detail ? f.detail : "";
     const char *op = f.op ? f.op : "";
     if (!op[0] && f.code == 0)
@@ -1940,7 +1954,7 @@ static char *sl_str_from_fault(sl_fault f) {
     return sl_strdup(buf);
 }
 
-static void sl_fault_print(sl_fault f, int newline) {
+SL_API void sl_fault_print(sl_fault f, int newline) {
     char *s = sl_str_from_fault(f);
     if (newline)
         puts(s);
@@ -1948,6 +1962,7 @@ static void sl_fault_print(sl_fault f, int newline) {
         fputs(s, stdout);
 }
 
+/* SL_DEV_DECL_BEGIN */
 typedef struct {
     int done;
     int panicked;
@@ -1958,6 +1973,7 @@ typedef struct {
     sl_task *waiter;
     pthread_mutex_t mu;
 } sl_join;
+/* SL_DEV_DECL_END */
 
 static void sl_gc_trace_join(void *p, void (*mark)(void *)) {
     sl_join *j = (sl_join *)p;
@@ -1967,7 +1983,7 @@ static void sl_gc_trace_join(void *p, void (*mark)(void *)) {
     sl_gc_mark_slot(j->val, j->valsz, j->val_is_ptr, mark);
 }
 
-static sl_join *sl_join_new(size_t valsz, int val_is_ptr) {
+SL_API sl_join *sl_join_new(size_t valsz, int val_is_ptr) {
     sl_join *j = (sl_join *)sl_gc_alloc(sizeof(sl_join), sl_gc_trace_join);
     j->valsz = valsz;
     j->val_is_ptr = val_is_ptr;
@@ -1996,7 +2012,7 @@ static void sl_join_wake(sl_join *j) {
  * on macOS arm64: young strs held by old joins, not remembered). The
  * barrier runs after the unlock -- remembering can malloc -- and inside
  * the same preempt bracket, so no collection comes between. */
-static void sl_join_finish(sl_join *j, const void *val) {
+SL_API void sl_join_finish(sl_join *j, const void *val) {
     sl_rt_preempt_disable();
     pthread_mutex_lock(&j->mu);
     int stored = 0;
@@ -2034,7 +2050,7 @@ static void sl_join_fail(void *jp, const char *msg) {
     sl_rt_preempt_enable();
 }
 
-static int sl_join_wait(sl_join *j, void *out) {
+SL_API int sl_join_wait(sl_join *j, void *out) {
     sl_rt_preempt_disable();
     pthread_mutex_lock(&j->mu);
     while (!j->done) {
@@ -2051,7 +2067,7 @@ static int sl_join_wait(sl_join *j, void *out) {
     return ok;
 }
 
-static char *sl_join_err(sl_join *j) {
+SL_API char *sl_join_err(sl_join *j) {
     return j->err ? j->err : sl_strdup("task panicked");
 }
 
@@ -2068,8 +2084,7 @@ static char *sl_join_err(sl_join *j) {
  * Nothing else is: as for a panicking task, no runtime lock is ever held
  * where a user panic can fire. noinline so `rec` is a frame of its own,
  * between the spawner's and the body's. */
-__attribute__((noinline))
-static void sl_protect_run(void (*body)(void *), void *arg, sl_join *join) {
+SL_API __attribute__((noinline)) void sl_protect_run(void (*body)(void *), void *arg, sl_join *join) {
     sl_recover rec;
     sl_task *t = sl_rt_cur();
     rec.prev = t->recover;

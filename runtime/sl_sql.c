@@ -128,7 +128,7 @@ static const char *sl_sql_stmt_err(sqlite3_stmt *st) {
 
 /* ---- connection lifecycle ---------------------------------------- */
 
-static sl_res_rawptr_str *sl_sql_open(const char *path) {
+SL_API sl_res_rawptr_str *sl_sql_open(const char *path) {
     if (!path)
         return sl_sql_err_ptr("invalid path");
     SL_SQL_STACK();
@@ -162,14 +162,14 @@ static sl_res_rawptr_str *sl_sql_open(const char *path) {
     return sl_sql_ok_ptr(db);
 }
 
-static void sl_sql_close(void *db) {
+SL_API void sl_sql_close(void *db) {
     if (!db)
         return;
     SL_SQL_STACK();
     SL_SQL_VOID(sqlite3_close_v2((sqlite3 *)db));
 }
 
-static sl_res_int_str *sl_sql_exec(void *dbv, const char *sql) {
+SL_API sl_res_int_str *sl_sql_exec(void *dbv, const char *sql) {
     sqlite3 *db = (sqlite3 *)dbv;
     if (!db)
         return sl_sql_err_int("nil connection");
@@ -189,7 +189,7 @@ static sl_res_int_str *sl_sql_exec(void *dbv, const char *sql) {
     return sl_sql_ok_int(changed);
 }
 
-static long long sl_sql_last_insert_id(void *dbv) {
+SL_API long long sl_sql_last_insert_id(void *dbv) {
     sqlite3 *db = (sqlite3 *)dbv;
     if (!db)
         return 0;
@@ -201,7 +201,7 @@ static long long sl_sql_last_insert_id(void *dbv) {
 
 /* ---- prepared statements ---------------------------------------- */
 
-static sl_res_rawptr_str *sl_sql_prepare(void *dbv, const char *sql) {
+SL_API sl_res_rawptr_str *sl_sql_prepare(void *dbv, const char *sql) {
     sqlite3 *db = (sqlite3 *)dbv;
     if (!db)
         return sl_sql_err_ptr("nil connection");
@@ -221,14 +221,14 @@ static sl_res_rawptr_str *sl_sql_prepare(void *dbv, const char *sql) {
     return sl_sql_ok_ptr(st);
 }
 
-static void sl_sql_finalize(void *st) {
+SL_API void sl_sql_finalize(void *st) {
     if (!st)
         return;
     SL_SQL_STACK();
     SL_SQL_VOID(sqlite3_finalize((sqlite3_stmt *)st));
 }
 
-static sl_res_bool_str *sl_sql_reset(void *stv) {
+SL_API sl_res_bool_str *sl_sql_reset(void *stv) {
     sqlite3_stmt *st = (sqlite3_stmt *)stv;
     if (!st)
         return sl_sql_err_bool("nil statement");
@@ -245,7 +245,7 @@ static sl_res_bool_str *sl_sql_reset(void *stv) {
 
 /* ---- binding (1-based index) ---------------------------------------- */
 
-static sl_res_bool_str *sl_sql_bind_int(void *stv, long long idx, long long v) {
+SL_API sl_res_bool_str *sl_sql_bind_int(void *stv, long long idx, long long v) {
     sqlite3_stmt *st = (sqlite3_stmt *)stv;
     if (!st)
         return sl_sql_err_bool("nil statement");
@@ -257,7 +257,7 @@ static sl_res_bool_str *sl_sql_bind_int(void *stv, long long idx, long long v) {
     return sl_sql_ok_bool(true);
 }
 
-static sl_res_bool_str *sl_sql_bind_float(void *stv, long long idx, double v) {
+SL_API sl_res_bool_str *sl_sql_bind_float(void *stv, long long idx, double v) {
     sqlite3_stmt *st = (sqlite3_stmt *)stv;
     if (!st)
         return sl_sql_err_bool("nil statement");
@@ -269,7 +269,7 @@ static sl_res_bool_str *sl_sql_bind_float(void *stv, long long idx, double v) {
     return sl_sql_ok_bool(true);
 }
 
-static sl_res_bool_str *sl_sql_bind_text(void *stv, long long idx,
+SL_API sl_res_bool_str *sl_sql_bind_text(void *stv, long long idx,
                                          const char *v) {
     sqlite3_stmt *st = (sqlite3_stmt *)stv;
     if (!st)
@@ -284,7 +284,7 @@ static sl_res_bool_str *sl_sql_bind_text(void *stv, long long idx,
     return sl_sql_ok_bool(true);
 }
 
-static sl_res_bool_str *sl_sql_bind_blob(void *stv, long long idx,
+SL_API sl_res_bool_str *sl_sql_bind_blob(void *stv, long long idx,
                                          sl_bytes *v) {
     sqlite3_stmt *st = (sqlite3_stmt *)stv;
     if (!st)
@@ -299,7 +299,7 @@ static sl_res_bool_str *sl_sql_bind_blob(void *stv, long long idx,
     return sl_sql_ok_bool(true);
 }
 
-static sl_res_bool_str *sl_sql_bind_null(void *stv, long long idx) {
+SL_API sl_res_bool_str *sl_sql_bind_null(void *stv, long long idx) {
     sqlite3_stmt *st = (sqlite3_stmt *)stv;
     if (!st)
         return sl_sql_err_bool("nil statement");
@@ -313,7 +313,7 @@ static sl_res_bool_str *sl_sql_bind_null(void *stv, long long idx) {
 
 /* ---- stepping + column access (0-based index) --------------------- */
 
-static sl_res_bool_str *sl_sql_step(void *stv) {
+SL_API sl_res_bool_str *sl_sql_step(void *stv) {
     sqlite3_stmt *st = (sqlite3_stmt *)stv;
     if (!st)
         return sl_sql_err_bool("nil statement");
@@ -327,7 +327,7 @@ static sl_res_bool_str *sl_sql_step(void *stv) {
     return sl_sql_err_bool(sl_sql_stmt_err(st));
 }
 
-static long long sl_sql_col_count(void *stv) {
+SL_API long long sl_sql_col_count(void *stv) {
     sqlite3_stmt *st = (sqlite3_stmt *)stv;
     if (!st)
         return 0;
@@ -337,7 +337,7 @@ static long long sl_sql_col_count(void *stv) {
     return n;
 }
 
-static const char *sl_sql_col_name(void *stv, long long i) {
+SL_API const char *sl_sql_col_name(void *stv, long long i) {
     sqlite3_stmt *st = (sqlite3_stmt *)stv;
     if (!st)
         return sl_strdup("");
@@ -347,7 +347,7 @@ static const char *sl_sql_col_name(void *stv, long long i) {
     return sl_strdup(n ? n : "");
 }
 
-static bool sl_sql_col_is_null(void *stv, long long i) {
+SL_API bool sl_sql_col_is_null(void *stv, long long i) {
     sqlite3_stmt *st = (sqlite3_stmt *)stv;
     if (!st)
         return true;
@@ -357,7 +357,7 @@ static bool sl_sql_col_is_null(void *stv, long long i) {
     return ty == SQLITE_NULL;
 }
 
-static long long sl_sql_col_int(void *stv, long long i) {
+SL_API long long sl_sql_col_int(void *stv, long long i) {
     sqlite3_stmt *st = (sqlite3_stmt *)stv;
     if (!st)
         return 0;
@@ -367,7 +367,7 @@ static long long sl_sql_col_int(void *stv, long long i) {
     return v;
 }
 
-static double sl_sql_col_float(void *stv, long long i) {
+SL_API double sl_sql_col_float(void *stv, long long i) {
     sqlite3_stmt *st = (sqlite3_stmt *)stv;
     if (!st)
         return 0.0;
@@ -377,7 +377,7 @@ static double sl_sql_col_float(void *stv, long long i) {
     return v;
 }
 
-static const char *sl_sql_col_text(void *stv, long long i) {
+SL_API const char *sl_sql_col_text(void *stv, long long i) {
     sqlite3_stmt *st = (sqlite3_stmt *)stv;
     if (!st)
         return sl_strdup("");
@@ -389,7 +389,7 @@ static const char *sl_sql_col_text(void *stv, long long i) {
     return sl_strdup(t ? (const char *)t : "");
 }
 
-static sl_bytes *sl_sql_col_blob(void *stv, long long i) {
+SL_API sl_bytes *sl_sql_col_blob(void *stv, long long i) {
     sqlite3_stmt *st = (sqlite3_stmt *)stv;
     if (!st)
         return sl_bytes_new(NULL, 0);

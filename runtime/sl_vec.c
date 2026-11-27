@@ -133,12 +133,12 @@ SL_VEC_AVX2X(f32, float, 16)
 #define SL_VEC_REDUCE(S, T, ACC)                                              \
     static double sl_vec_dot_raw_##S(const T *restrict x,                     \
                                      const T *restrict y, long long n);       \
-    static double sl_math_vec_dot_##S(sl_arr *a, sl_arr *b, const char *at) {  \
+    SL_API double sl_math_vec_dot_##S(sl_arr *a, sl_arr *b, const char *at) {  \
         sl_vec_need_same(a, b, at);                                           \
         return sl_vec_dot_raw_##S(SL_VEC_DATA(T, a), SL_VEC_DATA(T, b),       \
                                   a->len);                                    \
     }                                                                         \
-    static double sl_math_vec_sum_##S(sl_arr *a) {                            \
+    SL_API double sl_math_vec_sum_##S(sl_arr *a) {                            \
         const T *restrict x = SL_VEC_DATA(T, a);                              \
         long long n = a->len, i = 0;                                          \
         ACC s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0, s5 = 0, s6 = 0, s7 = 0;   \
@@ -209,23 +209,23 @@ SL_VEC_AVX2X(f32, float, 16)
         *rr = se;                                                             \
         return sd;                                                            \
     }                                                                         \
-    static double sl_math_vec_norm_##S(sl_arr *a) {                           \
+    SL_API double sl_math_vec_norm_##S(sl_arr *a) {                           \
         const T *x = SL_VEC_DATA(T, a);                                       \
         return sqrt(sl_vec_dot_raw_##S(x, x, a->len));                        \
     }                                                                         \
-    static double sl_math_vec_distance_##S(sl_arr *a, sl_arr *b,              \
+    SL_API double sl_math_vec_distance_##S(sl_arr *a, sl_arr *b,              \
                                            const char *at) {                  \
         sl_vec_need_same(a, b, at);                                           \
         return sqrt(sl_vec_sqdist_raw_##S(SL_VEC_DATA(T, a),                  \
                                           SL_VEC_DATA(T, b), a->len));        \
     }                                                                         \
-    static double sl_math_vec_distance2_##S(sl_arr *a, sl_arr *b,             \
+    SL_API double sl_math_vec_distance2_##S(sl_arr *a, sl_arr *b,             \
                                             const char *at) {                 \
         sl_vec_need_same(a, b, at);                                           \
         return sl_vec_sqdist_raw_##S(SL_VEC_DATA(T, a), SL_VEC_DATA(T, b),    \
                                      a->len);                                 \
     }                                                                         \
-    static double sl_math_vec_cosine_##S(sl_arr *a, sl_arr *b,                \
+    SL_API double sl_math_vec_cosine_##S(sl_arr *a, sl_arr *b,                \
                                          const char *at) {                    \
         sl_vec_need_same(a, b, at);                                           \
         const T *x = SL_VEC_DATA(T, a), *y = SL_VEC_DATA(T, b);               \
@@ -235,12 +235,12 @@ SL_VEC_AVX2X(f32, float, 16)
         return nn == 0.0 ? NAN : d / nn;                                      \
     }                                                                         \
     /* ---- in place ---- */                                                 \
-    static void sl_math_vec_scale_##S(sl_arr *a, double s) {                  \
+    SL_API void sl_math_vec_scale_##S(sl_arr *a, double s) {                  \
         T *restrict x = SL_VEC_DATA(T, a);                                    \
         T f = (T)s;                                                           \
         for (long long i = 0; i < a->len; i++) x[i] *= f;                     \
     }                                                                         \
-    static void sl_math_vec_axpy_##S(double alpha, sl_arr *xa, sl_arr *ya,    \
+    SL_API void sl_math_vec_axpy_##S(double alpha, sl_arr *xa, sl_arr *ya,    \
                                      const char *at) {                        \
         sl_vec_need_same(xa, ya, at);                                         \
         const T *restrict x = SL_VEC_DATA(T, xa);                             \
@@ -248,19 +248,19 @@ SL_VEC_AVX2X(f32, float, 16)
         T f = (T)alpha;                                                       \
         for (long long i = 0; i < ya->len; i++) y[i] += f * x[i];             \
     }                                                                         \
-    static void sl_math_vec_add_##S(sl_arr *ya, sl_arr *xa, const char *at) { \
+    SL_API void sl_math_vec_add_##S(sl_arr *ya, sl_arr *xa, const char *at) { \
         sl_vec_need_same(xa, ya, at);                                         \
         const T *restrict x = SL_VEC_DATA(T, xa);                             \
         T *restrict y = SL_VEC_DATA(T, ya);                                   \
         for (long long i = 0; i < ya->len; i++) y[i] += x[i];                 \
     }                                                                         \
-    static void sl_math_vec_sub_##S(sl_arr *ya, sl_arr *xa, const char *at) { \
+    SL_API void sl_math_vec_sub_##S(sl_arr *ya, sl_arr *xa, const char *at) { \
         sl_vec_need_same(xa, ya, at);                                         \
         const T *restrict x = SL_VEC_DATA(T, xa);                             \
         T *restrict y = SL_VEC_DATA(T, ya);                                   \
         for (long long i = 0; i < ya->len; i++) y[i] -= x[i];                 \
     }                                                                         \
-    static void sl_math_vec_mul_##S(sl_arr *ya, sl_arr *xa, const char *at) { \
+    SL_API void sl_math_vec_mul_##S(sl_arr *ya, sl_arr *xa, const char *at) { \
         sl_vec_need_same(xa, ya, at);                                         \
         const T *restrict x = SL_VEC_DATA(T, xa);                             \
         T *restrict y = SL_VEC_DATA(T, ya);                                   \
@@ -268,7 +268,7 @@ SL_VEC_AVX2X(f32, float, 16)
     }                                                                         \
     /* divides rather than multiplying by 1/norm: each element correctly  \
        rounded, so [3, 4] becomes exactly [0.6, 0.8] */                      \
-    static double sl_math_vec_normalize_##S(sl_arr *a) {                      \
+    SL_API double sl_math_vec_normalize_##S(sl_arr *a) {                      \
         double nrm = sl_math_vec_norm_##S(a);                                 \
         if (nrm > 0.0 && isfinite(nrm)) {                                     \
             T *restrict x = SL_VEC_DATA(T, a);                                \
@@ -277,14 +277,14 @@ SL_VEC_AVX2X(f32, float, 16)
         }                                                                     \
         return nrm;                                                           \
     }                                                                         \
-    static long long sl_math_vec_argmax_##S(sl_arr *a) {                      \
+    SL_API long long sl_math_vec_argmax_##S(sl_arr *a) {                      \
         const T *x = SL_VEC_DATA(T, a);                                       \
         long long best = -1;                                                  \
         for (long long i = 0; i < a->len; i++)                                \
             if (x[i] == x[i] && (best < 0 || x[i] > x[best])) best = i;       \
         return best;                                                          \
     }                                                                         \
-    static long long sl_math_vec_argmin_##S(sl_arr *a) {                      \
+    SL_API long long sl_math_vec_argmin_##S(sl_arr *a) {                      \
         const T *x = SL_VEC_DATA(T, a);                                       \
         long long best = -1;                                                  \
         for (long long i = 0; i < a->len; i++)                                \
@@ -386,7 +386,7 @@ static void sl_vec_rows_check(sl_arr *q, sl_arr *rows, long long dim,
 }
 
 #define SL_VEC_TOPK(S, T)                                                     \
-    static sl_arr *sl_math_vec_top_k_##S(sl_arr *a, long long k) {            \
+    SL_API sl_arr *sl_math_vec_top_k_##S(sl_arr *a, long long k) {            \
         const T *x = SL_VEC_DATA(T, a);                                       \
         if (k > a->len) k = a->len;                                           \
         if (k < 0) k = 0;                                                     \
@@ -397,7 +397,7 @@ static void sl_vec_rows_check(sl_arr *q, sl_arr *rows, long long dim,
                 sl_vec_offer(h, &n, k, (double)x[i], i);                      \
         return sl_vec_hits_out(h, n);                                         \
     }                                                                         \
-    static sl_arr *sl_math_vec_scores_##S(sl_arr *q, sl_arr *rows,            \
+    SL_API sl_arr *sl_math_vec_scores_##S(sl_arr *q, sl_arr *rows,            \
                                           long long dim, const char *at) {    \
         sl_vec_rows_check(q, rows, dim, at);                                  \
         long long nrows = rows->len / dim;                                    \
@@ -410,7 +410,7 @@ static void sl_vec_rows_check(sl_arr *q, sl_arr *rows, long long dim,
         out->len = nrows;                                                     \
         return out;                                                           \
     }                                                                         \
-    static sl_arr *sl_math_vec_top_k_dot_##S(sl_arr *q, sl_arr *rows,         \
+    SL_API sl_arr *sl_math_vec_top_k_dot_##S(sl_arr *q, sl_arr *rows,         \
                                              long long dim, long long k,      \
                                              const char *at) {                \
         sl_vec_rows_check(q, rows, dim, at);                                  \
@@ -425,7 +425,7 @@ static void sl_vec_rows_check(sl_arr *q, sl_arr *rows, long long dim,
                 sl_vec_offer(h, &n, k, sl_vec_dot_raw_##S(qv, r + j * dim, dim), j); \
         return sl_vec_hits_out(h, n);                                         \
     }                                                                         \
-    static sl_arr *sl_math_vec_top_k_cosine_##S(sl_arr *q, sl_arr *rows,      \
+    SL_API sl_arr *sl_math_vec_top_k_cosine_##S(sl_arr *q, sl_arr *rows,      \
                                                 long long dim, long long k,   \
                                                 const char *at) {             \
         sl_vec_rows_check(q, rows, dim, at);                                  \
@@ -451,7 +451,7 @@ SL_VEC_TOPK(f32, float)
 
 /* ---- conversion and int8 quantization ---- */
 
-static sl_arr *sl_math_vec_to_f32(sl_arr *a) {
+SL_API sl_arr *sl_math_vec_to_f32(sl_arr *a) {
     sl_arr *out = sl_arr_new(sizeof(float), SL_ELEM_NOPTR);
     sl_arr_reserve(out, a->len > 0 ? a->len : 1);
     const double *x = SL_VEC_DATA(double, a);
@@ -461,7 +461,7 @@ static sl_arr *sl_math_vec_to_f32(sl_arr *a) {
     return out;
 }
 
-static sl_arr *sl_math_vec_to_f64(sl_arr *a) {
+SL_API sl_arr *sl_math_vec_to_f64(sl_arr *a) {
     sl_arr *out = sl_arr_new(sizeof(double), SL_ELEM_NOPTR);
     sl_arr_reserve(out, a->len > 0 ? a->len : 1);
     const float *x = SL_VEC_DATA(float, a);
@@ -475,7 +475,7 @@ static sl_arr *sl_math_vec_to_f64(sl_arr *a) {
  * as 4 bytes of little-endian f32 scale then one byte per element: a
  * quarter of an [f32]'s memory, an eighth of a [float]'s. */
 #define SL_VEC_QUANT(S, T)                                                    \
-    static sl_bytes *sl_math_vec_quantize_##S(sl_arr *a) {                    \
+    SL_API sl_bytes *sl_math_vec_quantize_##S(sl_arr *a) {                    \
         const T *x = SL_VEC_DATA(T, a);                                       \
         double mx = 0.0;                                                      \
         for (long long i = 0; i < a->len; i++) {                              \
@@ -517,7 +517,7 @@ static void sl_vec_need_q(const sl_bytes *q, const char *at) {
         sl_rt_fail("math/vec: not a quantized vector (shorter than its 4-byte scale)", at, "");
 }
 
-static sl_arr *sl_math_vec_dequantize(sl_bytes *q, const char *at) {
+SL_API sl_arr *sl_math_vec_dequantize(sl_bytes *q, const char *at) {
     sl_vec_need_q(q, at);
     long long n = q->len - 4;
     float s = sl_vec_qscale(q);
@@ -533,7 +533,7 @@ static sl_arr *sl_math_vec_dequantize(sl_bytes *q, const char *at) {
  * products (at most 127 * 127 * 2^17 per lane before overflow, so lanes
  * are flushed into a 64-bit total every 65536 elements), times both
  * scales. */
-static double sl_math_vec_dot_q(sl_bytes *a, sl_bytes *b, const char *at) {
+SL_API double sl_math_vec_dot_q(sl_bytes *a, sl_bytes *b, const char *at) {
     sl_vec_need_q(a, at);
     sl_vec_need_q(b, at);
     if (a->len != b->len) {
@@ -552,3 +552,27 @@ static double sl_math_vec_dot_q(sl_bytes *a, sl_bytes *b, const char *at) {
     }
     return (double)total * (double)sl_vec_qscale(a) * (double)sl_vec_qscale(b);
 }
+/* SL_DEV_DECL_BEGIN */
+#define SL_VEC_API_DECL(S, T)                                               \
+    SL_API_DECL double sl_math_vec_dot_##S(sl_arr *a, sl_arr *b, const char *at); \
+    SL_API_DECL double sl_math_vec_sum_##S(sl_arr *a);                        \
+    SL_API_DECL double sl_math_vec_norm_##S(sl_arr *a);                       \
+    SL_API_DECL double sl_math_vec_distance_##S(sl_arr *a, sl_arr *b, const char *at); \
+    SL_API_DECL double sl_math_vec_distance2_##S(sl_arr *a, sl_arr *b, const char *at); \
+    SL_API_DECL double sl_math_vec_cosine_##S(sl_arr *a, sl_arr *b, const char *at); \
+    SL_API_DECL void sl_math_vec_scale_##S(sl_arr *a, double s);              \
+    SL_API_DECL void sl_math_vec_axpy_##S(double alpha, sl_arr *xa, sl_arr *ya, const char *at); \
+    SL_API_DECL void sl_math_vec_add_##S(sl_arr *ya, sl_arr *xa, const char *at); \
+    SL_API_DECL void sl_math_vec_sub_##S(sl_arr *ya, sl_arr *xa, const char *at); \
+    SL_API_DECL void sl_math_vec_mul_##S(sl_arr *ya, sl_arr *xa, const char *at); \
+    SL_API_DECL double sl_math_vec_normalize_##S(sl_arr *a);                  \
+    SL_API_DECL long long sl_math_vec_argmax_##S(sl_arr *a);                  \
+    SL_API_DECL long long sl_math_vec_argmin_##S(sl_arr *a);                  \
+    SL_API_DECL sl_arr *sl_math_vec_top_k_##S(sl_arr *a, long long k);        \
+    SL_API_DECL sl_arr *sl_math_vec_scores_##S(sl_arr *q, sl_arr *rows, long long dim, const char *at); \
+    SL_API_DECL sl_arr *sl_math_vec_top_k_dot_##S(sl_arr *q, sl_arr *rows, long long dim, long long k, const char *at); \
+    SL_API_DECL sl_arr *sl_math_vec_top_k_cosine_##S(sl_arr *q, sl_arr *rows, long long dim, long long k, const char *at); \
+    SL_API_DECL sl_bytes *sl_math_vec_quantize_##S(sl_arr *a);
+SL_VEC_API_DECL(f64, double)
+SL_VEC_API_DECL(f32, float)
+/* SL_DEV_DECL_END */

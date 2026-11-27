@@ -1108,7 +1108,7 @@ static int sl_rx_match_core(sl_rx *re, const unsigned char *s, size_t n,
     return r;
 }
 
-static bool sl_regex_is_match(void *rev, const char *s) {
+SL_API bool sl_regex_is_match(void *rev, const char *s) {
     sl_rx *re = (sl_rx *)rev;
     if (!re || !s) return false;
     int out[2];
@@ -1116,7 +1116,7 @@ static bool sl_regex_is_match(void *rev, const char *s) {
                             out, 0) ? true : false;
 }
 
-static bool sl_regex_is_match_bytes(void *rev, sl_bytes *b) {
+SL_API bool sl_regex_is_match_bytes(void *rev, sl_bytes *b) {
     sl_rx *re = (sl_rx *)rev;
     if (!re || !b) return false;
     int out[2];
@@ -1140,34 +1140,34 @@ static sl_arr *sl_regex_find_core(sl_rx *re, const unsigned char *s, size_t n,
     return a;
 }
 
-static sl_arr *sl_regex_find(void *rev, const char *s) {
+SL_API sl_arr *sl_regex_find(void *rev, const char *s) {
     if (!s) return sl_arr_new(sizeof(long long), SL_ELEM_NOPTR);
     return sl_regex_find_core((sl_rx *)rev, (const unsigned char *)s,
                               strlen(s), 0);
 }
 
-static sl_arr *sl_regex_find_at(void *rev, const char *s, long long from) {
+SL_API sl_arr *sl_regex_find_at(void *rev, const char *s, long long from) {
     if (!s) return sl_arr_new(sizeof(long long), SL_ELEM_NOPTR);
     return sl_regex_find_core((sl_rx *)rev, (const unsigned char *)s,
                               strlen(s), from);
 }
 
-static sl_arr *sl_regex_find_bytes(void *rev, sl_bytes *b) {
+SL_API sl_arr *sl_regex_find_bytes(void *rev, sl_bytes *b) {
     if (!b) return sl_arr_new(sizeof(long long), SL_ELEM_NOPTR);
     return sl_regex_find_core((sl_rx *)rev, b->ptr, (size_t)b->len, 0);
 }
 
-static sl_arr *sl_regex_find_bytes_at(void *rev, sl_bytes *b, long long from) {
+SL_API sl_arr *sl_regex_find_bytes_at(void *rev, sl_bytes *b, long long from) {
     if (!b) return sl_arr_new(sizeof(long long), SL_ELEM_NOPTR);
     return sl_regex_find_core((sl_rx *)rev, b->ptr, (size_t)b->len, from);
 }
 
-static long long sl_regex_groups(void *rev) {
+SL_API long long sl_regex_groups(void *rev) {
     sl_rx *re = (sl_rx *)rev;
     return re ? (long long)re->ngroups : 0;
 }
 
-static void sl_regex_free(void *rev) { sl_rx_destroy((sl_rx *)rev); }
+SL_API void sl_regex_free(void *rev) { sl_rx_destroy((sl_rx *)rev); }
 
 static sl_res_rawptr_str *sl_regex_ok_ptr(void *v) {
     sl_res_rawptr_str *r = (sl_res_rawptr_str *)sl_gc_alloc(
@@ -1206,7 +1206,7 @@ static sl_res_rawptr_str *sl_regex_compile_body(const char *pat) {
     return sl_regex_ok_ptr(re);
 }
 
-static sl_res_rawptr_str *sl_regex_compile(const char *pat) {
+SL_API sl_res_rawptr_str *sl_regex_compile(const char *pat) {
     if (!pat) return sl_regex_err_ptr("nil pattern");
     /* Parsing recurses with pattern nesting, so grow first -- and take
      * no interior pointers in this frame, see above. Matching

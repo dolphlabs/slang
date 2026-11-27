@@ -30,14 +30,14 @@ static char *sl_strings_dupn(const char *p, size_t n) {
  * An empty needle is found at 0. That is the convention memmem, Go's
  * strings.Index and byteutil.find all use, and it is what makes
  * split(s, "") terminate rather than loop. */
-static long long sl_strings_find(const char *hay, const char *needle) {
+SL_API long long sl_strings_find(const char *hay, const char *needle) {
     if (!hay || !needle) return -1;
     if (!*needle) return 0;
     const char *hit = strstr(hay, needle);
     return hit ? (long long)(hit - hay) : -1;
 }
 
-static long long sl_strings_rfind(const char *hay, const char *needle) {
+SL_API long long sl_strings_rfind(const char *hay, const char *needle) {
     if (!hay || !needle) return -1;
     size_t nl = strlen(needle);
     if (!nl) return (long long)strlen(hay);
@@ -49,19 +49,19 @@ static long long sl_strings_rfind(const char *hay, const char *needle) {
     return -1;
 }
 
-static bool sl_strings_contains(const char *hay, const char *needle) {
+SL_API bool sl_strings_contains(const char *hay, const char *needle) {
     return sl_strings_find(hay, needle) >= 0;
 }
 
 /* strncmp stops at the end of either string, so a long `s` is not
  * measured to compare a short prefix: http's emit asks this of every
  * response header line, several times per line. */
-static bool sl_strings_has_prefix(const char *s, const char *p) {
+SL_API bool sl_strings_has_prefix(const char *s, const char *p) {
     if (!s || !p) return false;
     return strncmp(s, p, strlen(p)) == 0;
 }
 
-static bool sl_strings_has_suffix(const char *s, const char *p) {
+SL_API bool sl_strings_has_suffix(const char *s, const char *p) {
     if (!s || !p) return false;
     size_t sl = strlen(s), pl = strlen(p);
     return sl >= pl && !memcmp(s + sl - pl, p, pl);
@@ -70,7 +70,7 @@ static bool sl_strings_has_suffix(const char *s, const char *p) {
 /* Non-overlapping occurrences, the same count split() would produce
    minus one. An empty needle counts len+1 times, matching find's
    empty-needle rule. */
-static long long sl_strings_count(const char *hay, const char *needle) {
+SL_API long long sl_strings_count(const char *hay, const char *needle) {
     if (!hay || !needle) return 0;
     size_t nl = strlen(needle);
     if (!nl) return (long long)strlen(hay) + 1;
@@ -85,7 +85,7 @@ static long long sl_strings_count(const char *hay, const char *needle) {
  * differs in any byte lands on a different shard with even odds. Not a
  * cryptographic hash, and the word reads make it differ between little
  * and big endian -- for use inside one process only. */
-static long long sl_strings_hash(const char *s) {
+SL_API long long sl_strings_hash(const char *s) {
     if (!s) return 0;
     size_t n = strlen(s);
     const unsigned char *p = (const unsigned char *)s;
@@ -113,20 +113,20 @@ static int sl_strings_is_space(char c) {
     return c == ' ' || c == '\t' || c == '\r' || c == '\n';
 }
 
-static char *sl_strings_trim_start(const char *s) {
+SL_API char *sl_strings_trim_start(const char *s) {
     if (!s) return sl_strings_dupn("", 0);
     while (*s && sl_strings_is_space(*s)) s++;
     return sl_strings_dupn(s, strlen(s));
 }
 
-static char *sl_strings_trim_end(const char *s) {
+SL_API char *sl_strings_trim_end(const char *s) {
     if (!s) return sl_strings_dupn("", 0);
     size_t n = strlen(s);
     while (n && sl_strings_is_space(s[n - 1])) n--;
     return sl_strings_dupn(s, n);
 }
 
-static char *sl_strings_trim(const char *s) {
+SL_API char *sl_strings_trim(const char *s) {
     if (!s) return sl_strings_dupn("", 0);
     while (*s && sl_strings_is_space(*s)) s++;
     size_t n = strlen(s);
@@ -134,7 +134,7 @@ static char *sl_strings_trim(const char *s) {
     return sl_strings_dupn(s, n);
 }
 
-static char *sl_strings_to_upper(const char *s) {
+SL_API char *sl_strings_to_upper(const char *s) {
     if (!s) return sl_strings_dupn("", 0);
     size_t n = strlen(s);
     char *out = sl_strings_dupn(s, n);
@@ -143,7 +143,7 @@ static char *sl_strings_to_upper(const char *s) {
     return out;
 }
 
-static char *sl_strings_to_lower(const char *s) {
+SL_API char *sl_strings_to_lower(const char *s) {
     if (!s) return sl_strings_dupn("", 0);
     size_t n = strlen(s);
     char *out = sl_strings_dupn(s, n);
@@ -158,7 +158,7 @@ static char *sl_strings_to_lower(const char *s) {
  * into a crash. A negative index counts from the end, so slice(s, -3, 0)
  * with end <= 0 meaning "to the end" would be ambiguous -- end <= start
  * after clamping is simply the empty string. */
-static char *sl_strings_slice(const char *s, long long start, long long end) {
+SL_API char *sl_strings_slice(const char *s, long long start, long long end) {
     if (!s) return sl_strings_dupn("", 0);
     long long n = (long long)strlen(s);
     if (start < 0) start += n;
@@ -169,7 +169,7 @@ static char *sl_strings_slice(const char *s, long long start, long long end) {
     return sl_strings_dupn(s + start, (size_t)(end - start));
 }
 
-static char *sl_strings_repeat(const char *s, long long times) {
+SL_API char *sl_strings_repeat(const char *s, long long times) {
     if (!s || times <= 0) return sl_strings_dupn("", 0);
     size_t n = strlen(s);
     if (!n) return sl_strings_dupn("", 0);
@@ -187,7 +187,7 @@ static char *sl_strings_repeat(const char *s, long long times) {
     return out;
 }
 
-static char *sl_strings_replace(const char *s, const char *old,
+SL_API char *sl_strings_replace(const char *s, const char *old,
                                 const char *neu) {
     if (!s) return sl_strings_dupn("", 0);
     if (!old || !*old) return sl_strings_dupn(s, strlen(s));
@@ -226,7 +226,7 @@ static char *sl_strings_replace(const char *s, const char *old,
  * Bracketed: sl_arr_push allocates and can grow the backing store, and
  * the partially-built list is only reachable from this C frame, so the
  * safepoint holds it across every allocation. */
-static sl_arr *sl_strings_split(const char *s, const char *sep) {
+SL_API sl_arr *sl_strings_split(const char *s, const char *sep) {
     sl_arr *out = sl_arr_new(sizeof(char *), 1);
     void *roots[1];
     sl_safepoint sp;
@@ -257,7 +257,7 @@ static sl_arr *sl_strings_split(const char *s, const char *sep) {
     return out;
 }
 
-static char *sl_strings_join(sl_arr *parts, const char *sep) {
+SL_API char *sl_strings_join(sl_arr *parts, const char *sep) {
     if (!parts || parts->len <= 0) return sl_strings_dupn("", 0);
     if (!sep) sep = "";
     size_t sepl = strlen(sep), total = 0;
@@ -287,7 +287,7 @@ static char *sl_strings_join(sl_arr *parts, const char *sep) {
    `to_str(b[lo..hi])` costs two: the slice, then the str built from it.
    Bounds are clamped the way strings.slice clamps, and a negative index
    counts from the end, so a caller cannot read outside the buffer. */
-static char *sl_strings_from_bytes(sl_bytes *b, long long lo, long long hi) {
+SL_API char *sl_strings_from_bytes(sl_bytes *b, long long lo, long long hi) {
     long long n = b ? b->len : 0;
     if (lo < 0) lo += n;
     if (hi < 0) hi += n;
@@ -298,7 +298,7 @@ static char *sl_strings_from_bytes(sl_bytes *b, long long lo, long long hi) {
 }
 
 /* from_bytes, lowercasing ASCII during the copy. */
-static char *sl_strings_from_bytes_lower(sl_bytes *b, long long lo,
+SL_API char *sl_strings_from_bytes_lower(sl_bytes *b, long long lo,
                                          long long hi) {
     long long n = b ? b->len : 0;
     if (lo < 0) lo += n;
@@ -316,7 +316,7 @@ static char *sl_strings_from_bytes_lower(sl_bytes *b, long long lo,
 /* One allocation for a str made from a wire range, where
    `to_str(w[lo..hi])` on a wire slice costs the slice view plus the
    str. Bounds clamp like strings.slice; negative counts from the end. */
-static char *sl_strings_from_wire(sl_wire w, long long lo, long long hi) {
+SL_API char *sl_strings_from_wire(sl_wire w, long long lo, long long hi) {
     long long n = w.len;
     if (lo < 0) lo += n;
     if (hi < 0) hi += n;
@@ -327,7 +327,7 @@ static char *sl_strings_from_wire(sl_wire w, long long lo, long long hi) {
 }
 
 /* from_wire, lowercasing ASCII during the copy. */
-static char *sl_strings_from_wire_lower(sl_wire w, long long lo,
+SL_API char *sl_strings_from_wire_lower(sl_wire w, long long lo,
                                          long long hi) {
     long long n = w.len;
     if (lo < 0) lo += n;
@@ -348,7 +348,7 @@ static char *sl_strings_from_wire_lower(sl_wire w, long long lo,
  * strips the terminator when it slices the block out) -- so a line with
  * no CRLF ahead of it only happens at true end-of-block, which the outer
  * loop condition already guards. */
-static long long sl_strings_find_field(sl_bytes *block, const char *name) {
+SL_API long long sl_strings_find_field(sl_bytes *block, const char *name) {
     if (!block || !name)
         return -1;
     size_t namelen = strlen(name);
@@ -396,7 +396,7 @@ static long long sl_strings_find_field(sl_bytes *block, const char *name) {
     return result;
 }
 
-static sl_bytes *sl_strings_join_bytes(sl_arr *parts, sl_bytes *sep) {
+SL_API sl_bytes *sl_strings_join_bytes(sl_arr *parts, sl_bytes *sep) {
     long long n = parts ? parts->len : 0;
     sl_bytes **items = parts ? (sl_bytes **)parts->data : NULL;
     long long sepl = sep ? sep->len : 0;
@@ -426,7 +426,7 @@ static sl_bytes *sl_strings_join_bytes(sl_arr *parts, sl_bytes *sep) {
  * overwrites every byte anyway and calloc's zeroing is free next to
  * the GC alloc it already pays. Negative reads as 0, matching
  * strings.repeat's own clamp. */
-static sl_bytes *sl_strings_bytes_zero(long long n) {
+SL_API sl_bytes *sl_strings_bytes_zero(long long n) {
     if (n < 0) n = 0;
     sl_bytes *r = sl_bytes_alloc(n); /* allocation is zeroed */
     return r;
@@ -450,7 +450,7 @@ static sl_bytes *sl_strings_bytes_zero(long long n) {
  * same mistake as an index outside it, and stops the program the same
  * way. A leaf (native_is_leaf): it allocates nothing and calls nothing
  * that can, and the bytes it writes hold no pointers, so no barrier. */
-static long long sl_strings_copy_into(sl_bytes *dst, long long at,
+SL_API long long sl_strings_copy_into(sl_bytes *dst, long long at,
                                       sl_bytes *src, long long from,
                                       long long to) {
     long long sn = src ? src->len : 0;
@@ -490,7 +490,7 @@ static long long sl_strings_copy_into(sl_bytes *dst, long long at,
  * JavaScript accept, since printf's "nan"/"inf" parse nowhere useful.
  * snprintf/strtod are bracketed: both can take locale locks (see
  * sl_gc_alloc's comment in sl_gc.c). */
-static char *sl_strings_from_float(double x) {
+SL_API char *sl_strings_from_float(double x) {
     if (x != x) return sl_strdup("NaN");
     if (x > 1.7976931348623157e308) return sl_strdup("Infinity");
     if (x < -1.7976931348623157e308) return sl_strdup("-Infinity");
@@ -524,7 +524,7 @@ static const unsigned char sl_html_len[] = {0, 5, 4, 4, 5, 5};
 /* & < > " ' as character references -- the five that can end text, a
  * tag or a quoted attribute value of either quote. Numeric forms for the
  * quotes, which every HTML version and XML read alike. */
-static char *sl_strings_escape_html(const char *s) {
+SL_API char *sl_strings_escape_html(const char *s) {
     if (!s) return sl_strings_dupn("", 0);
     const unsigned char *p = (const unsigned char *)s;
     size_t n = 0, extra = 0;
@@ -576,7 +576,7 @@ static unsigned char sl_js_class(unsigned char c) {
  * (so it cannot close the script or start a character reference), the
  * controls, and U+2028/U+2029 (line terminators in older JavaScript)
  * become escapes; everything else is copied as is. */
-static char *sl_strings_escape_js(const char *s) {
+SL_API char *sl_strings_escape_js(const char *s) {
     if (!s) return sl_strings_dupn("", 0);
     const unsigned char *p = (const unsigned char *)s;
     size_t n = 0, outn = 0;

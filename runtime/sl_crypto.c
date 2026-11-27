@@ -136,7 +136,7 @@ static sl_bytes *sl_crypto_hmac(int which, sl_bytes *key, sl_bytes *message) {
     return sl_bytes_new(out, (long long)n);
 }
 
-static sl_bytes *sl_crypto_sha256(sl_bytes *input) {
+SL_API sl_bytes *sl_crypto_sha256(sl_bytes *input) {
     SL_CRYPTO_STACK();
     unsigned char hash[SHA256_DIGEST_LENGTH];
     sl_rt_preempt_disable();
@@ -145,7 +145,7 @@ static sl_bytes *sl_crypto_sha256(sl_bytes *input) {
     return sl_bytes_new(hash, SHA256_DIGEST_LENGTH);
 }
 
-static sl_bytes *sl_crypto_hmac_sha256(sl_bytes *key, sl_bytes *message) {
+SL_API sl_bytes *sl_crypto_hmac_sha256(sl_bytes *key, sl_bytes *message) {
     return sl_crypto_hmac(SL_MD_SHA256, key, message);
 }
 
@@ -185,7 +185,7 @@ static int sl_crypto_os_random(unsigned char *p, size_t n) {
  * server's CPU, since every request draws an id from it. The kernel's
  * generator is the one RAND_bytes seeds from anyway, needs no lock, and
  * fills the result's buffer directly, so there is no malloc either. */
-static sl_res_bytes_str *sl_crypto_rand(long long n) {
+SL_API sl_res_bytes_str *sl_crypto_rand(long long n) {
     if (n < 0 || n > 1024 * 1024)
         return sl_crypto_err_bytes("invalid size: must be between 0 and 1MB");
     if (n == 0)
@@ -201,7 +201,7 @@ static sl_res_bytes_str *sl_crypto_rand(long long n) {
  * WebSocket handshake (RFC 6455) hashes the client's key with a fixed
  * GUID, Git object ids, older TOTP -- and must not be used to protect
  * anything new. EVP rather than SHA1(), which OpenSSL 3 deprecates. */
-static sl_bytes *sl_crypto_sha1(sl_bytes *input) {
+SL_API sl_bytes *sl_crypto_sha1(sl_bytes *input) {
     SL_CRYPTO_STACK();
     unsigned char hash[EVP_MAX_MD_SIZE];
     unsigned int n = 0;
@@ -218,7 +218,7 @@ static sl_bytes *sl_crypto_sha1(sl_bytes *input) {
  * that still specify it -- Postgres md5 authentication, Content-MD5,
  * legacy ETags -- and must not be used to protect anything new. EVP
  * rather than MD5(), which OpenSSL 3 deprecates. */
-static sl_bytes *sl_crypto_md5(sl_bytes *input) {
+SL_API sl_bytes *sl_crypto_md5(sl_bytes *input) {
     SL_CRYPTO_STACK();
     unsigned char hash[EVP_MAX_MD_SIZE];
     unsigned int n = 0;
@@ -239,7 +239,7 @@ static sl_bytes *sl_crypto_md5(sl_bytes *input) {
 #define SL_PBKDF2_MAX_ITER 10000000LL
 #define SL_PBKDF2_MAX_LEN 1024LL
 
-static sl_res_bytes_str *sl_crypto_pbkdf2_sha256(sl_bytes *password,
+SL_API sl_res_bytes_str *sl_crypto_pbkdf2_sha256(sl_bytes *password,
                                                  sl_bytes *salt,
                                                  long long iterations,
                                                  long long keylen) {
@@ -940,7 +940,7 @@ static int sl_crypto_argon2id_derive(const unsigned char *password,
                          out_len);
 }
 
-static sl_res_bytes_str *sl_crypto_argon2id_raw(sl_bytes *password,
+SL_API sl_res_bytes_str *sl_crypto_argon2id_raw(sl_bytes *password,
                                                 sl_bytes *salt,
                                                 long long iterations,
                                                 long long memory_kib,
@@ -971,7 +971,7 @@ static sl_res_bytes_str *sl_crypto_argon2id_raw(sl_bytes *password,
     return sl_crypto_ok_bytes(derived);
 }
 
-static sl_res_bool_str *sl_crypto_argon2id_verify(sl_bytes *password,
+SL_API sl_res_bool_str *sl_crypto_argon2id_verify(sl_bytes *password,
                                                   sl_bytes *salt,
                                                   sl_bytes *expected,
                                                   long long iterations,
@@ -1004,7 +1004,7 @@ static sl_res_bool_str *sl_crypto_argon2id_verify(sl_bytes *password,
 
 /* scrypt (RFC 7914): N a power of two from 2 to 2^20, r up to 32, p up
  * to 16, at most 256 MiB of work memory, 1 to 64 bytes out. */
-static sl_res_bytes_str *sl_crypto_scrypt(sl_bytes *password, sl_bytes *salt,
+SL_API sl_res_bytes_str *sl_crypto_scrypt(sl_bytes *password, sl_bytes *salt,
                                           long long n, long long r,
                                           long long p, long long keylen) {
     SL_CRYPTO_STACK();
@@ -1073,7 +1073,7 @@ static int sl_bcrypt_b64_decode(const char *in, size_t chars, unsigned char *out
  * compute the same thing; past 72 bytes bcrypt reads only the first 72.
  * $2x$ (crypt_blowfish's flagged buggy hashes) and the original $2$ are
  * refused. ok(false) is a wrong password; err is a hash this cannot read. */
-static sl_res_bool_str *sl_crypto_bcrypt_verify(sl_bytes *password,
+SL_API sl_res_bool_str *sl_crypto_bcrypt_verify(sl_bytes *password,
                                                 const char *hash) {
     size_t hlen = hash ? strlen(hash) : 0;
     if (hlen != 60 || hash[0] != '$' || hash[1] != '2' || hash[3] != '$' ||
@@ -1201,13 +1201,13 @@ done:
     return sl_crypto_ok_bool(verified != 0);
 }
 
-static sl_res_bool_str *sl_crypto_rsa_verify_sha256(sl_bytes *n, sl_bytes *e,
+SL_API sl_res_bool_str *sl_crypto_rsa_verify_sha256(sl_bytes *n, sl_bytes *e,
                                                     sl_bytes *msg,
                                                     sl_bytes *sig) {
     return sl_crypto_rsa_verify(n, e, msg, sig, 0);
 }
 
-static sl_res_bool_str *sl_crypto_rsa_verify_pss_sha256(sl_bytes *n, sl_bytes *e,
+SL_API sl_res_bool_str *sl_crypto_rsa_verify_pss_sha256(sl_bytes *n, sl_bytes *e,
                                                         sl_bytes *msg,
                                                         sl_bytes *sig) {
     return sl_crypto_rsa_verify(n, e, msg, sig, 1);
@@ -1250,19 +1250,19 @@ static sl_bytes *sl_crypto_digest(int which, sl_bytes *input) {
     return sl_bytes_new(out, (long long)n);
 }
 
-static sl_bytes *sl_crypto_sha384(sl_bytes *input) {
+SL_API sl_bytes *sl_crypto_sha384(sl_bytes *input) {
     return sl_crypto_digest(SL_MD_SHA384, input);
 }
 
-static sl_bytes *sl_crypto_sha512(sl_bytes *input) {
+SL_API sl_bytes *sl_crypto_sha512(sl_bytes *input) {
     return sl_crypto_digest(SL_MD_SHA512, input);
 }
 
-static sl_bytes *sl_crypto_hmac_sha384(sl_bytes *key, sl_bytes *message) {
+SL_API sl_bytes *sl_crypto_hmac_sha384(sl_bytes *key, sl_bytes *message) {
     return sl_crypto_hmac(SL_MD_SHA384, key, message);
 }
 
-static sl_bytes *sl_crypto_hmac_sha512(sl_bytes *key, sl_bytes *message) {
+SL_API sl_bytes *sl_crypto_hmac_sha512(sl_bytes *key, sl_bytes *message) {
     return sl_crypto_hmac(SL_MD_SHA512, key, message);
 }
 
@@ -1304,12 +1304,12 @@ static sl_res_bytes_str *sl_crypto_hkdf(int which, const char *mdname,
     return sl_crypto_ok_bytes(b);
 }
 
-static sl_res_bytes_str *sl_crypto_hkdf_sha256(sl_bytes *ikm, sl_bytes *salt,
+SL_API sl_res_bytes_str *sl_crypto_hkdf_sha256(sl_bytes *ikm, sl_bytes *salt,
                                                sl_bytes *info, long long length) {
     return sl_crypto_hkdf(SL_MD_SHA256, "SHA256", ikm, salt, info, length);
 }
 
-static sl_res_bytes_str *sl_crypto_hkdf_sha512(sl_bytes *ikm, sl_bytes *salt,
+SL_API sl_res_bytes_str *sl_crypto_hkdf_sha512(sl_bytes *ikm, sl_bytes *salt,
                                                sl_bytes *info, long long length) {
     return sl_crypto_hkdf(SL_MD_SHA512, "SHA512", ikm, salt, info, length);
 }
@@ -1318,7 +1318,7 @@ static sl_res_bytes_str *sl_crypto_hkdf_sha512(sl_bytes *ikm, sl_bytes *salt,
    tokens and anything else an attacker could probe byte by byte. The
    length itself is not secret (a MAC's length is public), so different
    lengths answer at once. */
-static bool sl_crypto_constant_time_eq(sl_bytes *a, sl_bytes *b) {
+SL_API bool sl_crypto_constant_time_eq(sl_bytes *a, sl_bytes *b) {
     if (a->len != b->len)
         return false;
     if (a->len == 0)
@@ -1467,24 +1467,24 @@ static sl_res_bytes_str *sl_crypto_aead_open(int which, const char *name,
     return sl_crypto_ok_bytes(sl_bytes_new(out, n));
 }
 
-static sl_res_bytes_str *sl_crypto_aes256gcm_seal(sl_bytes *key, sl_bytes *nonce,
+SL_API sl_res_bytes_str *sl_crypto_aes256gcm_seal(sl_bytes *key, sl_bytes *nonce,
                                                   sl_bytes *pt, sl_bytes *aad) {
     return sl_crypto_aead_seal(SL_CIPHER_AES256GCM, "aes256gcm", key, nonce, pt, aad);
 }
 
-static sl_res_bytes_str *sl_crypto_aes256gcm_open(sl_bytes *key, sl_bytes *nonce,
+SL_API sl_res_bytes_str *sl_crypto_aes256gcm_open(sl_bytes *key, sl_bytes *nonce,
                                                   sl_bytes *sealed, sl_bytes *aad) {
     return sl_crypto_aead_open(SL_CIPHER_AES256GCM, "aes256gcm", key, nonce, sealed, aad);
 }
 
-static sl_res_bytes_str *sl_crypto_chacha20poly1305_seal(sl_bytes *key,
+SL_API sl_res_bytes_str *sl_crypto_chacha20poly1305_seal(sl_bytes *key,
                                                          sl_bytes *nonce,
                                                          sl_bytes *pt,
                                                          sl_bytes *aad) {
     return sl_crypto_aead_seal(SL_CIPHER_CHACHA, "chacha20poly1305", key, nonce, pt, aad);
 }
 
-static sl_res_bytes_str *sl_crypto_chacha20poly1305_open(sl_bytes *key,
+SL_API sl_res_bytes_str *sl_crypto_chacha20poly1305_open(sl_bytes *key,
                                                          sl_bytes *nonce,
                                                          sl_bytes *sealed,
                                                          sl_bytes *aad) {
@@ -1495,7 +1495,7 @@ static sl_res_bytes_str *sl_crypto_chacha20poly1305_open(sl_bytes *key,
    ciphertext then tag (16). The caller never picks a nonce, so cannot
    reuse one -- the mistake that breaks GCM outright. A key should seal
    fewer than 2^32 messages this way (the random-nonce collision bound). */
-static sl_res_bytes_str *sl_crypto_seal(sl_bytes *key, sl_bytes *pt, sl_bytes *aad) {
+SL_API sl_res_bytes_str *sl_crypto_seal(sl_bytes *key, sl_bytes *pt, sl_bytes *aad) {
     SL_CRYPTO_STACK();
     char buf[128];
     const char *bad = sl_crypto_aead_check("seal", key, NULL, pt->len, aad, buf,
@@ -1516,7 +1516,7 @@ static sl_res_bytes_str *sl_crypto_seal(sl_bytes *key, sl_bytes *pt, sl_bytes *a
     return sl_crypto_ok_bytes(sl_bytes_new(out, n));
 }
 
-static sl_res_bytes_str *sl_crypto_open(sl_bytes *key, sl_bytes *box, sl_bytes *aad) {
+SL_API sl_res_bytes_str *sl_crypto_open(sl_bytes *key, sl_bytes *box, sl_bytes *aad) {
     SL_CRYPTO_STACK();
     char buf[128];
     const char *bad = sl_crypto_aead_check("open", key, NULL, box->len, aad, buf,
@@ -1633,7 +1633,7 @@ static void sl_keycache_put(int kind, const unsigned char *key, size_t len,
 
 /* ---- Ed25519 ---- */
 
-static sl_res_bytes_str *sl_crypto_ed25519_generate(void) {
+SL_API sl_res_bytes_str *sl_crypto_ed25519_generate(void) {
     unsigned char seed[32];
     if (sl_crypto_os_random(seed, sizeof seed) != 0)
         return sl_crypto_err_bytes("ed25519: no randomness from the OS");
@@ -1660,7 +1660,7 @@ static EVP_PKEY *sl_crypto_ed25519_public(const unsigned char *pub) {
     return k;
 }
 
-static sl_res_bytes_str *sl_crypto_ed25519_public_key(sl_bytes *seed) {
+SL_API sl_res_bytes_str *sl_crypto_ed25519_public_key(sl_bytes *seed) {
     SL_CRYPTO_STACK();
     if (seed->len != 32)
         return sl_crypto_errf_bytes("ed25519: private key must be 32 bytes, got %lld",
@@ -1678,7 +1678,7 @@ static sl_res_bytes_str *sl_crypto_ed25519_public_key(sl_bytes *seed) {
     return sl_crypto_ok_bytes(sl_bytes_new(pub, 32));
 }
 
-static sl_res_bytes_str *sl_crypto_ed25519_sign(sl_bytes *seed, sl_bytes *msg) {
+SL_API sl_res_bytes_str *sl_crypto_ed25519_sign(sl_bytes *seed, sl_bytes *msg) {
     SL_CRYPTO_STACK();
     if (seed->len != 32)
         return sl_crypto_errf_bytes("ed25519: private key must be 32 bytes, got %lld",
@@ -1701,7 +1701,7 @@ static sl_res_bytes_str *sl_crypto_ed25519_sign(sl_bytes *seed, sl_bytes *msg) {
     return sl_crypto_ok_bytes(sl_bytes_new(sig, 64));
 }
 
-static sl_res_bool_str *sl_crypto_ed25519_verify(sl_bytes *pub, sl_bytes *msg,
+SL_API sl_res_bool_str *sl_crypto_ed25519_verify(sl_bytes *pub, sl_bytes *msg,
                                                  sl_bytes *sig) {
     SL_CRYPTO_STACK();
     if (pub->len != 32)
@@ -1749,11 +1749,11 @@ static sl_res_bytes_str *sl_crypto_ed25519_raw_from_pem(const char *pem, int pri
     return sl_crypto_ok_bytes(b);
 }
 
-static sl_res_bytes_str *sl_crypto_ed25519_private_from_pem(const char *pem) {
+SL_API sl_res_bytes_str *sl_crypto_ed25519_private_from_pem(const char *pem) {
     return sl_crypto_ed25519_raw_from_pem(pem, 1);
 }
 
-static sl_res_bytes_str *sl_crypto_ed25519_public_from_pem(const char *pem) {
+SL_API sl_res_bytes_str *sl_crypto_ed25519_public_from_pem(const char *pem) {
     return sl_crypto_ed25519_raw_from_pem(pem, 0);
 }
 
@@ -1804,7 +1804,7 @@ done:
     return pkey;
 }
 
-static sl_res_bytes_str *sl_crypto_ecdsa_p256_generate(void) {
+SL_API sl_res_bytes_str *sl_crypto_ecdsa_p256_generate(void) {
     SL_CRYPTO_STACK();
     unsigned char d[32];
     sl_rt_preempt_disable();
@@ -1823,7 +1823,7 @@ static sl_res_bytes_str *sl_crypto_ecdsa_p256_generate(void) {
     return sl_crypto_ok_bytes(b);
 }
 
-static sl_res_bytes_str *sl_crypto_ecdsa_p256_public_key(sl_bytes *priv) {
+SL_API sl_res_bytes_str *sl_crypto_ecdsa_p256_public_key(sl_bytes *priv) {
     SL_CRYPTO_STACK();
     if (priv->len != 32)
         return sl_crypto_errf_bytes("ecdsa: P-256 private key must be 32 bytes, got %lld",
@@ -1839,7 +1839,7 @@ static sl_res_bytes_str *sl_crypto_ecdsa_p256_public_key(sl_bytes *priv) {
 }
 
 /* r || s, each 32 bytes big-endian: the JWS (ES256) and WebCrypto form. */
-static sl_res_bytes_str *sl_crypto_ecdsa_p256_sign_sha256(sl_bytes *priv, sl_bytes *msg) {
+SL_API sl_res_bytes_str *sl_crypto_ecdsa_p256_sign_sha256(sl_bytes *priv, sl_bytes *msg) {
     SL_CRYPTO_STACK();
     if (priv->len != 32)
         return sl_crypto_errf_bytes("ecdsa: P-256 private key must be 32 bytes, got %lld",
@@ -1912,7 +1912,7 @@ done:
     return sl_crypto_ok_bytes(sl_bytes_new(raw, 64));
 }
 
-static sl_res_bool_str *sl_crypto_ecdsa_p256_verify_sha256(sl_bytes *pub, sl_bytes *msg,
+SL_API sl_res_bool_str *sl_crypto_ecdsa_p256_verify_sha256(sl_bytes *pub, sl_bytes *msg,
                                                            sl_bytes *sig) {
     SL_CRYPTO_STACK();
     if (pub->len != 65 || pub->ptr[0] != 0x04)
@@ -1965,7 +1965,7 @@ static int sl_crypto_is_p256(EVP_PKEY *k) {
            (!strcmp(name, "prime256v1") || !strcmp(name, "P-256"));
 }
 
-static sl_res_bytes_str *sl_crypto_ecdsa_p256_private_from_pem(const char *pem) {
+SL_API sl_res_bytes_str *sl_crypto_ecdsa_p256_private_from_pem(const char *pem) {
     SL_CRYPTO_STACK();
     unsigned char d[32];
     sl_rt_preempt_disable();
@@ -1988,7 +1988,7 @@ static sl_res_bytes_str *sl_crypto_ecdsa_p256_private_from_pem(const char *pem) 
     return sl_crypto_ok_bytes(b);
 }
 
-static sl_res_bytes_str *sl_crypto_ecdsa_p256_public_from_pem(const char *pem) {
+SL_API sl_res_bytes_str *sl_crypto_ecdsa_p256_public_from_pem(const char *pem) {
     SL_CRYPTO_STACK();
     unsigned char pub[65];
     size_t n = 0;
@@ -2034,7 +2034,7 @@ static sl_res_str_str *sl_crypto_err_str(const char *msg) {
 /* A new key, as a PKCS#8 PEM private key. Generation takes tens of
    milliseconds at 2048 bits and seconds at 4096, without yielding: do it
    at startup or in a tool, not per request. */
-static sl_res_str_str *sl_crypto_rsa_generate(long long bits) {
+SL_API sl_res_str_str *sl_crypto_rsa_generate(long long bits) {
     SL_CRYPTO_STACK();
     if (bits < 2048 || bits > 8192 || bits % 8)
         return sl_crypto_err_str("rsa: key size must be a multiple of 8 from 2048 to 8192 bits");
@@ -2100,7 +2100,7 @@ static sl_res_str_str *sl_crypto_key_pem(EVP_PKEY *k, const char *what) {
     return sl_crypto_ok_str(out);
 }
 
-static sl_res_str_str *sl_crypto_ecdsa_p256_private_to_pem(sl_bytes *d) {
+SL_API sl_res_str_str *sl_crypto_ecdsa_p256_private_to_pem(sl_bytes *d) {
     SL_CRYPTO_STACK();
     if (d->len != 32)
         return sl_crypto_err_str("ecdsa: private key must be 32 bytes");
@@ -2110,7 +2110,7 @@ static sl_res_str_str *sl_crypto_ecdsa_p256_private_to_pem(sl_bytes *d) {
     return sl_crypto_key_pem(k, "ecdsa: not a valid P-256 private key");
 }
 
-static sl_res_str_str *sl_crypto_ed25519_private_to_pem(sl_bytes *seed) {
+SL_API sl_res_str_str *sl_crypto_ed25519_private_to_pem(sl_bytes *seed) {
     SL_CRYPTO_STACK();
     if (seed->len != 32)
         return sl_crypto_err_str("ed25519: private key must be 32 bytes");
@@ -2143,11 +2143,11 @@ static sl_res_bytes_str *sl_crypto_rsa_public_part(const char *pem, int which) {
     return sl_crypto_ok_bytes(sl_bytes_new(buf, n));
 }
 
-static sl_res_bytes_str *sl_crypto_rsa_public_n(const char *pem) {
+SL_API sl_res_bytes_str *sl_crypto_rsa_public_n(const char *pem) {
     return sl_crypto_rsa_public_part(pem, 0);
 }
 
-static sl_res_bytes_str *sl_crypto_rsa_public_e(const char *pem) {
+SL_API sl_res_bytes_str *sl_crypto_rsa_public_e(const char *pem) {
     return sl_crypto_rsa_public_part(pem, 1);
 }
 
@@ -2209,11 +2209,11 @@ done:
     return sl_crypto_ok_bytes(b);
 }
 
-static sl_res_bytes_str *sl_crypto_rsa_sign_sha256(const char *pem, sl_bytes *msg) {
+SL_API sl_res_bytes_str *sl_crypto_rsa_sign_sha256(const char *pem, sl_bytes *msg) {
     return sl_crypto_rsa_sign(pem, msg, 0);
 }
 
-static sl_res_bytes_str *sl_crypto_rsa_sign_pss_sha256(const char *pem, sl_bytes *msg) {
+SL_API sl_res_bytes_str *sl_crypto_rsa_sign_pss_sha256(const char *pem, sl_bytes *msg) {
     return sl_crypto_rsa_sign(pem, msg, 1);
 }
 
@@ -2284,15 +2284,15 @@ done:
     return sl_crypto_ok_bytes(b);
 }
 
-static sl_res_bytes_str *sl_crypto_rsa_encrypt_oaep_sha1(const char *pem, sl_bytes *data) {
+SL_API sl_res_bytes_str *sl_crypto_rsa_encrypt_oaep_sha1(const char *pem, sl_bytes *data) {
     return sl_crypto_rsa_oaep(pem, data, 0, "SHA1");
 }
-static sl_res_bytes_str *sl_crypto_rsa_decrypt_oaep_sha1(const char *pem, sl_bytes *data) {
+SL_API sl_res_bytes_str *sl_crypto_rsa_decrypt_oaep_sha1(const char *pem, sl_bytes *data) {
     return sl_crypto_rsa_oaep(pem, data, 1, "SHA1");
 }
-static sl_res_bytes_str *sl_crypto_rsa_encrypt_oaep_sha256(const char *pem, sl_bytes *data) {
+SL_API sl_res_bytes_str *sl_crypto_rsa_encrypt_oaep_sha256(const char *pem, sl_bytes *data) {
     return sl_crypto_rsa_oaep(pem, data, 0, "SHA256");
 }
-static sl_res_bytes_str *sl_crypto_rsa_decrypt_oaep_sha256(const char *pem, sl_bytes *data) {
+SL_API sl_res_bytes_str *sl_crypto_rsa_decrypt_oaep_sha256(const char *pem, sl_bytes *data) {
     return sl_crypto_rsa_oaep(pem, data, 1, "SHA256");
 }

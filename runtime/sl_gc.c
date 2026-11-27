@@ -522,7 +522,7 @@ static _Thread_local _Atomic unsigned long sl_rt_gc_acked_cycle = 0;
 SL_RT_TLS_ADDR_FN(sl_rt_tls_gc_acked_cycle, _Atomic unsigned long,
                   sl_rt_gc_acked_cycle)
 
-static void sl_gc_collect(void);
+SL_API_DECL void sl_gc_collect(void);
 static void sl_gc_collect_minor(void);
 static void sl_gc_mark(void *ptr);
 static void sl_gc_mark_minor(void *ptr);
@@ -555,7 +555,7 @@ static void sl_gc_mark_entry_arg(sl_task *t) {
     sl_gc_mark_entry_arg_fn(t, sl_gc_mark);
 }
 
-static void sl_gc_register_thread(void) {
+SL_API void sl_gc_register_thread(void) {
     /* Tier 11: this OS thread's chain lives in a per-thread sl_task
      * (sl_rt_current_task, runtime_core.c) rather than a bare
      * _Thread_local safepoint pointer -- see task_slot's own field
@@ -839,7 +839,7 @@ static void sl_rt_gc_checkin_slow(void) {
  *
  * Ordering: acquire on both, so a thread that observes neither flag
  * genuinely has nothing to acknowledge. */
-static inline void sl_rt_gc_checkin(void) {
+SL_API_INLINE void sl_rt_gc_checkin(void) {
     if (sl_gc_poll_needed())
         sl_rt_gc_checkin_slow();
 }
@@ -1063,7 +1063,7 @@ static void sl_gc_rem_orphan_append(sl_gc_obj **objs, size_t n) {
  * site is silent heap corruption (an old->young edge the next minor
  * never scans); an EXTRA site (young container) is just a wasted
  * no-op. */
-static void sl_gc_remember_obj(sl_gc_obj *h) {
+SL_API void sl_gc_remember_obj(sl_gc_obj *h) {
     if (!h) return;
     if (h->gen != 1 || h->remembered) return;
     sl_task *t = sl_rt_cur();
@@ -1096,7 +1096,7 @@ static int sl_gc_trace_map_minor(void *p, void (*mark)(void *),
  * a list or a map is dirty all over (see sl_arr's gc_clean). Stores that
  * know where they wrote use sl_arr_remember_at, or lower gc_clean
  * themselves and call sl_gc_remember_obj. */
-static void sl_gc_remember(void *obj) {
+SL_API void sl_gc_remember(void *obj) {
     if (!obj) return;
     sl_gc_dirty_all(obj);
     sl_gc_remember_obj((sl_gc_obj *)obj - 1);
@@ -2656,7 +2656,7 @@ static inline void *sl_gc_alloc_impl(size_t n,
     return (void *)(h + 1);
 }
 
-static void *sl_gc_alloc_gen(size_t n,
+SL_API void *sl_gc_alloc_gen(size_t n,
                              void (*trace)(void *, void (*)(void *)),
                              void (*fini)(void *), const void *owner) {
     return sl_gc_alloc_impl(n, trace, fini, owner, 1);
@@ -2670,18 +2670,18 @@ static void *sl_gc_alloc_gen(size_t n,
  * for objects nothing traces into (trace NULL, or a bytes, whose tracer
  * reads only the header the caller sets first); never where a pointer
  * could be read before it is written. */
-static void *sl_gc_alloc_leaf_uninit(size_t n,
+SL_API void *sl_gc_alloc_leaf_uninit(size_t n,
                                      void (*trace)(void *, void (*)(void *))) {
     return sl_gc_alloc_impl(n, trace, NULL, NULL, 0);
 }
 
-static void *sl_gc_alloc_fin(size_t n,
+SL_API void *sl_gc_alloc_fin(size_t n,
                              void (*trace)(void *, void (*)(void *)),
                              void (*fini)(void *)) {
     return sl_gc_alloc_gen(n, trace, fini, NULL);
 }
 
-static void *sl_gc_alloc(size_t n,
+SL_API void *sl_gc_alloc(size_t n,
                           void (*trace)(void *, void (*)(void *))) {
     return sl_gc_alloc_fin(n, trace, NULL);
 }
@@ -2718,7 +2718,7 @@ static void *sl_gc_alloc(size_t n,
  * it, like any other fresh pointer. A minor never frees a gen-1 buffer:
  * a paged one is skipped as old, an unpaged one moved from its mbuf to
  * sl_gc_old (see sl_gc_sweep_unpaged_minor). */
-static void *sl_gc_alloc_owned(size_t n, const void *owner) {
+SL_API void *sl_gc_alloc_owned(size_t n, const void *owner) {
     return sl_gc_alloc_gen(n, NULL, NULL, owner);
 }
 
@@ -2730,7 +2730,7 @@ static void *sl_gc_alloc_owned(size_t n, const void *owner) {
  * it passed in). Never grows in place -- allocates fresh, copies,
  * and lets the old block go unreachable for the next sweep; a real
  * collector makes an orphaned block garbage, not a leak. */
-static void *sl_gc_realloc(void *old, size_t newn) {
+SL_API void *sl_gc_realloc(void *old, size_t newn) {
     if (!old) return sl_gc_alloc(newn, NULL);
     sl_gc_obj *oh = (sl_gc_obj *)old - 1;
     void *nw = sl_gc_alloc_fin(newn, oh->trace, oh->fini);
@@ -2748,7 +2748,7 @@ static void *sl_gc_realloc(void *old, size_t newn) {
  * owner's generation (see sl_gc_alloc_owned for why that matters).
  * No barrier here: the caller stores the result into the owner and
  * issues the barrier on the owner itself, before its next checkin. */
-static void *sl_gc_realloc_owned(void *old, size_t newn,
+SL_API void *sl_gc_realloc_owned(void *old, size_t newn,
                                  const void *owner) {
     void *nw = sl_gc_alloc_owned(newn, owner);
     if (old) {
@@ -4206,7 +4206,7 @@ static void sl_gc_trim_heap(void) {
  * sl_gc_threshold by live bytes. Harvests the remembered set so its
  * flags do not leak (no scan needed: the full root walk below already
  * reaches every old object). */
-static void sl_gc_collect(void) {
+SL_API void sl_gc_collect(void) {
     /* Read always: proc.runtime_stats reports every pause (one clock read
        a collection), not only under SLANG_GC_STAT. */
     long long t0 = sl_rt_monotonic_ns();

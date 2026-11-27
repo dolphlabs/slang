@@ -1480,7 +1480,7 @@ static pthread_mutex_t sl_stack_fl_mu = PTHREAD_MUTEX_INITIALIZER;
  * OOM convention (runtime_gc.c). */
 static _Atomic unsigned long long sl_rt_next_task_id = 0;
 
-static void sl_task_stack_init(sl_task *t, void (*entry)(void *), void *arg) {
+SL_API void sl_task_stack_init(sl_task *t, void (*entry)(void *), void *arg) {
     t->task_id = atomic_fetch_add_explicit(&sl_rt_next_task_id, 1,
                                            memory_order_relaxed) + 1;
     /* Tier 11 eighth slice: protects the CALLING task (sl_rt_current_task),

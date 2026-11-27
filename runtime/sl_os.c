@@ -98,7 +98,7 @@ static sl_res__str__str *sl_os_err_list(const char *msg) {
 
 /* ---- environment ---- */
 
-static sl_res_bool_str *sl_os_setenv(const char *k, const char *v) {
+SL_API sl_res_bool_str *sl_os_setenv(const char *k, const char *v) {
     if (!k || !k[0] || strchr(k, '='))
         return sl_os_err_bool("invalid environment variable name");
     sl_rt_preempt_disable();
@@ -110,7 +110,7 @@ static sl_res_bool_str *sl_os_setenv(const char *k, const char *v) {
     return sl_os_ok_bool(true);
 }
 
-static sl_res_bool_str *sl_os_unsetenv(const char *k) {
+SL_API sl_res_bool_str *sl_os_unsetenv(const char *k) {
     if (!k || !k[0] || strchr(k, '='))
         return sl_os_err_bool("invalid environment variable name");
     sl_rt_preempt_disable();
@@ -125,7 +125,7 @@ static sl_res_bool_str *sl_os_unsetenv(const char *k) {
 /* "KEY=VALUE" entries, in the order the process holds them. Returned as
  * a plain list rather than a map: an environment may legally contain a
  * repeated key, and a map would silently drop one. */
-static sl_arr *sl_os_environ(void) {
+SL_API sl_arr *sl_os_environ(void) {
     sl_arr *a = sl_arr_new(sizeof(char *), 1);
     void *roots[] = { (void *)a };
     sl_safepoint sp;
@@ -142,9 +142,9 @@ static sl_arr *sl_os_environ(void) {
 
 /* ---- the process ---- */
 
-static long long sl_os_pid(void) { return (long long)getpid(); }
+SL_API long long sl_os_pid(void) { return (long long)getpid(); }
 
-static sl_res_str_str *sl_os_hostname(void) {
+SL_API sl_res_str_str *sl_os_hostname(void) {
     char buf[256];
     sl_rt_preempt_disable();
     int rc = gethostname(buf, sizeof(buf));
@@ -157,7 +157,7 @@ static sl_res_str_str *sl_os_hostname(void) {
     return sl_os_ok_str(sl_strdup(buf));
 }
 
-static const char *sl_os_tmpdir(void) {
+SL_API const char *sl_os_tmpdir(void) {
     const char *t = getenv("TMPDIR");
     if (t && t[0])
         return sl_strdup(t);
@@ -173,7 +173,7 @@ static const char *sl_os_tmpdir(void) {
  * the check and the use. The accessors below DO return a value that has
  * to come from somewhere, so they carry the errno text. */
 
-static bool sl_os_exists(const char *p) {
+SL_API bool sl_os_exists(const char *p) {
     if (!p) return false;
     struct stat st;
     sl_rt_preempt_disable();
@@ -182,7 +182,7 @@ static bool sl_os_exists(const char *p) {
     return rc == 0;
 }
 
-static bool sl_os_is_dir(const char *p) {
+SL_API bool sl_os_is_dir(const char *p) {
     if (!p) return false;
     struct stat st;
     sl_rt_preempt_disable();
@@ -193,7 +193,7 @@ static bool sl_os_is_dir(const char *p) {
 
 /* Regular files only: a directory, socket or fifo is not something you
  * can read as a file, so answering "yes" for them would mislead. */
-static bool sl_os_is_file(const char *p) {
+SL_API bool sl_os_is_file(const char *p) {
     if (!p) return false;
     struct stat st;
     sl_rt_preempt_disable();
@@ -202,7 +202,7 @@ static bool sl_os_is_file(const char *p) {
     return rc == 0 && S_ISREG(st.st_mode);
 }
 
-static sl_res_int_str *sl_os_size(const char *p) {
+SL_API sl_res_int_str *sl_os_size(const char *p) {
     if (!p) return sl_os_err_int("no such file or directory");
     struct stat st;
     sl_rt_preempt_disable();
@@ -217,7 +217,7 @@ static sl_res_int_str *sl_os_size(const char *p) {
 /* Unix seconds. Nanosecond fields are spelled differently on every
  * platform (st_mtimespec, st_mtim, st_mtime_nsec) and nothing here
  * needs that resolution; seconds is what Last-Modified wants. */
-static sl_res_int_str *sl_os_mtime(const char *p) {
+SL_API sl_res_int_str *sl_os_mtime(const char *p) {
     if (!p) return sl_os_err_int("no such file or directory");
     struct stat st;
     sl_rt_preempt_disable();
@@ -229,7 +229,7 @@ static sl_res_int_str *sl_os_mtime(const char *p) {
     return sl_os_ok_int((long long)st.st_mtime);
 }
 
-static sl_res_int_str *sl_os_mtime_ns(const char *p) {
+SL_API sl_res_int_str *sl_os_mtime_ns(const char *p) {
     if (!p) return sl_os_err_int("no such file or directory");
     struct stat st;
     sl_rt_preempt_disable();
@@ -256,7 +256,7 @@ static sl_res_int_str *sl_os_mtime_ns(const char *p) {
 /* Entry names only, not paths, and "." and ".." are omitted: every
  * caller filters them out, and forgetting to is how a directory walk
  * becomes an infinite loop. */
-static sl_res__str__str *sl_os_read_dir(const char *p) {
+SL_API sl_res__str__str *sl_os_read_dir(const char *p) {
     if (!p) return sl_os_err_list("no such file or directory");
     sl_rt_preempt_disable();
     DIR *d = opendir(p);
@@ -290,7 +290,7 @@ static sl_res__str__str *sl_os_read_dir(const char *p) {
 
 /* Files and empty directories alike, so a caller need not know which it
  * has. rmdir is tried only when unlink says "that is a directory". */
-static sl_res_bool_str *sl_os_remove(const char *p) {
+SL_API sl_res_bool_str *sl_os_remove(const char *p) {
     if (!p) return sl_os_err_bool("no such file or directory");
     sl_rt_preempt_disable();
     int rc = unlink(p);
@@ -305,7 +305,7 @@ static sl_res_bool_str *sl_os_remove(const char *p) {
     return sl_os_ok_bool(true);
 }
 
-static sl_res_bool_str *sl_os_rename(const char *from, const char *to) {
+SL_API sl_res_bool_str *sl_os_rename(const char *from, const char *to) {
     if (!from || !to) return sl_os_err_bool("no such file or directory");
     sl_rt_preempt_disable();
     int rc = rename(from, to);
@@ -626,7 +626,7 @@ static void *sl_fsevent_teardown_fn(void *arg) {
 }
 #endif
 
-static sl_res_int_str *sl_os_watch(const char *path, sl_arr *excludes) {
+SL_API sl_res_int_str *sl_os_watch(const char *path, sl_arr *excludes) {
     if (!path || !path[0])
         return sl_os_err_int("invalid path");
 
@@ -697,7 +697,7 @@ static sl_res_int_str *sl_os_watch(const char *path, sl_arr *excludes) {
     return sl_os_ok_int((long long)w->id);
 }
 
-static sl_res__str__str *sl_os_watch_next(int handle, int64_t deadline) {
+SL_API sl_res__str__str *sl_os_watch_next(int handle, int64_t deadline) {
     sl_watcher *w = sl_os_find_watcher(handle);
     if (!w) return sl_os_err_list("invalid watch handle");
 
@@ -749,7 +749,7 @@ static sl_res__str__str *sl_os_watch_next(int handle, int64_t deadline) {
     }
 }
 
-static sl_res_bool_str *sl_os_watch_close(int handle) {
+SL_API sl_res_bool_str *sl_os_watch_close(int handle) {
     pthread_mutex_lock(&sl_os_watch_mu);
     sl_watcher **prev = &sl_os_watchers;
     sl_watcher *w = NULL;
@@ -795,17 +795,17 @@ static sl_res_bool_str *sl_os_watch_close(int handle) {
 
 #else
 
-static sl_res_int_str *sl_os_watch(const char *path, sl_arr *excludes) {
+SL_API sl_res_int_str *sl_os_watch(const char *path, sl_arr *excludes) {
     (void)path; (void)excludes;
     return sl_os_err_int("os.watch not supported on this platform");
 }
 
-static sl_res__str__str *sl_os_watch_next(int handle, int64_t deadline) {
+SL_API sl_res__str__str *sl_os_watch_next(int handle, int64_t deadline) {
     (void)handle; (void)deadline;
     return sl_os_err_list("os.watch not supported on this platform");
 }
 
-static sl_res_bool_str *sl_os_watch_close(int handle) {
+SL_API sl_res_bool_str *sl_os_watch_close(int handle) {
     (void)handle;
     return sl_os_err_bool("os.watch not supported on this platform");
 }

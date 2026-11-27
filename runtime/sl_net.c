@@ -1660,12 +1660,12 @@ static sl_res__str__str *sl_net_dns_query(const char *name, int qtype,
     return sl_net_dns_ok(values);
 }
 
-static sl_res__str__str *sl_net_lookup_srv_until(const char *name,
+SL_API sl_res__str__str *sl_net_lookup_srv_until(const char *name,
                                                   sl_until u) {
     return sl_net_dns_query(name, ns_t_srv, u);
 }
 
-static sl_res__str__str *sl_net_lookup_txt_until(const char *name,
+SL_API sl_res__str__str *sl_net_lookup_txt_until(const char *name,
                                                   sl_until u) {
     return sl_net_dns_query(name, ns_t_txt, u);
 }
@@ -1691,7 +1691,7 @@ static int sl_reactor_eventfd(void) {
 }
 #endif
 
-static void sl_reactor_start(void) {
+SL_API void sl_reactor_start(void) {
     sl_rt_fd_forget_hook = sl_reactor_forget;
 #if defined(SL_REACTOR_KQUEUE)
     sl_reactor_fd = kqueue();
@@ -1914,7 +1914,7 @@ static sl_res_bool_str *sl_net_err_bool(const char *msg) {
 
 static sl_res_i32_str *sl_net_listen_reuse(int port, int reuse_port);
 
-static sl_res_i32_str *sl_net_listen(int port) {
+SL_API sl_res_i32_str *sl_net_listen(int port) {
     return sl_net_listen_reuse(port, 0);
 }
 
@@ -1966,7 +1966,7 @@ static sl_res_i32_str *sl_net_listen_reuse(int port, int reuse_port) {
     return sl_net_ok_i32((int32_t)fd);
 }
 
-static sl_res_i32_str *sl_net_port(int lfd) {
+SL_API sl_res_i32_str *sl_net_port(int lfd) {
     struct sockaddr_in addr;
     socklen_t n = sizeof(addr);
     if (getsockname(lfd, (struct sockaddr *)&addr, &n) != 0)
@@ -1974,7 +1974,7 @@ static sl_res_i32_str *sl_net_port(int lfd) {
     return sl_net_ok_i32((int32_t)ntohs(addr.sin_port));
 }
 
-static sl_res_i32_str *sl_net_accept(int lfd) {
+SL_API sl_res_i32_str *sl_net_accept(int lfd) {
     int epoch = sl_reactor_close_epoch(lfd);
     for (;;) {
         int cfd = accept(lfd, NULL, NULL);
@@ -2195,11 +2195,11 @@ static sl_res_i32_str *sl_net_dial_u(const char *host, int port, sl_until u) {
     return sl_net_err_i32(strerror(err));
 }
 
-static sl_res_i32_str *sl_net_dial(const char *host, int port) {
+SL_API sl_res_i32_str *sl_net_dial(const char *host, int port) {
     return sl_net_dial_u(host, port, 0);
 }
 
-static sl_res_i32_str *sl_net_dial_until(const char *host, int port,
+SL_API sl_res_i32_str *sl_net_dial_until(const char *host, int port,
                                          sl_until u) {
     return sl_net_dial_u(host, port, u);
 }
@@ -2220,7 +2220,7 @@ static int sl_net_unix_addr(const char *path, struct sockaddr_un *sa,
     return 0;
 }
 
-static sl_res_i32_str *sl_net_dial_unix(const char *path, sl_until u) {
+SL_API sl_res_i32_str *sl_net_dial_unix(const char *path, sl_until u) {
     struct sockaddr_un sa;
     const char *why = NULL;
     if (sl_net_unix_addr(path, &sa, &why) != 0) return sl_net_err_i32(why);
@@ -2236,7 +2236,7 @@ static sl_res_i32_str *sl_net_dial_unix(const char *path, sl_until u) {
 /* Listen on a Unix-domain socket at `path`, which must not exist yet --
  * a stale file is an error, not silently removed, since it might belong
  * to a server that is still running. Accept with net.accept. */
-static sl_res_i32_str *sl_net_listen_unix(const char *path) {
+SL_API sl_res_i32_str *sl_net_listen_unix(const char *path) {
     struct sockaddr_un sa;
     const char *why = NULL;
     if (sl_net_unix_addr(path, &sa, &why) != 0) return sl_net_err_i32(why);
@@ -2290,11 +2290,11 @@ static sl_res_i32_str *sl_net_send_u(int fd, sl_bytes *data, sl_until u) {
     return sl_net_ok_i32((int32_t)data->len);
 }
 
-static sl_res_i32_str *sl_net_send(int fd, sl_bytes *data) {
+SL_API sl_res_i32_str *sl_net_send(int fd, sl_bytes *data) {
     return sl_net_send_u(fd, data, 0);
 }
 
-static sl_res_i32_str *sl_net_send_until(int fd, sl_bytes *data, sl_until u) {
+SL_API sl_res_i32_str *sl_net_send_until(int fd, sl_bytes *data, sl_until u) {
     return sl_net_send_u(fd, data, u);
 }
 
@@ -2420,11 +2420,11 @@ static sl_res_bytes_str *sl_net_recv_u(int fd, int max, sl_until u) {
     }
 }
 
-static sl_res_bytes_str *sl_net_recv(int fd, int max) {
+SL_API sl_res_bytes_str *sl_net_recv(int fd, int max) {
     return sl_net_recv_u(fd, max, 0);
 }
 
-static sl_res_bytes_str *sl_net_recv_until(int fd, int max, sl_until u) {
+SL_API sl_res_bytes_str *sl_net_recv_until(int fd, int max, sl_until u) {
     return sl_net_recv_u(fd, max, u);
 }
 
@@ -2432,7 +2432,7 @@ static sl_res_bytes_str *sl_net_recv_until(int fd, int max, sl_until u) {
  * quiet": 0 is an orderly close, >0 is bytes nobody asked for (a pooled
  * HTTP connection must be silent between requests, so it is unusable),
  * and any other error is a reset or worse. */
-static bool sl_net_idle_alive(int fd) {
+SL_API bool sl_net_idle_alive(int fd) {
     unsigned char b;
     ssize_t n = recv(fd, &b, 1, MSG_PEEK | MSG_DONTWAIT);
     return n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK);
@@ -2443,7 +2443,7 @@ static bool sl_net_idle_alive(int fd) {
  * whose syscall itself runs after the close still hits a free number
  * (EBADF) or a reused one; only a handle that is not the number (sl_link)
  * or a per-fd reference count, as Go's fdMutex, ends that. */
-static void sl_net_close(int fd) {
+SL_API void sl_net_close(int fd) {
     sl_net_user_nonblock_remove((void *)(intptr_t)fd); /* avoid a
         stale entry misapplying to a later, unrelated fd that
         happens to reuse the same number. */
@@ -2461,7 +2461,7 @@ static void sl_net_close(int fd) {
     sl_rt_preempt_enable();
 }
 
-static sl_res_bool_str *sl_net_nonblock(int fd) {
+SL_API sl_res_bool_str *sl_net_nonblock(int fd) {
     /* fd is already non-blocking at the OS level internally (every
        fd is, now) -- this call's real job is opting IN to the
        synchronous "would block" contract instead of parking, which
@@ -2608,17 +2608,17 @@ static sl_res_i32_str *sl_udp_bind_opt(const char *host, int port,
     return sl_udp_ready(fd);
 }
 
-static sl_res_i32_str *sl_net_udp_bind(const char *host, int port) {
+SL_API sl_res_i32_str *sl_net_udp_bind(const char *host, int port) {
     return sl_udp_bind_opt(host, port, 0);
 }
 
-static sl_res_i32_str *sl_net_udp_bind_shared(const char *host, int port) {
+SL_API sl_res_i32_str *sl_net_udp_bind_shared(const char *host, int port) {
     return sl_udp_bind_opt(host, port, 1);
 }
 
 /* A connected datagram socket: net.send and net.recv work on it and the
  * kernel drops datagrams from any other sender. */
-static sl_res_i32_str *sl_net_udp_dial(const char *host, int port,
+SL_API sl_res_i32_str *sl_net_udp_dial(const char *host, int port,
                                        sl_until u) {
     sl_udp_addr a;
     const char *msg = "";
@@ -2637,7 +2637,7 @@ static sl_res_i32_str *sl_net_udp_dial(const char *host, int port,
     return sl_udp_ready(fd);
 }
 
-static sl_res_bytes_str *sl_net_udp_addr(const char *host, int port,
+SL_API sl_res_bytes_str *sl_net_udp_addr(const char *host, int port,
                                          sl_until u) {
     sl_udp_addr a;
     const char *msg = "";
@@ -2648,7 +2648,7 @@ static sl_res_bytes_str *sl_net_udp_addr(const char *host, int port,
 }
 
 /* "1.2.3.4:53" or "[::1]:53"; "" for bytes that are no address. */
-static const char *sl_net_addr_str(sl_bytes *b) {
+SL_API const char *sl_net_addr_str(sl_bytes *b) {
     sl_udp_addr a;
     if (sl_udp_addr_of(b, &a) != 0)
         return "";
@@ -2697,11 +2697,11 @@ static sl_res_i32_str *sl_net_send_to_u(int fd, sl_bytes *data, sl_bytes *to,
     }
 }
 
-static sl_res_i32_str *sl_net_send_to(int fd, sl_bytes *data, sl_bytes *to) {
+SL_API sl_res_i32_str *sl_net_send_to(int fd, sl_bytes *data, sl_bytes *to) {
     return sl_net_send_to_u(fd, data, to, 0);
 }
 
-static sl_res_i32_str *sl_net_send_to_until(int fd, sl_bytes *data,
+SL_API sl_res_i32_str *sl_net_send_to_until(int fd, sl_bytes *data,
                                             sl_bytes *to, sl_until u) {
     return sl_net_send_to_u(fd, data, to, u);
 }
@@ -2772,11 +2772,11 @@ static sl_res__bytes__str *sl_net_recv_from_u(int fd, int max, sl_until u) {
     }
 }
 
-static sl_res__bytes__str *sl_net_recv_from(int fd, int max) {
+SL_API sl_res__bytes__str *sl_net_recv_from(int fd, int max) {
     return sl_net_recv_from_u(fd, max, 0);
 }
 
-static sl_res__bytes__str *sl_net_recv_from_until(int fd, int max,
+SL_API sl_res__bytes__str *sl_net_recv_from_until(int fd, int max,
                                                   sl_until u) {
     return sl_net_recv_from_u(fd, max, u);
 }
@@ -2835,12 +2835,12 @@ static sl_res_bool_str *sl_udp_membership(int fd, const char *group,
     return sl_net_err_bool("not a multicast group address");
 }
 
-static sl_res_bool_str *sl_net_udp_join(int fd, const char *group,
+SL_API sl_res_bool_str *sl_net_udp_join(int fd, const char *group,
                                         const char *iface) {
     return sl_udp_membership(fd, group, iface, 1);
 }
 
-static sl_res_bool_str *sl_net_udp_leave(int fd, const char *group,
+SL_API sl_res_bool_str *sl_net_udp_leave(int fd, const char *group,
                                          const char *iface) {
     return sl_udp_membership(fd, group, iface, 0);
 }
@@ -2897,7 +2897,7 @@ static int sl_net_ip_literal(const char *host, int port,
 }
 
 /* net.listen with a bind address and options; see pkg_net/sigs.c. */
-static sl_res_i32_str *sl_net_listen_with(const char *host, int port,
+SL_API sl_res_i32_str *sl_net_listen_with(const char *host, int port,
                                           const char *opts) {
     sl_listen_opts o;
     const char *bad = sl_net_parse_listen_opts(opts, &o);
@@ -3058,7 +3058,7 @@ static int sl_net_opt_is_byte(int level, int opt) {
            (opt == IP_MULTICAST_TTL || opt == IP_MULTICAST_LOOP);
 }
 
-static sl_res_bool_str *sl_net_set_opt(int fd, const char *name, int value) {
+SL_API sl_res_bool_str *sl_net_set_opt(int fd, const char *name, int value) {
     if (!strcmp(name, "linger")) {
         /* seconds to block close() flushing unsent data; -1 turns it off
            (the default), 0 resets the connection on close */
@@ -3085,7 +3085,7 @@ static sl_res_bool_str *sl_net_set_opt(int fd, const char *name, int value) {
     return sl_net_ok_bool(true);
 }
 
-static sl_res_int_str *sl_net_get_opt(int fd, const char *name) {
+SL_API sl_res_int_str *sl_net_get_opt(int fd, const char *name) {
     if (!strcmp(name, "linger")) {
         struct linger l;
         socklen_t n = sizeof(l);
@@ -3231,12 +3231,12 @@ static sl_res_int_str *sl_net_send_file_u(int sock, int file, long long off,
     return sl_sendfile_ok(sent);
 }
 
-static sl_res_int_str *sl_net_send_file(int sock, int file, long long off,
+SL_API sl_res_int_str *sl_net_send_file(int sock, int file, long long off,
                                         long long count) {
     return sl_net_send_file_u(sock, file, off, count, 0);
 }
 
-static sl_res_int_str *sl_net_send_file_until(int sock, int file,
+SL_API sl_res_int_str *sl_net_send_file_until(int sock, int file,
                                               long long off, long long count,
                                               sl_until u) {
     return sl_net_send_file_u(sock, file, off, count, u);
@@ -3248,7 +3248,7 @@ static sl_res_int_str *sl_net_send_file_until(int sock, int file,
  * pid in advance and leaves it out). The variables are removed once read,
  * so this program's own children do not take the count for theirs, and a
  * second call returns nothing. */
-static sl_arr *sl_net_inherited(void) {
+SL_API sl_arr *sl_net_inherited(void) {
     sl_arr *out = sl_arr_new(sizeof(int32_t), SL_ELEM_NOPTR);
     sl_rt_preempt_disable();
     const char *n_s = getenv("LISTEN_FDS");
@@ -3275,7 +3275,7 @@ static sl_arr *sl_net_inherited(void) {
     return out;
 }
 
-static int sl_link_fault_kind(int e) {
+SL_API int sl_link_fault_kind(int e) {
     if (e == ETIMEDOUT)
         return SL_FAULT_TIMEOUT;
     if (e == ECONNRESET)
@@ -3287,27 +3287,27 @@ static int sl_link_fault_kind(int e) {
     return SL_FAULT_IO;
 }
 
-static sl_fault sl_link_fault_errno(int e) {
+SL_API sl_fault sl_link_fault_errno(int e) {
     return sl_fault_op(sl_link_fault_kind(e), e, "");
 }
 
-static sl_fault sl_link_fault_op(const char *op, int e) {
+SL_API sl_fault sl_link_fault_op(const char *op, int e) {
     return sl_fault_op(sl_link_fault_kind(e), e, op);
 }
 
-static sl_res_link_fault sl_link_ok_link(sl_link v) {
+SL_API sl_res_link_fault sl_link_ok_link(sl_link v) {
     return (sl_res_link_fault){ .ok = true, .v = v };
 }
 
-static sl_res_link_fault sl_link_err_link(sl_fault f) {
+SL_API sl_res_link_fault sl_link_err_link(sl_fault f) {
     return (sl_res_link_fault){ .ok = false, .e = f };
 }
 
-static sl_res_int_fault sl_link_ok_int(long long v) {
+SL_API sl_res_int_fault sl_link_ok_int(long long v) {
     return (sl_res_int_fault){ .ok = true, .v = v };
 }
 
-static sl_res_int_fault sl_link_err_int(sl_fault f) {
+SL_API sl_res_int_fault sl_link_err_int(sl_fault f) {
     return (sl_res_int_fault){ .ok = false, .e = f };
 }
 
@@ -3327,7 +3327,7 @@ static sl_bytes *(*sl_link_tls_peer_certs_fn)(sl_link *l);
  * returned only writes: two tasks sending on one connection could
  * interleave partial writes, and two reading would split its bytes
  * between them. */
-static sl_fault sl_link_wrong_half(int writing) {
+SL_API sl_fault sl_link_wrong_half(int writing) {
     return sl_fault_make(SL_FAULT_IO,
                          writing ? "send: this link was split; send through "
                                    "the writer split() returned"
@@ -3336,7 +3336,7 @@ static sl_fault sl_link_wrong_half(int writing) {
                                    "split from");
 }
 
-static sl_res_int_fault sl_link_send_ptr(sl_link *l, const unsigned char *ptr,
+SL_API sl_res_int_fault sl_link_send_ptr(sl_link *l, const unsigned char *ptr,
                                          long long len, sl_until u) {
     long long off = 0;
     if (!l || !l->live)
@@ -3364,7 +3364,7 @@ static sl_res_int_fault sl_link_send_ptr(sl_link *l, const unsigned char *ptr,
     return sl_link_ok_int(len);
 }
 
-static sl_res_link_fault sl_link_listen(long long port) {
+SL_API sl_res_link_fault sl_link_listen(long long port) {
     int e = 0;
     int fd = sl_net_listen_fd((int)port, 0, &e);
     if (fd < 0)
@@ -3372,7 +3372,7 @@ static sl_res_link_fault sl_link_listen(long long port) {
     return sl_link_ok_link(sl_link_from_fd(fd));
 }
 
-static sl_res_link_fault sl_link_listen_reuse(long long port, long long reuse) {
+SL_API sl_res_link_fault sl_link_listen_reuse(long long port, long long reuse) {
     int e = 0;
     int fd = sl_net_listen_fd((int)port, reuse != 0, &e);
     if (fd < 0)
@@ -3380,7 +3380,7 @@ static sl_res_link_fault sl_link_listen_reuse(long long port, long long reuse) {
     return sl_link_ok_link(sl_link_from_fd(fd));
 }
 
-static sl_res_link_fault sl_link_accept(sl_link *ln, sl_until u) {
+SL_API sl_res_link_fault sl_link_accept(sl_link *ln, sl_until u) {
     if (!ln || !ln->live)
         return sl_link_err_link(sl_fault_op(SL_FAULT_CLOSED, 0, "accept"));
     for (;;) {
@@ -3402,7 +3402,7 @@ static sl_res_link_fault sl_link_accept(sl_link *ln, sl_until u) {
     }
 }
 
-static sl_res_link_fault sl_link_dial(const char *host, long long port,
+SL_API sl_res_link_fault sl_link_dial(const char *host, long long port,
                                      sl_until u) {
     int err = 0, gai = 0;
     int fd = sl_net_dial_fd(host, (int)port, u, &err, &gai);
@@ -3417,24 +3417,24 @@ static sl_res_link_fault sl_link_dial(const char *host, long long port,
     return sl_link_err_link(sl_link_fault_op("connect", err));
 }
 
-static sl_res_int_fault sl_link_send(sl_link *l, sl_wire w, sl_until u) {
+SL_API sl_res_int_fault sl_link_send(sl_link *l, sl_wire w, sl_until u) {
     return sl_link_send_ptr(l, w.ptr, w.len, u);
 }
 
-static sl_res_int_fault sl_link_send_bytes(sl_link *l, const unsigned char *ptr,
+SL_API sl_res_int_fault sl_link_send_bytes(sl_link *l, const unsigned char *ptr,
                                            long long len, sl_until u) {
     if (!ptr || len <= 0)
         return sl_link_ok_int(0);
     return sl_link_send_ptr(l, ptr, len, u);
 }
 
-static sl_res_int_fault sl_link_send_static(sl_link *l, sl_bytes b, sl_until u) {
+SL_API sl_res_int_fault sl_link_send_static(sl_link *l, sl_bytes b, sl_until u) {
     if (!b.ptr || b.len <= 0)
         return sl_link_ok_int(0);
     return sl_link_send_ptr(l, b.ptr, b.len, u);
 }
 
-static sl_res_int_fault sl_link_recv(sl_link *l, sl_wire w, sl_until u) {
+SL_API sl_res_int_fault sl_link_recv(sl_link *l, sl_wire w, sl_until u) {
     if (!l || !l->live)
         return sl_link_err_int(sl_fault_op(SL_FAULT_CLOSED, 0, "recv"));
     if (l->role == SL_LINK_WRITER)
@@ -3465,7 +3465,7 @@ static sl_res_int_fault sl_link_recv(sl_link *l, sl_wire w, sl_until u) {
  * two halves wait on the reactor independently (one registration each);
  * see sl_link for why each owns its own fd number. Over TLS both halves
  * share the session, serialized by its lock (sl_tls.c). */
-static sl_res_link_fault sl_link_split(sl_link *l) {
+SL_API sl_res_link_fault sl_link_split(sl_link *l) {
     if (!l || !l->live)
         return sl_link_err_link(sl_fault_op(SL_FAULT_CLOSED, 0, "split"));
     if (l->role != SL_LINK_WHOLE)
@@ -3488,13 +3488,13 @@ static sl_res_link_fault sl_link_split(sl_link *l) {
 /* The TLS peer's certificate chain, leaf first, as concatenated DER for
  * x509.parse_der; empty on a link without TLS or a peer that sent none.
  * A link only carries a session once sl_tls.c has set the hook. */
-static sl_bytes *sl_link_peer_certs(sl_link *l) {
+SL_API sl_bytes *sl_link_peer_certs(sl_link *l) {
     if (!l || !l->live || !l->tls || !sl_link_tls_peer_certs_fn)
         return sl_bytes_new(NULL, 0);
     return sl_link_tls_peer_certs_fn(l);
 }
 
-static long long sl_link_port(sl_link *l) {
+SL_API long long sl_link_port(sl_link *l) {
     struct sockaddr_in addr;
     socklen_t n = sizeof(addr);
     if (!l || !l->live)
@@ -3504,7 +3504,7 @@ static long long sl_link_port(sl_link *l) {
     return (long long)ntohs(addr.sin_port);
 }
 
-static sl_peer sl_link_peer(sl_link *l) {
+SL_API sl_peer sl_link_peer(sl_link *l) {
     sl_peer p;
     p.addr = 0;
     p.port = 0;
