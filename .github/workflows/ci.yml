@@ -499,7 +499,27 @@ jobs:
           ./slangc tests/gc_stress/main.sl --target linux-amd64 --static -o /tmp/app_x86_64
           file /tmp/app_x86_64
           file /tmp/app_x86_64 | grep -qE 'ELF 64-bit.*x86-64.*statically linked'
-          /tmp/app_x86_64 > /tmp/app_x86_64.out
+          set +e
+          /tmp/app_x86_64 > /tmp/app_x86_64.out 2> /tmp/app_x86_64.err
+          rc=$?
+          set -e
+          if [ $rc -ne 0 ]; then
+            echo "app_x86_64 exited $rc"
+            cat /tmp/app_x86_64.err
+            pc=$(sed -n 's/.*pc \([^ ,]*\).*/\1/p' /tmp/app_x86_64.err | head -n1)
+            echo "Resolved pc=$pc:"
+            addr2line -fe /tmp/app_x86_64 "$pc" || true
+            nm -n /tmp/app_x86_64 | awk -v pc=$((pc)) '$1 ~ /^[0-9a-fA-F]+$/ {a=strtonum("0x"$1); if (a <= pc) last=$0; else if (!done) {print "BEFORE:", last; print "AFTER: ", $0; done=1}}'
+            objdump -d --start-address="$(printf '0x%x' $((pc - 0x60)))" --stop-address="$(printf '0x%x' $((pc + 0x40)))" /tmp/app_x86_64 || true
+            ./slangc tests/gc_stress/main.sl --emit-c -o /tmp/gc_diag
+            echo "--- Test zig cc -fno-sanitize=undefined -Wframe-larger-than=1024 ---"
+            zig cc -target x86_64-linux-musl -O3 -fno-sanitize=undefined -fwrapv -Wframe-larger-than=1024 /tmp/gc_diag.gen.c -o /tmp/app_noubsan -lpthread -lm -static
+            /tmp/app_noubsan > /tmp/app_noubsan.out && diff -u tests/gc_stress/expected.txt /tmp/app_noubsan.out && echo "PASS noubsan" || echo "FAIL noubsan ($?)"
+            echo "--- Test zig cc -fno-sanitize=undefined -fno-omit-frame-pointer ---"
+            zig cc -target x86_64-linux-musl -O3 -fno-sanitize=undefined -fno-omit-frame-pointer -fwrapv /tmp/gc_diag.gen.c -o /tmp/app_nofp -lpthread -lm -static
+            /tmp/app_nofp > /tmp/app_nofp.out && diff -u tests/gc_stress/expected.txt /tmp/app_nofp.out && echo "PASS nofp" || echo "FAIL nofp ($?)"
+            exit $rc
+          fi
           diff -u tests/gc_stress/expected.txt /tmp/app_x86_64.out
 
       - name: Cross-compile static linux-arm64 binary
