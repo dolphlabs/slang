@@ -1,5 +1,6 @@
 {
   "project": "slang",
+  "version": "0.3.0",
   "maintainer": {
     "name": "Dolphlabs",
     "entity": "Dolph Tech Limited",
@@ -19861,5 +19862,253 @@
         }
       ]
     }
-  }
+  },
+  "ecosystem": [
+    {
+      "name": "zokor",
+      "kind": "framework",
+      "category": "Web & Backend",
+      "version": "0.3.0",
+      "tag": "v0.3.0",
+      "repo": "https://github.com/dolphlabs/zokor",
+      "dir": "zokor",
+      "summary": "Backend web framework for slang with routing, middleware, JSON envelopes, auth, OAuth/OIDC, WebSockets, and postgres helpers.",
+      "keywords": [
+        "http",
+        "router",
+        "framework",
+        "oauth",
+        "websocket",
+        "postgres",
+        "backend"
+      ],
+      "pkg_line": "pkg zokor git https://github.com/dolphlabs/zokor.git tag v0.3.0 dir zokor"
+    },
+    {
+      "name": "amqp",
+      "kind": "package",
+      "category": "Messaging",
+      "version": "0.1.0",
+      "tag": "v0.1.0",
+      "repo": "https://github.com/dolphlabs/amqp",
+      "dir": "src/amqp",
+      "summary": "RabbitMQ (AMQP 0-9-1) client over stdlib net with work queues, pub/sub, RPC, publisher confirms, deadlines, and TLS.",
+      "keywords": [
+        "rabbitmq",
+        "amqp",
+        "queue",
+        "broker",
+        "messaging",
+        "pubsub"
+      ],
+      "pkg_line": "pkg amqp git https://github.com/dolphlabs/amqp.git tag v0.1.0 dir src/amqp"
+    },
+    {
+      "name": "argon",
+      "kind": "package",
+      "category": "Auth & Security",
+      "version": "0.1.0",
+      "tag": "v0.1.0",
+      "repo": "https://github.com/dolphlabs/argon",
+      "dir": "src/argon",
+      "summary": "Typed Argon2id password hashing and PHC string verification for slang services.",
+      "keywords": [
+        "argon2id",
+        "password",
+        "hash",
+        "auth",
+        "phc",
+        "crypto"
+      ],
+      "pkg_line": "pkg argon git https://github.com/dolphlabs/argon.git tag v0.1.0 dir src/argon"
+    },
+    {
+      "name": "gcs",
+      "kind": "package",
+      "category": "Cloud & Storage",
+      "version": "0.1.0",
+      "tag": "v0.1.0",
+      "repo": "https://github.com/dolphlabs/gcs",
+      "dir": "src/gcs",
+      "summary": "Google Cloud Storage JSON API client with V4 signed URLs, byte-range reads, and service-account auth.",
+      "keywords": [
+        "google",
+        "cloud",
+        "storage",
+        "bucket",
+        "signed url",
+        "object"
+      ],
+      "pkg_line": "pkg gcs git https://github.com/dolphlabs/gcs.git tag v0.1.0 dir src/gcs"
+    },
+    {
+      "name": "graphql",
+      "kind": "package",
+      "category": "API & RPC",
+      "version": "0.1.0",
+      "tag": "v0.1.0",
+      "repo": "https://github.com/dolphlabs/graphql",
+      "dir": "src/graphql",
+      "summary": "Schema-first GraphQL runtime and code generator (graphqlc) producing typed resolvers and cached execution plans.",
+      "keywords": [
+        "graphql",
+        "graphqlc",
+        "schema",
+        "query",
+        "mutation",
+        "api"
+      ],
+      "pkg_line": "pkg graphql git https://github.com/dolphlabs/graphql.git tag v0.1.0 dir src/graphql"
+    },
+    {
+      "name": "grpc",
+      "kind": "package",
+      "category": "API & RPC",
+      "version": "0.1.0",
+      "tag": "v0.1.0",
+      "repo": "https://github.com/dolphlabs/grpc",
+      "dir": "src/grpc",
+      "summary": "gRPC client and server with bounded protobuf wire codecs, protoc-gen-slang, and multiplexed HTTP/2 calls.",
+      "keywords": [
+        "grpc",
+        "protobuf",
+        "proto",
+        "http2",
+        "rpc",
+        "protoc"
+      ],
+      "pkg_line": "pkg grpc git https://github.com/dolphlabs/grpc.git tag v0.1.0 dir src/grpc"
+    },
+    {
+      "name": "jwt",
+      "kind": "package",
+      "category": "Auth & Security",
+      "version": "0.2.0",
+      "tag": "v0.2.0",
+      "repo": "https://github.com/dolphlabs/jwt",
+      "dir": "src/jwt",
+      "summary": "JWS Compact tokens (HS256/384/512, RS256, PS256, ES256, EdDSA), JWKS caching client, and OIDC ID-token verification.",
+      "keywords": [
+        "jwt",
+        "jws",
+        "jwks",
+        "oidc",
+        "oauth",
+        "token",
+        "rs256",
+        "eddsa"
+      ],
+      "pkg_line": "pkg jwt git https://github.com/dolphlabs/jwt.git tag v0.2.0 dir src/jwt"
+    },
+    {
+      "name": "kafka",
+      "kind": "package",
+      "category": "Messaging",
+      "version": "0.1.0",
+      "tag": "v0.1.0",
+      "repo": "https://github.com/dolphlabs/kafka",
+      "dir": "src/kafka",
+      "summary": "Apache Kafka client with producers, consumers, consumer groups, transactions, SASL, and TLS over stdlib net.",
+      "keywords": [
+        "kafka",
+        "producer",
+        "consumer",
+        "broker",
+        "messaging",
+        "sasl"
+      ],
+      "pkg_line": "pkg kafka git https://github.com/dolphlabs/kafka.git tag v0.1.0 dir src/kafka"
+    },
+    {
+      "name": "mongo",
+      "kind": "package",
+      "category": "Databases",
+      "version": "0.1.0",
+      "tag": "v0.1.0",
+      "repo": "https://github.com/dolphlabs/mongo",
+      "dir": "src/mongo",
+      "summary": "MongoDB driver with ordered BSON codecs, Atlas SRV discovery, and non-blocking net I/O.",
+      "keywords": [
+        "mongodb",
+        "mongo",
+        "bson",
+        "database",
+        "nosql",
+        "atlas"
+      ],
+      "pkg_line": "pkg mongo git https://github.com/dolphlabs/mongo.git tag v0.1.0 dir src/mongo"
+    },
+    {
+      "name": "sns",
+      "kind": "package",
+      "category": "Cloud & Storage",
+      "version": "0.1.0",
+      "tag": "v0.1.0",
+      "repo": "https://github.com/dolphlabs/sns",
+      "dir": "src/sns",
+      "summary": "Amazon SNS client for topic publishing, subscription management, and webhook signature verification.",
+      "keywords": [
+        "aws",
+        "sns",
+        "notifications",
+        "sigv4",
+        "pubsub",
+        "webhook"
+      ],
+      "pkg_line": "pkg sns git https://github.com/dolphlabs/sns.git tag v0.1.0 dir src/sns"
+    },
+    {
+      "name": "sqs",
+      "kind": "package",
+      "category": "Cloud & Storage",
+      "version": "0.1.0",
+      "tag": "v0.1.0",
+      "repo": "https://github.com/dolphlabs/sqs",
+      "dir": "src/sqs",
+      "summary": "Amazon SQS JSON client with batch send, long polling, visibility control, and AWS SigV4 signing.",
+      "keywords": [
+        "aws",
+        "sqs",
+        "queue",
+        "sigv4",
+        "messaging",
+        "localstack"
+      ],
+      "pkg_line": "pkg sqs git https://github.com/dolphlabs/sqs.git tag v0.1.0 dir src/sqs"
+    },
+    {
+      "name": "zokor_cli",
+      "kind": "tool",
+      "category": "Developer Tools",
+      "version": "0.3.0",
+      "tag": "v0.3.0",
+      "repo": "https://github.com/dolphlabs/zokor_cli",
+      "summary": "CLI for zokor services: project scaffolding (zokor new), feature generation, migrations, check, and live-reload watch.",
+      "keywords": [
+        "zokor",
+        "cli",
+        "scaffold",
+        "migrations",
+        "watch",
+        "generator"
+      ]
+    },
+    {
+      "name": "slang-analyser",
+      "kind": "tool",
+      "category": "Developer Tools",
+      "version": "0.2.0",
+      "tag": "v0.2.0",
+      "repo": "https://github.com/dolphlabs/slang-analyser",
+      "summary": "Language server and VS Code extension providing diagnostics, hover types, go-to-definition, completion, and formatting.",
+      "keywords": [
+        "lsp",
+        "ide",
+        "vscode",
+        "autocomplete",
+        "formatter",
+        "analyser"
+      ]
+    }
+  ]
 }
