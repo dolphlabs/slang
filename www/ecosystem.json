@@ -52,25 +52,25 @@
       "name": "graphql",
       "kind": "package",
       "category": "API & RPC",
-      "version": "0.1.0",
-      "tag": "v0.1.0",
+      "version": "0.2.0",
+      "tag": "v0.2.0",
       "repo": "https://github.com/dolphlabs/graphql",
       "dir": "src/graphql",
       "summary": "Schema-first GraphQL runtime and code generator (graphqlc) producing typed resolvers and cached execution plans.",
       "keywords": ["graphql", "graphqlc", "schema", "query", "mutation", "api"],
-      "pkg_line": "pkg graphql git https://github.com/dolphlabs/graphql.git tag v0.1.0 dir src/graphql"
+      "pkg_line": "pkg graphql git https://github.com/dolphlabs/graphql.git tag v0.2.0 dir src/graphql"
     },
     {
       "name": "grpc",
       "kind": "package",
       "category": "API & RPC",
-      "version": "0.1.0",
-      "tag": "v0.1.0",
+      "version": "0.2.0",
+      "tag": "v0.2.0",
       "repo": "https://github.com/dolphlabs/grpc",
       "dir": "src/grpc",
       "summary": "gRPC client and server with bounded protobuf wire codecs, protoc-gen-slang, and multiplexed HTTP/2 calls.",
       "keywords": ["grpc", "protobuf", "proto", "http2", "rpc", "protoc"],
-      "pkg_line": "pkg grpc git https://github.com/dolphlabs/grpc.git tag v0.1.0 dir src/grpc"
+      "pkg_line": "pkg grpc git https://github.com/dolphlabs/grpc.git tag v0.2.0 dir src/grpc"
     },
     {
       "name": "jwt",
