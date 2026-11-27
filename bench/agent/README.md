@@ -1,10 +1,11 @@
 # Agent token benchmark
 
 What it costs an LLM agent to build the same service in slang + zokor,
-Go + Fiber and TypeScript + NestJS: tokens in, tokens out, turns, and
-whether the result works. The claim "slang is the cheapest language for an
-agent to build with" needs this number, the way the HTTP claims needed
-`bench/http`.
+Go + Fiber, Rust + Axum, and TypeScript + NestJS: tokens in, tokens out,
+turns, whether the result works, and the resulting server's HTTP throughput
+(`wrk`), p99 latency, and peak RSS. The claim "slang is the cheapest
+language for an agent to build with" needs this number, the way the HTTP
+claims needed `bench/http`.
 
 ## Method
 
@@ -31,7 +32,10 @@ agent to build with" needs this number, the way the HTTP claims needed
   median with the raw runs, and treat a difference smaller than the spread
   as noise.
 - **What is counted** comes from the agent's own report: input tokens
-  (including cache reads and writes), output tokens, turns and cost.
+  (including cache reads and writes), output tokens, turns and cost. On
+  passing runs, when `wrk` is installed, the harness also runs a 5-second
+  `wrk -t2 -c32 --latency` load check and samples peak RSS across the
+  service process group (`ps`).
 
 ## Running
 
@@ -44,10 +48,12 @@ python3 bench/agent/run.py selftest              # the tests are sound
 python3 bench/agent/run.py run --runs 3          # every task x stack
 python3 bench/agent/run.py run --task notes --stack slang-zokor --runs 1
 python3 bench/agent/run.py summary               # the latest results
+python3 bench/agent/run.py summary --md          # markdown tables
 ```
 
 The machine needs each stack's toolchain (`slangc` with zokor pinned or on
-the path, Go, Node with the Nest CLI) and the agent CLI. `AGENT_CMD`
+the path, Go, Rust/Cargo, Node with npm/Nest CLI), `wrk` for optional
+RPS/p99 measurement, and the agent CLI. `AGENT_CMD`
 chooses the agent; it runs in the task's empty work directory, gets the
 prompt on stdin, and must print its report as JSON on stdout. The default
 is Claude Code:
@@ -73,8 +79,8 @@ the failures: which requirement, and in the transcript, which compiler
 error or missing API sent the agent round again. That second step is the
 point; it is what tells slang where it still costs an agent tokens.
 
-## Not measured yet
+## Results
 
-No run has been made: it needs a budget and a decision on which agent and
-model to use. The first run should record the model version, the date, and
-the slang, zokor, Go and Nest versions next to the table.
+See [`RESULTS.md`](RESULTS.md) for run `20261126T181431Z` (all 5 tasks × 4 stacks
+with `claude-opus-5-5`, including raw pass rates, input/output tokens, turns,
+cost, `wrk` throughput/p99, peak RSS, and source LOC).

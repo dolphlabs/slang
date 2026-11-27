@@ -453,6 +453,12 @@ test_clamp();
 println("ok");
 ```
 
+## Golden path (zokor + slanganalyser)
+
+- Backend services pair `slangc` with `zokor` + `zokor_cli` + `slanganalyser` (LSP anchored on `slang.project`).
+- Scaffold & grow: `zokor new <name>` or `zokor newcomp <name> --db memory|pg`, `slangc get`, `zokor add feature <name>`, `zokor add route <feature> <METHOD> <path> <handler>`.
+- Iterate & verify: `zokor watch` (fast dev builds), `zokor check [--json]` (architecture/import/config/`zokor.rules` enforcement), `zokor migrate`, `slangc test .`, `slangc main.sl -o app`.
+
 ## Mistakes that cost a retry
 
 - `println(list)`: use `println(inspect(list))`.

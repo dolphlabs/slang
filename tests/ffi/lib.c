@@ -52,3 +52,22 @@ int32_t sl_ffi_store(int32_t *p, int32_t v) {
     *p = v;
     return v;
 }
+
+int32_t sl_ffi_deep_stack(int32_t depth, int32_t *out) {
+    volatile unsigned char buf[4096];
+    buf[0] = (unsigned char)(depth & 0xFF);
+    buf[4095] = (unsigned char)((depth * 7 + 3) & 0xFF);
+    int32_t sub = depth > 0 ? sl_ffi_deep_stack(depth - 1, out) : 0;
+    int32_t res = sub + (int32_t)buf[0] + (int32_t)buf[4095];
+    if (out)
+        *out = res;
+    return res;
+}
+
+int32_t sl_ffi_big_frame(int32_t seed) {
+    volatile unsigned char buf[32768];
+    buf[0] = (unsigned char)(seed & 0xFF);
+    buf[16384] = (unsigned char)((seed + 11) & 0xFF);
+    buf[32767] = (unsigned char)((seed + 29) & 0xFF);
+    return seed + (int32_t)buf[0] + (int32_t)buf[16384] + (int32_t)buf[32767];
+}
