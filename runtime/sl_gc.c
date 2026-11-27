@@ -2382,6 +2382,131 @@ static void sl_gc_for_each_obj(void (*fn)(sl_gc_obj *h, void *ctx),
  * minor frees while the owner still uses it. Making collections likely
  * at that point (an allocation-entry yield tried for fix-gc.md 1.1) made
  * the verifier catch exactly that: young leaves held by old maps. */
+#define SL_PROF_ALLOC_SLOTS 512
+
+typedef struct {
+    uintptr_t pc;
+    const char *name;
+    const char *loc;
+    const char *spawn_at;
+    unsigned long long bytes;
+    unsigned long long allocs;
+} sl_prof_alloc_entry;
+
+static sl_prof_alloc_entry sl_prof_alloc_tab[SL_PROF_ALLOC_SLOTS];
+static pthread_mutex_t sl_prof_alloc_mu = PTHREAD_MUTEX_INITIALIZER;
+static _Atomic long long sl_prof_alloc_rate_val = -1;
+static _Thread_local long long sl_prof_alloc_rem = -1;
+
+static long long sl_prof_alloc_rate_get(void) {
+    long long r = atomic_load_explicit(&sl_prof_alloc_rate_val,
+                                       memory_order_relaxed);
+    if (r < 0) {
+        const char *e = getenv("SLANG_ALLOC_PROFILE_RATE");
+        if (e && e[0]) {
+            r = atoll(e);
+            if (r < 0) r = 0;
+        } else {
+            r = 512LL * 1024LL;
+        }
+        atomic_store_explicit(&sl_prof_alloc_rate_val, r,
+                              memory_order_relaxed);
+    }
+    return r;
+}
+
+__attribute__((noinline))
+static void sl_prof_alloc_record(size_t sample_bytes, uintptr_t pc) {
+    const char *name = NULL, *loc = NULL;
+    sl_prof_lookup_pc(pc, &name, &loc);
+    sl_task *cur = SL_RT_TLS_CUR();
+    const char *sa = (cur && cur->spawn_at) ? cur->spawn_at : "main";
+    uintptr_t key = (uintptr_t)name ^ (uintptr_t)loc ^ (uintptr_t)sa;
+    pthread_mutex_lock(&sl_prof_alloc_mu);
+    unsigned h = (unsigned)((key ^ (key >> 16)) % SL_PROF_ALLOC_SLOTS);
+    for (int i = 0; i < SL_PROF_ALLOC_SLOTS; i++) {
+        sl_prof_alloc_entry *e =
+            &sl_prof_alloc_tab[(h + (unsigned)i) % SL_PROF_ALLOC_SLOTS];
+        if (!e->allocs) {
+            e->pc = pc;
+            e->name = name;
+            e->loc = loc;
+            e->spawn_at = sa;
+            e->bytes = sample_bytes;
+            e->allocs = 1;
+            pthread_mutex_unlock(&sl_prof_alloc_mu);
+            return;
+        }
+        if (e->name == name && e->loc == loc && e->spawn_at == sa) {
+            e->bytes += sample_bytes;
+            e->allocs += 1;
+            pthread_mutex_unlock(&sl_prof_alloc_mu);
+            return;
+        }
+    }
+    pthread_mutex_unlock(&sl_prof_alloc_mu);
+}
+
+static int sl_prof_alloc_cmp(const void *a, const void *b) {
+    unsigned long long x = ((const sl_prof_alloc_entry *)a)->bytes;
+    unsigned long long y = ((const sl_prof_alloc_entry *)b)->bytes;
+    return (x < y) - (x > y);
+}
+
+static void sl_prof_heap_format(long nworkers, long long rss_bytes,
+                                long long rss_peak_bytes, char **out_buf,
+                                size_t *out_len) {
+    sl_prof_alloc_entry snap[SL_PROF_ALLOC_SLOTS];
+    size_t n = 0;
+    unsigned long long total_bytes = 0;
+    pthread_mutex_lock(&sl_prof_alloc_mu);
+    for (int i = 0; i < SL_PROF_ALLOC_SLOTS; i++) {
+        if (sl_prof_alloc_tab[i].allocs > 0) {
+            snap[n++] = sl_prof_alloc_tab[i];
+            total_bytes += sl_prof_alloc_tab[i].bytes;
+        }
+    }
+    pthread_mutex_unlock(&sl_prof_alloc_mu);
+    if (n > 1)
+        qsort(snap, n, sizeof(snap[0]), sl_prof_alloc_cmp);
+
+    unsigned long long majors = atomic_load_explicit(&sl_gc_rt_majors,
+                                                     memory_order_relaxed);
+    unsigned long long minors = atomic_load_explicit(&sl_gc_minors_done,
+                                                     memory_order_relaxed);
+    unsigned long long ptot = atomic_load_explicit(&sl_gc_rt_pause_ns_total,
+                                                   memory_order_relaxed);
+    unsigned long long pmax = atomic_load_explicit(&sl_gc_rt_pause_ns_max,
+                                                   memory_order_relaxed);
+    unsigned long long live = atomic_load_explicit(&sl_gc_rt_live_bytes,
+                                                   memory_order_relaxed);
+    size_t newb = atomic_load_explicit(&sl_gc_bytes_since_collect,
+                                       memory_order_relaxed);
+    long long tasks = atomic_load_explicit(&sl_rt_active_spawns,
+                                           memory_order_relaxed);
+
+    sl_pbuf b = {0};
+    sl_pbuf_printf(
+        &b,
+        "# heap profile: live=%llu new=%zu majors=%llu minors=%llu "
+        "pause_total_ns=%llu pause_max_ns=%llu rss=%lld rss_peak=%lld "
+        "tasks=%lld workers=%ld\n",
+        live, newb, majors, minors, ptot, pmax, rss_bytes, rss_peak_bytes,
+        tasks, nworkers);
+    for (size_t i = 0; i < n; i++) {
+        double pct = total_bytes
+                         ? (100.0 * (double)snap[i].bytes / (double)total_bytes)
+                         : 0.0;
+        sl_pbuf_printf(&b, "%llu bytes (%.1f%%)  %llu samples  %s (%s) [task %s]\n",
+                       snap[i].bytes, pct, snap[i].allocs, snap[i].name,
+                       snap[i].loc, snap[i].spawn_at);
+    }
+    if (!b.data)
+        sl_pbuf_printf(&b, "# heap profile: empty\n");
+    *out_buf = b.data;
+    *out_len = b.len;
+}
+
 /* zero: clear the payload. Every caller but sl_gc_alloc_leaf_uninit's. */
 __attribute__((always_inline))
 static inline void *sl_gc_alloc_impl(size_t n,
@@ -2435,6 +2560,24 @@ static inline void *sl_gc_alloc_impl(size_t n,
         sl_gc_nursery_fixed) {
         sl_gc_publish_delta(st->unpub);
         st->unpub = 0;
+    }
+    {
+        long long rate = sl_prof_alloc_rate_get();
+        if (rate > 0) {
+            if (sl_prof_alloc_rem < 0) {
+                sl_prof_alloc_record(total,
+                                     (uintptr_t)__builtin_return_address(0));
+                sl_prof_alloc_rem = rate;
+            } else {
+                sl_prof_alloc_rem -= (long long)total;
+                if (sl_prof_alloc_rem <= 0) {
+                    long long sampled = rate - sl_prof_alloc_rem;
+                    sl_prof_alloc_record((size_t)sampled,
+                                         (uintptr_t)__builtin_return_address(0));
+                    sl_prof_alloc_rem = rate;
+                }
+            }
+        }
     }
     sl_rt_preempt_enable();
     return (void *)(h + 1);

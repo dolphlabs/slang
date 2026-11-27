@@ -265,6 +265,7 @@ static void sl_chan_send(sl_chan *c, const void *val) {
          * raw read against a value captured before the park trips
          * immediately. */
         self.task = sl_rt_cur();
+        sl_task_set_wait(self.task, "chan send");
         sl_wl_push(&c->send_waiters, &c->send_waiters_tail, &self);
         sl_task_park(&c->mu); /* leaves c->mu locked across the switch --
             see sl_task_park's own comment (runtime_pool.c) for why */
@@ -309,6 +310,7 @@ static int sl_chan_recv(sl_chan *c, void *out) {
         /* sl_rt_cur(), not a raw read -- see sl_chan_send's own copy of
          * this loop for the full reasoning. Same hazard, same fix. */
         self.task = sl_rt_cur();
+        sl_task_set_wait(self.task, "chan recv");
         sl_wl_push(&c->recv_waiters, &c->recv_waiters_tail, &self);
         sl_task_park(&c->mu);
         pthread_mutex_lock(&c->mu);
@@ -401,6 +403,7 @@ static void sl_mutex_lock(sl_mutex *m) {
     }
     while (m->held) {
         self.task = sl_rt_cur();
+        sl_task_set_wait(self.task, "mutex");
         sl_wl_push(&m->waiters, &m->waiters_tail, &self);
         sl_task_park(&m->mu); /* leaves m->mu locked across the switch */
         pthread_mutex_lock(&m->mu);
@@ -778,6 +781,7 @@ static int sl_select_run(sl_sel_case *cs, sl_waiter *nodes, int n,
                 until the context switch has completed -- so a waker
                 that observes this is looking at a task that really has
                 switched out */
+            sl_task_set_wait(sl_rt_cur(), "select");
             sl_task_park(&sel.mu);
         }
 
@@ -2035,6 +2039,7 @@ static int sl_join_wait(sl_join *j, void *out) {
     pthread_mutex_lock(&j->mu);
     while (!j->done) {
         j->waiter = sl_rt_cur();
+        sl_task_set_wait(j->waiter, "join");
         sl_task_park(&j->mu);
         pthread_mutex_lock(&j->mu);
     }

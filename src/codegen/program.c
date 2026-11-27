@@ -2052,6 +2052,40 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
         emit_line(cg, "}");
         emit_line(cg, "");
     }
+    if (!cg->collect_errors) {
+        emit_line(cg, "static const sl_fn_sym sl_rt_fn_syms[] = {");
+        emit_line(cg, "    { (sl_fn_ptr)sl_main_task_entry, \"main\", \"main\" },");
+        if (main_guard)
+            emit_line(cg,
+                      "    { (sl_fn_ptr)sl_main_task_entry__body, \"main\", "
+                      "\"main\" },");
+        FuncCursor fc;
+        func_cursor_init(&fc);
+        while (func_cursor_next(cg, pkgs, npkgs, &fc, 0)) {
+            if (fc.pkg && !strncmp(fc.pkg->name, "slangtest_", 10))
+                continue;
+            FuncSig *sig = fc.sig;
+            FuncDecl *f = fc.fn;
+            const char *sym = mangle_sig(sig);
+            const char *disp = f->name;
+            if (sig->inst_key && sig->inst_key[0])
+                disp = sig->inst_key;
+            else if (sig->method_of && sig->method_of[0])
+                disp = xasprintf("%s.%s", sig->method_of, f->name);
+            else if (fc.pkg && strcmp(fc.pkg->name, pkgs[main_index].name) != 0)
+                disp = xasprintf("%s.%s", fc.pkg->name, f->name);
+            char *name_lit = c_string_literal(disp);
+            char *loc_lit = src_loc_literal(f->file ? f->file : fc.pkg->name,
+                                            f->line);
+            if (frame_guard_of(sym) > 0)
+                emit_line(cg, "    { (sl_fn_ptr)%s__body, %s, %s },",
+                          sym, name_lit, loc_lit);
+            emit_line(cg, "    { (sl_fn_ptr)%s, %s, %s },",
+                      sym, name_lit, loc_lit);
+        }
+        emit_line(cg, "};");
+        emit_line(cg, "");
+    }
     emit_line(cg, "int main(int argc, char **argv) {");
     if (want_pkg(cg, "proc")) {
         emit_line(cg, "    sl_proc_argc = argc;");
@@ -2095,6 +2129,12 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
         emit_line(cg, "    pthread_sigmask(SIG_BLOCK, &sl_rt_sigmask, NULL);");
     }
     emit_line(cg, "    sl_gc_register_thread();");
+    if (!cg->collect_errors) {
+        emit_line(cg, "    sl_prof_syms = sl_rt_fn_syms;");
+        emit_line(cg,
+                  "    sl_prof_nsyms = sizeof(sl_rt_fn_syms) / "
+                  "sizeof(sl_rt_fn_syms[0]);");
+    }
     /* Pool must exist before anything can be submitted to it, and
      * nothing is submitted before user code (which might 'spawn')
      * starts running below. */
@@ -2137,6 +2177,7 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
     emit_line(cg, "    }");
     emit_line(cg, "    memset(sl_rt_main_task, 0, sizeof(*sl_rt_main_task));");
     emit_line(cg, "    sl_rt_main_task->is_main = 1;");
+    emit_line(cg, "    sl_rt_main_task->spawn_at = \"main\";");
     emit_line(cg, "    SL_RT_TLS_SET_CUR(sl_rt_main_task);");
     emit_line(cg, "    sl_task_stack_init(sl_rt_main_task, sl_main_task_entry, NULL);");
     /* Tier 11 seventh slice: same run_start_ns reset sl_worker_run_loop

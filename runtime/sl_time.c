@@ -294,7 +294,9 @@ static void sl_time_sleep(long long ns) {
      * loop where its thread-affine address can be hoisted above the
      * park a previous iteration performed. Same hazard, same fix, as
      * sl_chan_send/sl_chan_recv (runtime_core.c). */
-    sl_time_insert(sl_rt_cur(), sl_time_mono() + ns);
+    sl_task *self = sl_rt_cur();
+    sl_task_set_wait(self, "sleep");
+    sl_time_insert(self, sl_time_mono() + ns);
     pthread_cond_signal(&sl_time_cond); /* wake the timer thread in
         case this is now the earliest deadline -- always safe to
         signal unconditionally, worst case a harmless extra

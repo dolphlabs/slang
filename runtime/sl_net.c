@@ -811,6 +811,7 @@ static int sl_reactor_wait_epoch(int fd, int rw, int abort_on_shutdown,
                                           memory_order_relaxed);
         }
     }
+    sl_task_set_wait(sl_reactor_self, "net io");
     sl_task_park(&wq->mu);
     sl_reactor_self->io_deadline_ns = 0;
     int sl_reactor_wait_closed = sl_reactor_self->wait_closed;
