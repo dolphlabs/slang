@@ -277,11 +277,28 @@ void emit_pg_rows_codecs(CG *cg) {
     if (!cg->pg_rows.count) return;
     if (cg->split_emit_mode == 0)
         emit_pg_rows_runtime(cg);
+    const char *vis = cg->split_emit_mode == 3 ? "extern " : "static ";
+    StrBuf *prev = cg_use_hdr(cg);
     for (int i = 0; i < cg->pg_cells.count; i++) {
         PgCellInst *it = &cg->pg_cells.items[i];
-        emit_line(cg, "static bool %s(sl_pgr_cell *, %s *, char **);", it->name, ctype_of(cg, it->type));
+        emit_line(cg, "%sbool %s(sl_pgr_cell *, %s *, char **);", vis, it->name, ctype_of(cg, it->type));
+    }
+    if (cg->split_emit_mode == 3) {
+        for (int i = 0; i < cg->pg_rows.count; i++) {
+            PgRowsInst *it = &cg->pg_rows.items[i];
+            const char *list = xasprintf("[%s]", it->type);
+            const char *res = res_cname(cg, list, "str");
+            emit_line(cg, "extern %s %s(%s);", res, it->name, ctype_of(cg, it->rows_type));
+        }
     }
     emit_line(cg, "");
-    for (int i = 0; i < cg->pg_cells.count; i++) emit_cell(cg, &cg->pg_cells.items[i]);
-    for (int i = 0; i < cg->pg_rows.count; i++) emit_rows(cg, &cg->pg_rows.items[i]);
+    cg->out = prev;
+    for (int i = 0; i < cg->pg_cells.count; i++) {
+        dev_unit_maybe_flush(cg, cg->dev_unit_target);
+        emit_cell(cg, &cg->pg_cells.items[i]);
+    }
+    for (int i = 0; i < cg->pg_rows.count; i++) {
+        dev_unit_maybe_flush(cg, cg->dev_unit_target);
+        emit_rows(cg, &cg->pg_rows.items[i]);
+    }
 }

@@ -373,13 +373,18 @@ void emit_inspect_runtime(CG *cg) {
 void emit_inspect_codecs(CG *cg) {
     if (!cg->want_inspect || !cg->inspect.count)
         return;
+    const char *vis = cg->split_emit_mode == 3 ? "extern " : "static ";
+    StrBuf *prev = cg_use_hdr(cg);
     for (int i = 0; i < cg->inspect.count; i++) {
         InspectInst *it = &cg->inspect.items[i];
         const char *ct = ctype_of(cg, it->slang_type);
-        emit_line(cg, "static void %s(%s v, sl_inspect_sb *out, int depth);",
-                  it->fn_name, ct);
+        emit_line(cg, "%svoid %s(%s v, sl_inspect_sb *out, int depth);",
+                  vis, it->fn_name, ct);
     }
     emit_line(cg, "");
-    for (int i = 0; i < cg->inspect.count; i++)
+    cg->out = prev;
+    for (int i = 0; i < cg->inspect.count; i++) {
+        dev_unit_maybe_flush(cg, cg->dev_unit_target);
         emit_inspect_body(cg, &cg->inspect.items[i]);
+    }
 }

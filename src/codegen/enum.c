@@ -809,14 +809,24 @@ void emit_enum_tables(CG *cg) {
             names = xasprintf("%s%s\"%s\"", names, sep, ed->variants[j]);
             values = xasprintf("%s%s%d", values, sep, ed->values[j]);
         }
+        const char *vis = cg->split_emit_mode == 3 ? "" : "static ";
+        if (cg->split_emit_mode == 3) {
+            StrBuf *prev = cg_use_hdr(cg);
+            emit_line(cg, "extern const char *%s_names[];", m);
+            if (!ed->has_payload)
+                emit_line(cg, "extern const int32_t %s_values[];", m);
+            cg->out = prev;
+        }
         if (ed->has_payload) {
-            emit_line(cg, "static const char *%s_names[] __attribute__((unused)) = {%s};",
-                      m, ed->nvariants ? names : "\"\"");
+            emit_line(cg, "%sconst char *%s_names[]%s = {%s};", vis, m,
+                      cg->split_emit_mode == 3 ? ""
+                                               : " __attribute__((unused))",
+                      ed->nvariants ? names : "\"\"");
             continue;
         }
-        emit_line(cg, "static const char *%s_names[] = {%s};", m,
+        emit_line(cg, "%sconst char *%s_names[] = {%s};", vis, m,
                   ed->nvariants ? names : "\"\"");
-        emit_line(cg, "static const int32_t %s_values[] = {%s};", m,
+        emit_line(cg, "%sconst int32_t %s_values[] = {%s};", vis, m,
                   ed->nvariants ? values : "0");
     }
 }
