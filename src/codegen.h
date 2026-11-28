@@ -23,17 +23,25 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
                      int *out_want_sql, int *out_want_compress,
                      int *out_want_fswatch);
 
-/* Split local --dev codegen: emits the standalone C runtime + native
- * opt/result types into `rt_out` (for precompiled `<cache>/rt/<hash>.o`
- * caching) and the thin user program into `prog_out` (compiled once and
- * linked against that `.o`). Release, --emit-c, --keep-c, --race,
- * --static, and cross-compile builds continue using codegen_program. */
-void codegen_program_dev_split(Package *pkgs, int npkgs, int main_index,
-                               StrBuf *rt_out, StrBuf *prog_out,
+/* Sharded local --dev codegen output: one shared header (`common_h`,
+ * included/prepended to each unit) and `nunits` independent C translation
+ * units in `units[]`, linked together with the cached `<cache>/rt/<hash>.o`
+ * runtime object. Single-unit programs (nunits == 1) compile+link directly
+ * without populating `<cache>/obj`. */
+typedef struct {
+    StrBuf common_h;
+    StrBuf *units;
+    int nunits;
+    int units_cap;
+} DevUnits;
+
+void codegen_program_dev_units(Package *pkgs, int npkgs, int main_index,
+                               StrBuf *rt_out, DevUnits *units_out,
                                int *out_want_tls, int *out_want_dns,
                                int *out_want_crypto,
                                int *out_want_sql, int *out_want_compress,
                                int *out_want_fswatch);
+void dev_units_free(DevUnits *du);
 
 /* Frame guards. A slang function, or a generated codec (json, pg rows,
  * inspect), whose C frame turns out to be large is emitted as a noinline

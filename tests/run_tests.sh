@@ -2133,6 +2133,104 @@ elif ! SLANG_NO_RT_CACHE=1 SLANG_CACHE="$rc_dir/cache" \
     dv_bad=1; fail=1
 fi
 rm -rf "$rc_dir"
+
+mu_dir=$(mktemp -d /tmp/sl_dev_units.XXXXXX)
+mkdir -p "$mu_dir/bin" "$mu_dir/cache" "$mu_dir/sub"
+mu_real=$(command -v cc)
+cat >"$mu_dir/bin/cc" <<'MUEOF'
+#!/bin/sh
+echo "$*" >>"$MU_LOG"
+exec "$MU_REAL" "$@"
+MUEOF
+chmod +x "$mu_dir/bin/cc"
+awk 'BEGIN {
+    print "pub fn ping() -> str { return \"v1\"; }"
+    for (i = 0; i < 450; i++) {
+        printf "pub fn fn_%d(x: int) -> int {\n", i
+        printf "    let a = x + %d;\n", i
+        printf "    let b = a * 2 + 1;\n"
+        printf "    return b;\n"
+        printf "}\n"
+    }
+}' >"$mu_dir/sub/sub.sl"
+cat >"$mu_dir/main.sl" <<'MUMAIN'
+import "sub";
+println(sub.ping());
+println(sub.fn_0(1) + sub.fn_449(2));
+MUMAIN
+: >"$mu_dir/cold.log"
+: >"$mu_dir/warm.log"
+: >"$mu_dir/inc.log"
+if ! SLANG_CACHE="$mu_dir/cache" MU_REAL="$mu_real" MU_LOG="$mu_dir/cold.log" \
+        ./slangc "$mu_dir/main.sl" --dev --cc "$mu_dir/bin/cc" \
+        -o "$mu_dir/cold" >/dev/null 2>"$mu_dir/cold.err"; then
+    echo "FAIL dev parallel units: cold build failed"
+    cat "$mu_dir/cold.err"
+    dv_bad=1; fail=1
+elif [ -s "$mu_dir/cold.err" ]; then
+    echo "FAIL dev parallel units: cold build printed output:"
+    cat "$mu_dir/cold.err"
+    dv_bad=1; fail=1
+elif [ "$("$mu_dir/cold" </dev/null)" != "$(printf 'v1\n906')" ]; then
+    echo "FAIL dev parallel units: cold output mismatch"
+    "$mu_dir/cold" </dev/null
+    dv_bad=1; fail=1
+elif [ "$(set -- "$mu_dir"/cache/obj/*.o; [ -f "$1" ] && echo $# || echo 0)" -le 1 ]; then
+    echo "FAIL dev parallel units: expected >1 cached .o in obj cache dir"
+    ls -la "$mu_dir/cache/obj"
+    dv_bad=1; fail=1
+elif [ "$(grep -c -- ' -c ' "$mu_dir/cold.log")" -le 2 ]; then
+    echo "FAIL dev parallel units: expected rt + >1 unit -c compiles on cold build"
+    cat "$mu_dir/cold.log"
+    dv_bad=1; fail=1
+elif ! SLANG_CACHE="$mu_dir/cache" MU_REAL="$mu_real" MU_LOG="$mu_dir/warm.log" \
+        ./slangc "$mu_dir/main.sl" --dev --cc "$mu_dir/bin/cc" \
+        -o "$mu_dir/warm" >/dev/null 2>"$mu_dir/warm.err"; then
+    echo "FAIL dev parallel units: warm build failed"
+    dv_bad=1; fail=1
+elif [ -s "$mu_dir/warm.err" ] ||
+     [ "$(wc -l <"$mu_dir/warm.log" | tr -d ' ')" -ne 1 ] ||
+     [ "$(grep -c -- ' -c ' "$mu_dir/warm.log")" -ne 0 ] ||
+     [ "$("$mu_dir/warm" </dev/null)" != "$(printf 'v1\n906')" ]; then
+    echo "FAIL dev parallel units: warm build did not reuse cached units"
+    cat "$mu_dir/warm.err"
+    cat "$mu_dir/warm.log"
+    dv_bad=1; fail=1
+else
+    awk '{ sub(/"v1"/, "\"v2\""); print }' "$mu_dir/sub/sub.sl" >"$mu_dir/sub/sub.sl.tmp" &&
+        mv "$mu_dir/sub/sub.sl.tmp" "$mu_dir/sub/sub.sl"
+    cold_obj_c=$(($(grep -c -- ' -c ' "$mu_dir/cold.log") - 1))
+    if ! SLANG_CACHE="$mu_dir/cache" MU_REAL="$mu_real" MU_LOG="$mu_dir/inc.log" \
+            ./slangc "$mu_dir/main.sl" --dev --cc "$mu_dir/bin/cc" \
+            -o "$mu_dir/inc" >/dev/null 2>"$mu_dir/inc.err"; then
+        echo "FAIL dev parallel units: incremental build failed"
+        cat "$mu_dir/inc.err"
+        dv_bad=1; fail=1
+    elif [ -s "$mu_dir/inc.err" ] ||
+         [ "$("$mu_dir/inc" </dev/null)" != "$(printf 'v2\n906')" ]; then
+        echo "FAIL dev parallel units: incremental output mismatch"
+        cat "$mu_dir/inc.err"
+        dv_bad=1; fail=1
+    else
+        inc_c=$(grep -c -- ' -c ' "$mu_dir/inc.log")
+        if [ "$inc_c" -eq 0 ] || [ "$inc_c" -ge "$cold_obj_c" ]; then
+            echo "FAIL dev parallel units: expected 0 < incremental -c ($inc_c) < cold units ($cold_obj_c)"
+            cat "$mu_dir/inc.log"
+            dv_bad=1; fail=1
+        fi
+    fi
+fi
+if [ "$dv_bad" -eq 0 ] &&
+   { ! SLANG_NO_RT_CACHE=1 SLANG_CACHE="$mu_dir/cache" \
+        ./slangc "$mu_dir/main.sl" --dev -o "$mu_dir/nort" \
+        >/dev/null 2>"$mu_dir/nort.err" ||
+     [ -s "$mu_dir/nort.err" ] ||
+     [ "$("$mu_dir/nort" </dev/null)" != "$(printf 'v2\n906')" ]; }; then
+    echo "FAIL dev parallel units: SLANG_NO_RT_CACHE=1 failed"
+    cat "$mu_dir/nort.err"
+    dv_bad=1; fail=1
+fi
+rm -rf "$mu_dir"
 [ "$dv_bad" -eq 0 ] && echo "PASS development builds"
 
 # ---- generated runtime tables --------------------------------------------
