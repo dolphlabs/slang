@@ -27,6 +27,8 @@
 
 #include <ctype.h>
 #include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -200,6 +202,35 @@ static int cmd_new(const char *arg) {
     }
     fputs("slangc main.sl --run\n", stdout);
     return 0;
+}
+
+static void write_two_parts(const char *path, const char *a, size_t alen,
+                            const char *b, size_t blen) {
+    FILE *f = fopen(path, "wb");
+    if (!f || (alen && fwrite(a, 1, alen, f) != alen) ||
+        (blen && fwrite(b, 1, blen, f) != blen) || fclose(f) != 0) {
+        if (f)
+            fclose(f);
+        remove(path);
+        fputs("slang: cannot write file: ", stderr);
+        fputs(path, stderr);
+        fputc(10, stderr);
+        exit(1);
+    }
+}
+
+static char *read_text_file(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f)
+        return xstrdup("");
+    StrBuf sb;
+    sb_init(&sb);
+    char buf[4096];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0)
+        sb_append_n(&sb, buf, n);
+    fclose(f);
+    return sb.data ? sb.data : xstrdup("");
 }
 
 static void write_file(const char *path, const char *data, size_t len) {
@@ -1226,6 +1257,22 @@ static void frame_cache_load(const char *path, FrameSet *fs) {
     fclose(f);
 }
 
+static void frame_cache_write(const char *path, const char *const *syms,
+                              const int *frames, int n) {
+    char *tmp = xasprintf("%s.%ld.tmp", path, (long)getpid());
+    FILE *f = fopen(tmp, "w");
+    if (!f) {
+        free(tmp);
+        return;
+    }
+    int bad = fputs(FRAME_CACHE_HEADER "\n", f) < 0;
+    for (int i = 0; i < n && !bad; i++)
+        bad = fprintf(f, "%d %s\n", frames[i], syms[i]) < 0;
+    if (fclose(f) != 0 || bad || rename(tmp, path) != 0)
+        remove(tmp);
+    free(tmp);
+}
+
 /* The slang functions the last compile reported over the limit: what the
  * next build should start out guarding. Written whole to a temporary file
  * and renamed over the old one, so a concurrent build of the same program
@@ -1240,15 +1287,256 @@ static void frame_cache_save(const char *path, const char *cc_out) {
             frame_sym_ok(base))
             frame_set_put(&fs, base, frame_round(diags[i].bytes));
     }
-    char *tmp = xasprintf("%s.%ld.tmp", path, (long)getpid());
-    FILE *f = fopen(tmp, "w");
+    frame_cache_write(path, (const char *const *)fs.syms, fs.frames, fs.n);
+}
+
+static int apply_frame_diags(const char *cc_out, const char ***guard_syms,
+                             int **guard_frames, int *nguard) {
+    FrameDiag *diags = NULL;
+    int nd = parse_frame_diags(cc_out, &diags);
+    int changed = 0;
+    for (int i = 0; i < nd; i++) {
+        char base[256];
+        if (!is_slang_symbol(diags[i].name, base, sizeof(base)))
+            continue;
+        int at = -1;
+        for (int k = 0; k < *nguard; k++) {
+            if (!strcmp((*guard_syms)[k], base)) {
+                at = k;
+                break;
+            }
+        }
+        if (at < 0) {
+            *guard_syms = (const char **)xrealloc(
+                *guard_syms, sizeof(char *) * (size_t)(*nguard + 1));
+            *guard_frames = (int *)xrealloc(
+                *guard_frames, sizeof(int) * (size_t)(*nguard + 1));
+            (*guard_syms)[*nguard] = xstrdup(base);
+            (*guard_frames)[*nguard] = frame_round(diags[i].bytes);
+            (*nguard)++;
+            changed = 1;
+        } else if (diags[i].bytes > (*guard_frames)[at]) {
+            (*guard_frames)[at] = frame_round(diags[i].bytes);
+            changed = 1;
+        }
+    }
+    return changed;
+}
+
+typedef struct {
+    int unit_idx;
+    char *cmd;
+    char *tmp_c;
+    char *tmp_o;
+    char *obj_path;
+    char *err_path;
+    char *err_text;
+    int exit_status;
+} UnitJob;
+
+static void write_dev_units_dump(const char *path, const DevUnits *du) {
+    FILE *f = fopen(path, "wb");
     if (!f)
         return;
-    int bad = fputs(FRAME_CACHE_HEADER "\n", f) < 0;
-    for (int i = 0; i < fs.n && !bad; i++)
-        bad = fprintf(f, "%d %s\n", fs.frames[i], fs.syms[i]) < 0;
-    if (fclose(f) != 0 || bad || rename(tmp, path) != 0)
-        remove(tmp);
+    if (du->common_h.len)
+        fwrite(du->common_h.data, 1, du->common_h.len, f);
+    for (int i = 0; i < du->nunits; i++) {
+        if (du->units[i].len)
+            fwrite(du->units[i].data, 1, du->units[i].len, f);
+    }
+    fclose(f);
+}
+
+static int compile_dev_units_parallel(const DevUnits *du, const char *obj_dir,
+                                      const char *cc_cmd, const char *ucflags,
+                                      int can_retry, const char ***guard_syms,
+                                      int **guard_frames, int *nguard,
+                                      char **obj_paths, int *obj_is_tmp,
+                                      int *any_hit_out, int *changed_out,
+                                      StrBuf *diags_out) {
+    int n = du->nunits;
+    UnitJob *jobs = (UnitJob *)xmalloc(sizeof(UnitJob) * (size_t)n);
+    memset(jobs, 0, sizeof(UnitJob) * (size_t)n);
+    int nmiss = 0;
+    *any_hit_out = 0;
+    *changed_out = 0;
+    size_t ucflags_len = strlen(ucflags);
+    size_t cc_len = strlen(cc_cmd);
+
+    for (int u = 0; u < n; u++) {
+        StrBuf hb;
+        sb_init(&hb);
+        sb_reserve(&hb, cc_len + ucflags_len + du->common_h.len +
+                            du->units[u].len + 32);
+        sb_append(&hb, "obj-v1");
+        sb_append_n(&hb, "\0", 1);
+        sb_append(&hb, cc_cmd);
+        sb_append_n(&hb, "\0", 1);
+        sb_append(&hb, ucflags);
+        sb_append_n(&hb, "\0", 1);
+        sb_append_n(&hb, du->common_h.data, du->common_h.len);
+        sb_append_n(&hb, "\0", 1);
+        sb_append_n(&hb, du->units[u].data, du->units[u].len);
+        char *hex = project_sha256_hex(hb.data, hb.len);
+        free(hb.data);
+
+        char *obj_path = xasprintf("%s/%s.o", obj_dir, hex);
+        if (exists(obj_path)) {
+            free(hex);
+            *any_hit_out = 1;
+            obj_paths[u] = obj_path;
+            obj_is_tmp[u] = 0;
+            continue;
+        }
+        UnitJob *jb = &jobs[nmiss++];
+        jb->unit_idx = u;
+        jb->obj_path = obj_path;
+        jb->tmp_c = xasprintf("%s/%s.%ld.%d.c", obj_dir, hex, (long)getpid(), u);
+        jb->tmp_o = xasprintf("%s/%s.%ld.%d.o", obj_dir, hex, (long)getpid(), u);
+        jb->err_path =
+            xasprintf("%s/%s.%ld.%d.err", obj_dir, hex, (long)getpid(), u);
+        jb->cmd = xasprintf("%s %s -c %s -o %s", cc_cmd, ucflags, jb->tmp_c,
+                            jb->tmp_o);
+        free(hex);
+        write_two_parts(jb->tmp_c, du->common_h.data, du->common_h.len,
+                        du->units[u].data, du->units[u].len);
+    }
+
+    if (nmiss > 0) {
+        long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+        int max_jobs = ncpu > 0 ? (int)ncpu : 4;
+        if (max_jobs > 16)
+            max_jobs = 16;
+        int active = 0;
+        pid_t *pids = (pid_t *)xmalloc(sizeof(pid_t) * (size_t)nmiss);
+        for (int j = 0; j < nmiss; j++) {
+            while (active >= max_jobs) {
+                int wst = 0;
+                pid_t done = waitpid(-1, &wst, 0);
+                if (done < 0 && errno == EINTR)
+                    continue;
+                if (done <= 0)
+                    break;
+                for (int k = 0; k < j; k++) {
+                    if (pids[k] == done) {
+                        jobs[k].exit_status = wst;
+                        pids[k] = -1;
+                        active--;
+                        break;
+                    }
+                }
+            }
+            pid_t p = fork();
+            if (p == 0) {
+                setenv("LC_ALL", "C", 1);
+                int efd = open(jobs[j].err_path,
+                               O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (efd >= 0) {
+                    dup2(efd, STDOUT_FILENO);
+                    dup2(efd, STDERR_FILENO);
+                    close(efd);
+                }
+                execl("/bin/sh", "sh", "-c", jobs[j].cmd, (char *)NULL);
+                _exit(127);
+            }
+            if (p < 0) {
+                jobs[j].exit_status =
+                    run_capture(jobs[j].cmd, &jobs[j].err_text);
+                pids[j] = -1;
+            } else {
+                pids[j] = p;
+                active++;
+            }
+        }
+        while (active > 0) {
+            int wst = 0;
+            pid_t done = waitpid(-1, &wst, 0);
+            if (done < 0 && errno == EINTR)
+                continue;
+            if (done <= 0)
+                break;
+            for (int k = 0; k < nmiss; k++) {
+                if (pids[k] == done) {
+                    jobs[k].exit_status = wst;
+                    pids[k] = -1;
+                    active--;
+                    break;
+                }
+            }
+        }
+        free(pids);
+    }
+
+    int failed = 0;
+    for (int j = 0; j < nmiss; j++) {
+        if (!jobs[j].err_text)
+            jobs[j].err_text = read_text_file(jobs[j].err_path);
+        remove(jobs[j].err_path);
+        remove(jobs[j].tmp_c);
+        if (jobs[j].exit_status != 0)
+            failed = 1;
+    }
+
+    if (failed) {
+        for (int j = 0; j < nmiss; j++) {
+            if (jobs[j].err_text && jobs[j].err_text[0])
+                sb_append(diags_out, jobs[j].err_text);
+            remove(jobs[j].tmp_o);
+            free(jobs[j].err_text);
+            free(jobs[j].cmd);
+            free(jobs[j].tmp_c);
+            free(jobs[j].tmp_o);
+            free(jobs[j].obj_path);
+            free(jobs[j].err_path);
+        }
+        free(jobs);
+        return -1;
+    }
+
+    for (int j = 0; j < nmiss; j++) {
+        int u = jobs[j].unit_idx;
+        int dirty = apply_frame_diags(jobs[j].err_text, guard_syms,
+                                      guard_frames, nguard);
+        if (dirty)
+            *changed_out = 1;
+        if (jobs[j].err_text && jobs[j].err_text[0])
+            sb_append(diags_out, jobs[j].err_text);
+        if (dirty && can_retry) {
+            /* Do not cache an unguarded unit `.o` when a guarded retry runs. */
+            remove(jobs[j].tmp_o);
+            free(jobs[j].obj_path);
+            free(jobs[j].tmp_o);
+            obj_paths[u] = NULL;
+            obj_is_tmp[u] = 0;
+        } else if (dirty) {
+            obj_paths[u] = jobs[j].tmp_o;
+            obj_is_tmp[u] = 1;
+            free(jobs[j].obj_path);
+        } else {
+            if (rename(jobs[j].tmp_o, jobs[j].obj_path) != 0) {
+                if (exists(jobs[j].obj_path)) {
+                    remove(jobs[j].tmp_o);
+                    free(jobs[j].tmp_o);
+                    obj_paths[u] = jobs[j].obj_path;
+                    obj_is_tmp[u] = 0;
+                } else {
+                    free(jobs[j].obj_path);
+                    obj_paths[u] = jobs[j].tmp_o;
+                    obj_is_tmp[u] = 1;
+                }
+            } else {
+                free(jobs[j].tmp_o);
+                obj_paths[u] = jobs[j].obj_path;
+                obj_is_tmp[u] = 0;
+            }
+        }
+        free(jobs[j].err_text);
+        free(jobs[j].cmd);
+        free(jobs[j].tmp_c);
+        free(jobs[j].err_path);
+    }
+    free(jobs);
+    return 0;
 }
 
 static int build(const char *input, const char *outname, int emit_c,
@@ -1284,6 +1572,7 @@ static int build(const char *input, const char *outname, int emit_c,
     sb_init(&out);
     StrBuf rt_out;
     sb_init(&rt_out);
+    DevUnits du = {0};
     int want_tls = 0;
     int want_dns = 0;
     int want_crypto = 0;
@@ -1291,18 +1580,25 @@ static int build(const char *input, const char *outname, int emit_c,
     int want_compress = 0;
     int want_fswatch = 0;
     char *rt_dir = NULL;
+    char *obj_dir = NULL;
     int use_rt_cache = dev_build && !emit_c && !keep_c && !race_build &&
                        !static_build && !target_triple &&
                        (!sysroot_dir || !*sysroot_dir) &&
                        !getenv("SLANG_NO_RT_CACHE");
     if (use_rt_cache) {
         rt_dir = project_cache_subdir("rt");
-        if (!rt_dir)
+        obj_dir = project_cache_subdir("obj");
+        if (!rt_dir || !obj_dir) {
+            free(rt_dir);
+            free(obj_dir);
+            rt_dir = NULL;
+            obj_dir = NULL;
             use_rt_cache = 0;
+        }
     }
     if (use_rt_cache) {
-        codegen_program_dev_split(pkgs.items, pkgs.count, main_index, &rt_out,
-                                  &out, &want_tls, &want_dns, &want_crypto,
+        codegen_program_dev_units(pkgs.items, pkgs.count, main_index, &rt_out,
+                                  &du, &want_tls, &want_dns, &want_crypto,
                                   &want_sql, &want_compress, &want_fswatch);
     } else {
         codegen_program(pkgs.items, pkgs.count, main_index, &out, &want_tls,
@@ -1317,7 +1613,11 @@ static int build(const char *input, const char *outname, int emit_c,
 
     char gen_path[1024];
     snprintf(gen_path, sizeof(gen_path), "%s.gen.c", outname);
-    write_file(gen_path, out.data, out.len);
+    if (!use_rt_cache)
+        write_file(gen_path, out.data, out.len);
+    else if (du.nunits == 1)
+        write_two_parts(gen_path, du.common_h.data, du.common_h.len,
+                        du.units[0].data, du.units[0].len);
 
     if (emit_c) {
         fputs("wrote ", stdout);
@@ -1339,8 +1639,10 @@ static int build(const char *input, const char *outname, int emit_c,
 
     char cc_cmd[PATH_MAX];
     if (!resolve_cc(cc_cmd, sizeof(cc_cmd))) {
+        dev_units_free(&du);
         free(rt_out.data);
         free(rt_dir);
+        free(obj_dir);
         return 1;
     }
 
@@ -1450,9 +1752,12 @@ static int build(const char *input, const char *outname, int emit_c,
                 free(rt_cc_out);
                 free(rt_hex);
                 free(tcflags.data);
+                dev_units_free(&du);
                 free(rt_out.data);
                 free(rt_dir);
-                remove(gen_path);
+                free(obj_dir);
+                if (!use_rt_cache || du.nunits == 1)
+                    remove(gen_path);
                 return 1;
             }
             free(rt_cc_out);
@@ -1472,77 +1777,41 @@ static int build(const char *input, const char *outname, int emit_c,
     int nlinks = 0;
     char **link_libs = collect_link_libs(&pkgs, &nlinks);
 
-    StrBuf cmd;
-    sb_init(&cmd);
-    sb_append(&cmd, cc_cmd);
-    if (target_triple && cc_accepts_target_flag(cc_cmd))
-        sb_append(&cmd, xasprintf(" -target %s", target_triple));
-    if (sysroot_dir && *sysroot_dir)
-        sb_append(&cmd, xasprintf(" -I'%s/include' -L'%s/lib'",
-                                  sysroot_dir, sysroot_dir));
-    /* -O3 on the generated C, with no -flto. Green-thread TLS still forbids
-       caching sl_rt_current_task (or any _Thread_local) across a park
-       or preemption: the address is OS-thread affine, the task is not.
-       Reads go through SL_RT_TLS_CUR.
-       -fwrapv: slang's signed arithmetic wraps two's-complement, and C's
-       is undefined on overflow -- without it the optimiser deleted
-       overflow checks written in slang (`a + b < a` is "impossible").
-       No -flto: the generated program is one translation unit, and the
-       runtime probe (json struct decode, map churn, repeated stdlib
-       sort) put the -O3 and -O3 -flto=auto builds' medians inside each
-       other's noise, so LTO buys nothing here. It costs real build time:
-       paired rounds on zokor's CLI (72k lines of generated C) -- cc
-       stage medians 10.0 s -> 8.8 s, full slangc build 12.0 -> 10.3 s,
-       oldest/newest rounds agreeing -- and on
-       gcc -flto additionally means the lto-wrapper may serialise
-       ("using serial compilation of N LTRANS jobs"). Leaving LTO out
-       also moves the frame reports back to the plain cc pass (Xcode
-       15's linker, ld-prime, drops the diagnostics raised inside full
-       LTO code generation, the frame report among them). */
+    StrBuf ltail;
+    sb_init(&ltail);
+    sb_append(&ltail, " -o ");
+    sb_append(&ltail, outname);
+    sb_append(&ltail, " -lpthread");
+    sb_append(&ltail, " -lm");
+    if (want_tls || want_crypto) {
+        sb_append(&ltail, " ");
+        sb_append(&ltail, tlsflags);
+    }
+    if (want_dns && !target_is_musl(target_triple))
+        sb_append(&ltail, " -lresolv");
+    if (want_sql)
+        sb_append(&ltail, " -lsqlite3");
+    if (want_compress)
+        sb_append(&ltail, " -lz");
+    if (want_fswatch && target_is_darwin(target_triple))
+        sb_append(&ltail, " -framework CoreServices");
+    for (int i = 0; i < nlinks; i++) {
+        sb_append(&ltail, " -l");
+        sb_append(&ltail, link_libs[i]);
+    }
+    if (static_build)
+        sb_append(&ltail, " -static");
+
     const char *release_flags = " -O3 -fwrapv ";
     const char *race_flags =
         " -O1 -g1 -fno-omit-frame-pointer -fsanitize=thread -fwrapv "
         "-DSL_RACE_BUILD=1 -DSL_DEV_BUILD=1 ";
-    sb_append(&cmd, race_build  ? race_flags
-                    : dev_build ? " -O0 -fwrapv -DSL_DEV_BUILD=1 "
-                                : release_flags);
-    sb_append(&cmd, xasprintf("-Wframe-larger-than=%d ", frame_limit()));
-    sb_append(&cmd, gen_path);
-    if (use_rt_cache && rt_obj[0]) {
-        sb_append(&cmd, " ");
-        sb_append(&cmd, rt_obj);
-    }
-    sb_append(&cmd, " -o ");
-    sb_append(&cmd, outname);
-    sb_append(&cmd, " -lpthread"); /* 'spawn' always links against pthreads,
-                                      and now so does the collector itself
-                                      (thread registry, mutex, condvar-free
-                                      spin/yield) */
-    /* libm, for the 'math' package: glibc keeps most of <math.h> out of
-     * libc. Always, rather than only when math is imported: libm is on
-     * every system, a linker that drops unused libraries (Ubuntu's
-     * default --as-needed) drops it, and on macOS it is libSystem. */
-    sb_append(&cmd, " -lm");
-    if (want_tls || want_crypto) {
-        sb_append(&cmd, " ");
-        sb_append(&cmd, tlsflags);
-    }
-    if (want_dns && !target_is_musl(target_triple))
-        sb_append(&cmd, " -lresolv");
-    if (want_sql)
-        sb_append(&cmd, " -lsqlite3"); /* the 'sql' native package;
-                                          resolves on default cc paths */
-    if (want_compress)
-        sb_append(&cmd, " -lz"); /* the 'compress' native package; zlib
-                                    ships with every supported platform */
-    if (want_fswatch && target_is_darwin(target_triple))
-        sb_append(&cmd, " -framework CoreServices");
-    for (int i = 0; i < nlinks; i++) {
-        sb_append(&cmd, " -l");
-        sb_append(&cmd, link_libs[i]);
-    }
-    if (static_build)
-        sb_append(&cmd, " -static");
+    const char *mode_flags = race_build ? race_flags
+                             : dev_build ? " -O0 -fwrapv -DSL_DEV_BUILD=1 "
+                                         : release_flags;
+    char *unit_cflags = xasprintf("-O0 -fwrapv -DSL_DEV_BUILD=1 -Wframe-larger-than=%d",
+                                  frame_limit());
+
     /* Compile, and if the compiler reports a slang function with a large
      * frame, regenerate it behind an entry guard and compile again. */
     int status = 0;
@@ -1550,60 +1819,149 @@ static int build(const char *input, const char *outname, int emit_c,
     const char **guard_syms = (const char **)cached.syms;
     int *guard_frames = cached.frames;
     int nguard = cached.n;
+    int ever_changed = 0;
+    int any_obj_hit = 0;
+    int wrote_gen_path = (!use_rt_cache || du.nunits == 1);
+
     for (int round = 0;; round++) {
-        status = run_capture(cmd.data, &cc_out);
-        if (status != 0)
-            break;
-        FrameDiag *diags = NULL;
-        int nd = parse_frame_diags(cc_out, &diags);
         int changed = 0;
-        for (int i = 0; i < nd; i++) {
-            char base[256];
-            if (!is_slang_symbol(diags[i].name, base, sizeof(base)))
-                continue;
-            int at = -1;
-            for (int k = 0; k < nguard; k++)
-                if (!strcmp(guard_syms[k], base))
-                    at = k;
-            if (at < 0) {
-                guard_syms = (const char **)xrealloc(
-                    guard_syms, sizeof(char *) * (size_t)(nguard + 1));
-                guard_frames = (int *)xrealloc(
-                    guard_frames, sizeof(int) * (size_t)(nguard + 1));
-                guard_syms[nguard] = xstrdup(base);
-                guard_frames[nguard] = frame_round(diags[i].bytes);
-                nguard++;
-                changed = 1;
-            } else if (diags[i].bytes > guard_frames[at]) {
-                guard_frames[at] = frame_round(diags[i].bytes);
-                changed = 1;
+        if (use_rt_cache && du.nunits > 1) {
+            char **uobjs = (char **)xmalloc(sizeof(char *) * (size_t)du.nunits);
+            int *uis_tmp = (int *)xmalloc(sizeof(int) * (size_t)du.nunits);
+            memset(uobjs, 0, sizeof(char *) * (size_t)du.nunits);
+            memset(uis_tmp, 0, sizeof(int) * (size_t)du.nunits);
+            StrBuf round_out;
+            sb_init(&round_out);
+            int round_hits = 0;
+            int comp_rc = compile_dev_units_parallel(
+                &du, obj_dir, cc_cmd, unit_cflags, round < FRAME_ROUNDS_MAX,
+                &guard_syms, &guard_frames, &nguard, uobjs, uis_tmp,
+                &round_hits, &changed, &round_out);
+            if (round_hits)
+                any_obj_hit = 1;
+            if (changed)
+                ever_changed = 1;
+            if (comp_rc != 0) {
+                status = 1;
+                free(cc_out);
+                cc_out = round_out.data ? round_out.data : xstrdup("");
+                write_dev_units_dump(gen_path, &du);
+                wrote_gen_path = 1;
+                for (int u = 0; u < du.nunits; u++) {
+                    if (uis_tmp[u] && uobjs[u])
+                        remove(uobjs[u]);
+                    free(uobjs[u]);
+                }
+                free(uobjs);
+                free(uis_tmp);
+                break;
             }
+            if (!changed || round >= FRAME_ROUNDS_MAX) {
+                StrBuf lcmd;
+                sb_init(&lcmd);
+                sb_append(&lcmd, cc_cmd);
+                sb_append(&lcmd, mode_flags);
+                for (int u = 0; u < du.nunits; u++) {
+                    sb_append(&lcmd, " ");
+                    sb_append(&lcmd, uobjs[u]);
+                }
+                sb_append(&lcmd, " ");
+                sb_append(&lcmd, rt_obj);
+                sb_append(&lcmd, ltail.data);
+                char *link_out = NULL;
+                status = run_capture(lcmd.data, &link_out);
+                free(lcmd.data);
+                for (int u = 0; u < du.nunits; u++) {
+                    if (uis_tmp[u] && uobjs[u])
+                        remove(uobjs[u]);
+                    free(uobjs[u]);
+                }
+                free(uobjs);
+                free(uis_tmp);
+                if (link_out && link_out[0])
+                    sb_append(&round_out, link_out);
+                free(link_out);
+                free(cc_out);
+                cc_out = round_out.data ? round_out.data : xstrdup("");
+                if (status != 0) {
+                    write_dev_units_dump(gen_path, &du);
+                    wrote_gen_path = 1;
+                }
+                break;
+            }
+            free(round_out.data);
+            for (int u = 0; u < du.nunits; u++)
+                free(uobjs[u]);
+            free(uobjs);
+            free(uis_tmp);
+        } else {
+            StrBuf scmd;
+            sb_init(&scmd);
+            sb_append(&scmd, cc_cmd);
+            if (target_triple && cc_accepts_target_flag(cc_cmd))
+                sb_append(&scmd, xasprintf(" -target %s", target_triple));
+            if (sysroot_dir && *sysroot_dir)
+                sb_append(&scmd, xasprintf(" -I'%s/include' -L'%s/lib'",
+                                           sysroot_dir, sysroot_dir));
+            sb_append(&scmd, mode_flags);
+            sb_append(&scmd, xasprintf("-Wframe-larger-than=%d ", frame_limit()));
+            sb_append(&scmd, gen_path);
+            if (use_rt_cache && rt_obj[0]) {
+                sb_append(&scmd, " ");
+                sb_append(&scmd, rt_obj);
+            }
+            sb_append(&scmd, ltail.data);
+            free(cc_out);
+            status = run_capture(scmd.data, &cc_out);
+            free(scmd.data);
+            if (status != 0)
+                break;
+            changed =
+                apply_frame_diags(cc_out, &guard_syms, &guard_frames, &nguard);
+            if (changed)
+                ever_changed = 1;
+            if (!changed || round >= FRAME_ROUNDS_MAX)
+                break;
         }
-        if (!changed || round >= FRAME_ROUNDS_MAX)
-            break;
         /* Fresh AST: codegen canonicalizes types in place, so a second run
          * over the same tree is not safe. */
         PkgList pkgs2;
         int main2 = load_packages(input, &pkgs2);
         codegen_set_frame_guards(guard_syms, guard_frames, nguard);
-        StrBuf out2;
-        sb_init(&out2);
         int t2 = 0, d2 = 0, c2 = 0, s2 = 0, z2 = 0, w2 = 0;
         if (use_rt_cache) {
             StrBuf rt_unused;
             sb_init(&rt_unused);
-            codegen_program_dev_split(pkgs2.items, pkgs2.count, main2,
-                                      &rt_unused, &out2, &t2, &d2, &c2, &s2,
+            dev_units_free(&du);
+            codegen_program_dev_units(pkgs2.items, pkgs2.count, main2,
+                                      &rt_unused, &du, &t2, &d2, &c2, &s2,
                                       &z2, &w2);
             free(rt_unused.data);
+            if (du.nunits == 1) {
+                write_two_parts(gen_path, du.common_h.data, du.common_h.len,
+                                du.units[0].data, du.units[0].len);
+                wrote_gen_path = 1;
+            }
         } else {
+            StrBuf out2;
+            sb_init(&out2);
             codegen_program(pkgs2.items, pkgs2.count, main2, &out2, &t2, &d2,
                             &c2, &s2, &z2, &w2);
+            write_file(gen_path, out2.data, out2.len);
+            wrote_gen_path = 1;
+            free(out2.data);
         }
-        write_file(gen_path, out2.data, out2.len);
     }
-    if (status == 0 && frame_cache)
-        frame_cache_save(frame_cache, cc_out);
+    free(unit_cflags);
+    free(ltail.data);
+    free(obj_dir);
+    dev_units_free(&du);
+    if (status == 0 && frame_cache) {
+        if (!any_obj_hit)
+            frame_cache_save(frame_cache, cc_out);
+        else if (ever_changed)
+            frame_cache_write(frame_cache, guard_syms, guard_frames, nguard);
+    }
     if (status == 0) {
         /* Every compiler message except the frame report, unchanged. */
         char *rest = strip_frame_diags(cc_out);
@@ -1637,7 +1995,7 @@ static int build(const char *input, const char *outname, int emit_c,
         return 1;
     }
 
-    if (!keep_c)
+    if (!keep_c && wrote_gen_path)
         remove(gen_path);
 
     if (run) {

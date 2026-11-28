@@ -615,8 +615,22 @@ struct CG {
     int fn_defer_cap;
     int in_defer_cleanup;
     void *exit_live_set;
-    int split_emit_mode; /* 0 = single-TU, 1 = rt_out, 2 = prog_out */
+    int split_emit_mode; /* 0 = single-TU, 1 = rt_out, 2 = prog_out, 3 = dev_units */
+    StrBuf *hdr;         /* shared header buffer when split_emit_mode == 3 */
+    DevUnits *dev_units; /* sharded units output when split_emit_mode == 3 */
+    size_t dev_unit_target;
+    size_t dev_unit_pkg_min;
 };
+
+#define DEV_UNIT_TARGET (140u * 1024u)
+#define DEV_UNIT_PKG_MIN (48u * 1024u)
+
+static inline StrBuf *cg_use_hdr(CG *cg) {
+    StrBuf *prev = cg->out;
+    if (cg->split_emit_mode == 3 && cg->hdr)
+        cg->out = cg->hdr;
+    return prev;
+}
 
 /* C typedef name for a distinct opt[T] instantiation. */
 
@@ -1058,6 +1072,8 @@ void emit_opt_res_tracers(CG *cg);
 void force_native_result_types(CG *cg);
 void emit_native_runtime(CG *cg);
 void emit_spawn_trampolines(CG *cg);
+void dev_unit_flush(CG *cg);
+void dev_unit_maybe_flush(CG *cg, size_t min_bytes);
 void gen_prototypes(CG *cg, Package *pkgs, int npkgs);
 void gen_function(CG *cg, Package *p, FuncDecl *f);
 void gen_whole_program(CG *cg, Package *pkgs, int npkgs,

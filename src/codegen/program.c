@@ -529,9 +529,15 @@ void emit_globals(CG *cg, Package *pkgs, int npkgs, int main_index) {
                 cg_error(s->line, "duplicate variable '%s' in package '%s'",
                          s->as.let.name, p->name);
             glob_push(cg, s->as.let.name, p->name, t, s->as.let.is_pub);
+            const char *vis = cg->split_emit_mode == 3 ? "" : "static ";
             if (is_bytes(t)) {
                 Expr *init = s->as.let.init;
                 char *m = mangle_glob(p->name, s->as.let.name);
+                if (cg->split_emit_mode == 3) {
+                    StrBuf *prev = cg_use_hdr(cg);
+                    emit_line(cg, "extern sl_bytes *const %s;", m);
+                    cg->out = prev;
+                }
                 /* Every use takes a bytes as `sl_bytes *`, so the global is
                    a constant pointer to a static header, like
                    sl_bytes_empty: not a GC object (marking skips it), and
@@ -546,10 +552,16 @@ void emit_globals(CG *cg, Package *pkgs, int npkgs, int main_index) {
                                              init->as.bytes_lit.len));
                 emit_line(cg, "static sl_bytes %s_obj = { %lld, %s_bdata };",
                           m, init->as.bytes_lit.len, m);
-                emit_line(cg, "static sl_bytes *const %s = &%s_obj;", m, m);
+                emit_line(cg, "%ssl_bytes *const %s = &%s_obj;", vis, m, m);
             } else {
-                emit_line(cg, "static %s %s = %s;", map_type(t),
-                          mangle_glob(p->name, s->as.let.name),
+                const char *mt = map_type(t);
+                char *m = mangle_glob(p->name, s->as.let.name);
+                if (cg->split_emit_mode == 3) {
+                    StrBuf *prev = cg_use_hdr(cg);
+                    emit_line(cg, "extern %s %s;", mt, m);
+                    cg->out = prev;
+                }
+                emit_line(cg, "%s%s %s = %s;", vis, mt, m,
                           gen_const_init(s->as.let.init));
             }
             any = 1;
@@ -733,10 +745,10 @@ void emit_struct_and_value_res_types(CG *cg) {
      * run would see the dry run's marks and emit nothing. */
     for (int i = 0; i < cg->res.count; i++)
         cg->res.items[i].body_state =
-            (cg->split_emit_mode == 2 && cg->res.items[i].is_native) ? 2 : 0;
+            (cg->split_emit_mode >= 2 && cg->res.items[i].is_native) ? 2 : 0;
     for (int i = 0; i < cg->opts.count; i++)
         cg->opts.items[i].body_state =
-            (cg->split_emit_mode == 2 && cg->opts.items[i].is_native) ? 2 : 0;
+            (cg->split_emit_mode >= 2 && cg->opts.items[i].is_native) ? 2 : 0;
     for (int i = 0; i < cg->enums.count; i++)
         cg->enums.items[i].body_state = 0;
     unsigned char *sstate = NULL;
@@ -858,12 +870,22 @@ void emit_struct_tracers(CG *cg) {
         if (!struct_has_gc_fields(cg, sd))
             continue;
         char *m = mangle_struct(sd->canonical);
-        if (sd->is_gc)
+        if (cg->split_emit_mode == 3) {
+            StrBuf *prev = cg_use_hdr(cg);
+            emit_line(cg,
+                      "extern void sl_gc_trace_%s(void *p, void (*mark)(void *));",
+                      m);
+            cg->out = prev;
+            dev_unit_maybe_flush(cg, cg->dev_unit_target);
+            emit_line(cg, "void sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
+                      m);
+        } else if (sd->is_gc) {
             emit_line(cg, "static void sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
                       m);
-        else
+        } else {
             emit_line(cg, "static void __attribute__((unused)) sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
                       m);
+        }
         cg->indent++;
         emit_line(cg, "%s *o = (%s *)p;", m, m);
         emit_struct_tracer_fields(cg, sd, "");
@@ -1122,7 +1144,7 @@ void emit_opt_res_types(CG *cg) {
      * order (emit_struct_and_value_res_types) */
     for (int i = 0; i < cg->res.count; i++) {
         ResInst *r = &cg->res.items[i];
-        if (cg->split_emit_mode == 2 && r->is_native)
+        if (cg->split_emit_mode >= 2 && r->is_native)
             continue;
         if (res_inst_is_value(cg, r))
             continue;
@@ -1164,14 +1186,23 @@ static void emit_payload_marks(CG *cg, const char *field, const char *t) {
 }
 
 void emit_opt_res_tracers(CG *cg) {
+    const char *vis = cg->split_emit_mode == 3 ? "" : "static ";
     for (int i = 0; i < cg->opts.count; i++) {
         OptInst *o = &cg->opts.items[i];
-        if (cg->split_emit_mode == 2 && o->is_native)
+        if (cg->split_emit_mode >= 2 && o->is_native)
             continue;
         if (!type_has_gc_roots(cg, o->inner))
             continue;
-        emit_line(cg, "static void sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
-                  o->cname);
+        if (cg->split_emit_mode == 3) {
+            StrBuf *prev = cg_use_hdr(cg);
+            emit_line(cg,
+                      "extern void sl_gc_trace_%s(void *p, void (*mark)(void *));",
+                      o->cname);
+            cg->out = prev;
+            dev_unit_maybe_flush(cg, cg->dev_unit_target);
+        }
+        emit_line(cg, "%svoid sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
+                  vis, o->cname);
         cg->indent++;
         emit_line(cg, "%s *o = (%s *)p;", o->cname, o->cname);
         emit_payload_marks(cg, "v", o->inner);
@@ -1181,12 +1212,20 @@ void emit_opt_res_tracers(CG *cg) {
     }
     for (int i = 0; i < cg->res.count; i++) {
         ResInst *r = &cg->res.items[i];
-        if (cg->split_emit_mode == 2 && r->is_native)
+        if (cg->split_emit_mode >= 2 && r->is_native)
             continue;
         if (!type_has_gc_roots(cg, r->tv) && !type_has_gc_roots(cg, r->te))
             continue;
-        emit_line(cg, "static void sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
-                  r->cname);
+        if (cg->split_emit_mode == 3) {
+            StrBuf *prev = cg_use_hdr(cg);
+            emit_line(cg,
+                      "extern void sl_gc_trace_%s(void *p, void (*mark)(void *));",
+                      r->cname);
+            cg->out = prev;
+            dev_unit_maybe_flush(cg, cg->dev_unit_target);
+        }
+        emit_line(cg, "%svoid sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
+                  vis, r->cname);
         cg->indent++;
         emit_line(cg, "%s *o = (%s *)p;", r->cname, r->cname);
         emit_payload_marks(cg, "v", r->tv);
@@ -1489,6 +1528,7 @@ void emit_spawn_trampolines(CG *cg) {
                            : s->sig;
         char *callee = s->fntype ? xstrdup("_sl_a->fn") : mangle_sig(sig);
 
+        StrBuf *prev = cg_use_hdr(cg);
         emit_line(cg, "typedef struct {");
         cg->indent++;
         emit_line(cg, "sl_join *join;");
@@ -1498,10 +1538,20 @@ void emit_spawn_trampolines(CG *cg) {
             emit_line(cg, "%s a%d;", ctype_of(cg, sig->param_slang[j]), j);
         cg->indent--;
         emit_line(cg, "} %s;", s->sname);
+        if (cg->split_emit_mode == 3) {
+            emit_line(cg,
+                      "extern void sl_gc_trace_%s(void *p, void (*mark)(void *));",
+                      s->sname);
+            emit_line(cg, "extern void %s_inline(void *_sl_raw);", s->tname);
+            emit_line(cg, "extern void %s_entry(void *_sl_raw);", s->tname);
+        }
         emit_line(cg, "");
+        cg->out = prev;
 
-        emit_line(cg, "static void sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
-                  s->sname);
+        dev_unit_maybe_flush(cg, cg->dev_unit_target);
+        const char *vis = cg->split_emit_mode == 3 ? "" : "static ";
+        emit_line(cg, "%svoid sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
+                  vis, s->sname);
         cg->indent++;
         emit_line(cg, "%s *o = (%s *)p;", s->sname, s->sname);
         emit_line(cg, "mark((void *)o->join);");
@@ -1536,7 +1586,10 @@ void emit_spawn_trampolines(CG *cg) {
                     sb_append(&iargs, ", ");
                 sb_append(&iargs, xasprintf("_sl_a->a%d", j));
             }
-            emit_line(cg, "__attribute__((unused)) static void %s_inline(void *_sl_raw) {",
+            emit_line(cg,
+                      cg->split_emit_mode == 3
+                          ? "void %s_inline(void *_sl_raw) {"
+                          : "__attribute__((unused)) static void %s_inline(void *_sl_raw) {",
                       s->tname);
             cg->indent++;
             emit_line(cg, "%s *_sl_a = (%s *)_sl_raw;", s->sname, s->sname);
@@ -1552,7 +1605,8 @@ void emit_spawn_trampolines(CG *cg) {
             emit_line(cg, "}");
             emit_line(cg, "");
         }
-        emit_line(cg, "static void %s_entry(void *_sl_raw) {", s->tname);
+        emit_line(cg, "%svoid %s_entry(void *_sl_raw) {",
+                  cg->split_emit_mode == 3 ? "" : "static ", s->tname);
         cg->indent++;
         emit_line(cg, "%s *_sl_a = (%s *)_sl_raw;", s->sname, s->sname);
         emit_line(cg, "sl_join *_sl_j = _sl_a->join;");
@@ -1683,8 +1737,17 @@ void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
             const char *ret_c = sig->ret_slang
                                     ? ctype_of(cg, sig->ret_slang)
                                     : "void";
+            if (cg->split_emit_mode == 3) {
+                StrBuf *prev = cg_use_hdr(cg);
+                emit_line(cg, "extern %s sl_x_%s(%s);", ret_c, f->name,
+                          params.data);
+                cg->out = prev;
+            }
             emit_line(cg, "extern %s sl_xraw_%s(%s) __asm__(SL_X_SYM(\"%s\"));",
                       ret_c, f->name, params.data, f->name);
+            const char *xvis = cg->split_emit_mode == 3
+                                   ? ""
+                                   : "static __attribute__((unused)) ";
             if (sig->nparams == 0 && !sig->ret_slang) {
                 emit_line(cg,
                           "static __attribute__((unused)) void sl_xb_%s(void "
@@ -1695,9 +1758,7 @@ void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
                 emit_line(cg, "sl_xraw_%s();", f->name);
                 cg->indent--;
                 emit_line(cg, "}");
-                emit_line(cg,
-                          "static __attribute__((unused)) void sl_x_%s(void) {",
-                          f->name);
+                emit_line(cg, "%svoid sl_x_%s(void) {", xvis, f->name);
                 cg->indent++;
                 emit_line(cg, "sl_rt_extern_call(sl_xb_%s, NULL);", f->name);
                 cg->indent--;
@@ -1727,9 +1788,8 @@ void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
                     emit_line(cg, "sl_xraw_%s(%s);", f->name, forward.data);
                 cg->indent--;
                 emit_line(cg, "}");
-                emit_line(cg,
-                          "static __attribute__((unused)) %s sl_x_%s(%s) {",
-                          ret_c, f->name, formal.data);
+                emit_line(cg, "%s%s sl_x_%s(%s) {", xvis, ret_c, f->name,
+                          formal.data);
                 cg->indent++;
                 emit_line(cg, "sl_xa_%s _a;", f->name);
                 for (int m = 0; m < sig->nparams; m++)
@@ -1754,9 +1814,12 @@ void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
                 sb_append(&params, sanitize_ident(f->params[m]));
             }
         }
-        emit_line(cg, "static %s %s(%s);",
+        StrBuf *prev = cg_use_hdr(cg);
+        emit_line(cg, cg->split_emit_mode == 3 ? "extern %s %s(%s);"
+                                               : "static %s %s(%s);",
                   sig->ret_slang ? ctype_of(cg, sig->ret_slang) : "void",
                   mangle_sig(sig), params.data);
+        cg->out = prev;
         any = 1;
     }
     free(seen_ext);
@@ -1832,11 +1895,12 @@ void emit_guardable_open(CG *cg, const char *ret, const char *name,
     gw_name = name;
     gw_params = params;
     gw_args = args;
+    const char *vis = cg->split_emit_mode == 3 ? "" : "static ";
     if (gw_guard)
         emit_line(cg, "static __attribute__((noinline)) %s %s__body(%s) {", ret,
                   name, params);
     else
-        emit_line(cg, "static %s %s(%s) {", ret, name, params);
+        emit_line(cg, "%s%s %s(%s) {", vis, ret, name, params);
 }
 
 /* The closing brace (at the caller's indent, already back to the function's
@@ -1846,7 +1910,8 @@ void emit_guardable_close(CG *cg) {
     emit_line(cg, "");
     if (!gw_guard)
         return;
-    emit_line(cg, "static %s %s(%s) {", gw_ret, gw_name, gw_params);
+    emit_line(cg, "%s%s %s(%s) {", cg->split_emit_mode == 3 ? "" : "static ",
+              gw_ret, gw_name, gw_params);
     emit_line(cg, "    sl_rt_stack_reserve(%d);", gw_guard);
     emit_line(cg, "    %s%s__body(%s);", strcmp(gw_ret, "void") ? "return " : "",
               gw_name, gw_args);
@@ -1889,15 +1954,16 @@ void gen_function(CG *cg, Package *p, FuncDecl *f) {
     note_emitted_symbol(sym);
     int guard = frame_guard_of(sym);
     const char *rett = sig->ret_slang ? ctype_of(cg, sig->ret_slang) : "void";
+    const char *vis = cg->split_emit_mode == 3 ? "" : "static ";
     if (guard)
         /* The body keeps its own frame; a wrapper of the original name goes
          * in front of it, so every caller (direct, spawned, through a
          * function value) reaches the guard. noinline keeps the body's frame
          * out of its callers, which is what the wrapper is protecting. */
-        emit_line(cg, "static __attribute__((noinline)) %s %s__body(%s) {",
-                  rett, sym, params.data);
+        emit_line(cg, "%s__attribute__((noinline)) %s %s__body(%s) {",
+                  vis, rett, sym, params.data);
     else
-        emit_line(cg, "static %s %s(%s) {", rett, sym, params.data);
+        emit_line(cg, "%s%s %s(%s) {", vis, rett, sym, params.data);
     /* The call's task, resolved by its first bracket (SL_SELF, sl_core.c). */
     emit_line(cg, "    sl_task *_sl_self = NULL; (void)_sl_self;");
     for (int j = 0; j < f->nparams; j++)
@@ -1928,7 +1994,8 @@ void gen_function(CG *cg, Package *p, FuncDecl *f) {
                 sb_append(&args, ", ");
             sb_append(&args, sanitize_ident(f->params[j]));
         }
-        emit_line(cg, "static %s %s(%s) {", rett, sym, params.data);
+        emit_line(cg, "%s%s %s(%s) {", cg->split_emit_mode == 3 ? "" : "static ",
+                  rett, sym, params.data);
         emit_line(cg, "    sl_rt_stack_reserve(%d);", guard);
         emit_line(cg, "    %s%s__body(%s);", sig->ret_slang ? "return " : "",
                   sym, args.data);
@@ -2057,19 +2124,43 @@ static int inst_cost_cmp(const void *a, const void *b) {
     return (x < y) - (x > y);
 }
 
+static size_t dev_units_total_bytes(const DevUnits *du) {
+    if (!du)
+        return 0;
+    size_t total = 0;
+    for (int i = 0; i < du->nunits; i++)
+        total += du->units[i].len;
+    return total;
+}
+
 static void emit_program_body_and_main(CG *cg, Package *pkgs, int npkgs,
                                        int main_index) {
-    cg->prog_c_start = cg->out->len;
+    cg->prog_c_start = (cg->split_emit_mode == 3 && cg->dev_units)
+                           ? dev_units_total_bytes(cg->dev_units)
+                           : cg->out->len;
+    if (cg->split_emit_mode == 3 && cg->dev_units)
+        dev_unit_maybe_flush(cg, cg->dev_unit_pkg_min);
     emit_globals(cg, pkgs, npkgs, main_index);
 
     gen_prototypes(cg, pkgs, npkgs);
 
     emit_spawn_trampolines(cg);
 
+    if (cg->split_emit_mode == 3 && cg->dev_units)
+        dev_unit_maybe_flush(cg, cg->dev_unit_target);
+
     {
         FuncCursor fc;
         func_cursor_init(&fc);
+        Package *prev_pkg = NULL;
         while (func_cursor_next(cg, pkgs, npkgs, &fc, 0)) {
+            if (cg->split_emit_mode == 3 && cg->dev_units) {
+                if (cg->out->len >= cg->dev_unit_target ||
+                    (prev_pkg && fc.pkg != prev_pkg &&
+                     cg->out->len >= cg->dev_unit_pkg_min))
+                    dev_unit_flush(cg);
+                prev_pkg = fc.pkg;
+            }
             size_t before = cg->out->len;
             gen_function_checked(cg, fc.pkg, fc.fn);
             if (fc.tenv && cg->insts_frozen && fc.i_inst > 0)
@@ -2077,6 +2168,10 @@ static void emit_program_body_and_main(CG *cg, Package *pkgs, int npkgs,
                                cg->out->len - before);
         }
     }
+
+    if (cg->split_emit_mode == 3 && cg->dev_units &&
+        (cg->dev_units->nunits > 1 || cg->out->len >= 96u * 1024u))
+        dev_unit_flush(cg);
 
     /* top-level statements of the main package become sl_main_task_entry,
      * run on its own task-owned stack (sl_task_stack_init,
@@ -2135,6 +2230,35 @@ static void emit_program_body_and_main(CG *cg, Package *pkgs, int npkgs,
         emit_line(cg, "");
     }
     if (!cg->collect_errors) {
+        if (cg->split_emit_mode == 3) {
+            FuncCursor gfc;
+            func_cursor_init(&gfc);
+            while (func_cursor_next(cg, pkgs, npkgs, &gfc, 0)) {
+                if (gfc.pkg && !strncmp(gfc.pkg->name, "slangtest_", 10))
+                    continue;
+                FuncSig *gsig = gfc.sig;
+                const char *gsym = mangle_sig(gsig);
+                if (frame_guard_of(gsym) <= 0)
+                    continue;
+                StrBuf gparams;
+                sb_init(&gparams);
+                if (gsig->nparams == 0) {
+                    sb_append(&gparams, "void");
+                } else {
+                    for (int m = 0; m < gsig->nparams; m++) {
+                        if (m)
+                            sb_append(&gparams, ", ");
+                        sb_append(&gparams,
+                                  ctype_of(cg, gsig->param_slang[m]));
+                    }
+                }
+                emit_line(cg, "extern %s %s__body(%s);",
+                          gsig->ret_slang ? ctype_of(cg, gsig->ret_slang)
+                                          : "void",
+                          gsym, gparams.data);
+                free(gparams.data);
+            }
+        }
         emit_line(cg, "static const sl_fn_sym sl_rt_fn_syms[] = {");
         emit_line(cg, "    { (sl_fn_ptr)sl_main_task_entry, \"main\", \"main\" },");
         if (main_guard)
@@ -2712,8 +2836,43 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
                    out_want_sql, out_want_compress, out_want_fswatch);
 }
 
-void codegen_program_dev_split(Package *pkgs, int npkgs, int main_index,
-                               StrBuf *rt_out, StrBuf *prog_out,
+void dev_unit_flush(CG *cg) {
+    if (cg->split_emit_mode != 3 || !cg->dev_units)
+        return;
+    DevUnits *du = cg->dev_units;
+    if (du->nunits == du->units_cap) {
+        du->units_cap = du->units_cap ? du->units_cap * 2 : 16;
+        du->units = (StrBuf *)xrealloc(
+            du->units, sizeof(StrBuf) * (size_t)du->units_cap);
+    }
+    StrBuf *u = &du->units[du->nunits++];
+    sb_init(u);
+    sb_reserve(u, 192u * 1024u);
+    cg->out = u;
+}
+
+void dev_unit_maybe_flush(CG *cg, size_t min_bytes) {
+    if (cg->split_emit_mode == 3 && cg->dev_units && cg->out &&
+        cg->out->len >= min_bytes)
+        dev_unit_flush(cg);
+}
+
+void dev_units_free(DevUnits *du) {
+    if (!du)
+        return;
+    free(du->common_h.data);
+    du->common_h.data = NULL;
+    du->common_h.len = du->common_h.cap = 0;
+    for (int i = 0; i < du->nunits; i++)
+        free(du->units[i].data);
+    free(du->units);
+    du->units = NULL;
+    du->nunits = 0;
+    du->units_cap = 0;
+}
+
+void codegen_program_dev_units(Package *pkgs, int npkgs, int main_index,
+                               StrBuf *rt_out, DevUnits *units_out,
                                int *out_want_tls, int *out_want_dns,
                                int *out_want_crypto,
                                int *out_want_sql, int *out_want_compress,
@@ -2747,33 +2906,51 @@ void codegen_program_dev_split(Package *pkgs, int npkgs, int main_index,
                    strstr(rt_out->data + rt_pkgs_start,
                           "#define SLANG_NET_DNS 1") != NULL);
 
-    sb_reserve(prog_out, est);
-    prog_out->len = 0;
-    prog_out->data[0] = '\0';
-    cg.split_emit_mode = 2;
-    cg.out = prog_out;
+    size_t prog_est = est > rt_out->len ? est - rt_out->len : 0;
+    size_t unit_target = DEV_UNIT_TARGET;
+    if (prog_est > DEV_UNIT_TARGET * 16u)
+        unit_target = prog_est / 16u;
+    cg.dev_unit_target = unit_target;
+    cg.dev_unit_pkg_min = unit_target / 3u;
+    if (cg.dev_unit_pkg_min < DEV_UNIT_PKG_MIN)
+        cg.dev_unit_pkg_min = DEV_UNIT_PKG_MIN;
+
+    memset(units_out, 0, sizeof(*units_out));
+    sb_init(&units_out->common_h);
+    sb_reserve(&units_out->common_h, est < 256u * 1024u ? est : 256u * 1024u);
+    cg.split_emit_mode = 3;
+    cg.hdr = &units_out->common_h;
+    cg.dev_units = units_out;
+    cg.out = &units_out->common_h;
+
     emit_prog_split_headers(&cg);
-    extract_dev_decls(prog_out, rt_out->data, rt_core_end, has_dns);
+    extract_dev_decls(&units_out->common_h, rt_out->data, rt_core_end, has_dns);
     emit_opt_res_forward_decls_filtered(&cg, 1);
     emit_native_opt_res_defs(&cg, 0);
     if (rt_out->len > rt_pkgs_start)
-        extract_dev_decls(prog_out, rt_out->data + rt_pkgs_start,
+        extract_dev_decls(&units_out->common_h, rt_out->data + rt_pkgs_start,
                           rt_out->len - rt_pkgs_start, has_dns);
     emit_opt_res_forward_decls_filtered(&cg, 0);
     emit_struct_fwd_decls(&cg);
     emit_enum_fwd_decls(&cg);
     emit_fn_types(&cg);
     emit_struct_and_value_res_types(&cg);
+    emit_opt_res_types(&cg);
+
+    dev_unit_flush(&cg);
     emit_struct_tracers(&cg);
     emit_enum_tables(&cg);
-    emit_opt_res_types(&cg);
     emit_opt_res_tracers(&cg);
     emit_json_codecs(&cg);
     emit_pg_rows_codecs(&cg);
     emit_inspect_codecs(&cg);
     emit_program_body_and_main(&cg, pkgs, npkgs, main_index);
-    codegen_finish(&cg, prog_out, out_want_tls, out_want_dns, out_want_crypto,
-                   out_want_sql, out_want_compress, out_want_fswatch);
+
+    StrBuf prog_total = {0};
+    prog_total.len = dev_units_total_bytes(units_out);
+    codegen_finish(&cg, &prog_total, out_want_tls, out_want_dns,
+                   out_want_crypto, out_want_sql, out_want_compress,
+                   out_want_fswatch);
 }
 
 /* ---- leaf functions ------------------------------------------------

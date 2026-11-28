@@ -1015,22 +1015,26 @@ void emit_json_runtime(CG *cg) {
 void emit_json_codecs(CG *cg) {
     if (!cg->want_json || !cg->json.count)
         return;
+    const char *vis = cg->split_emit_mode == 3 ? "extern " : "static ";
+    StrBuf *prev = cg_use_hdr(cg);
     for (int i = 0; i < cg->json.count; i++) {
         JsonInst *it = &cg->json.items[i];
         const char *ct = ctype_of(cg, it->slang_type);
         if (it->dec_name) {
-            emit_line(cg, "static bool %s(sl_json_val *v, %s *out, char **err);",
-                      it->dec_name, ct);
-            emit_line(cg, "static bool %s(sl_jparser *p, %s *out);",
-                      json_fast_dec_fn(cg, it->slang_type), ct);
+            emit_line(cg, "%sbool %s(sl_json_val *v, %s *out, char **err);",
+                      vis, it->dec_name, ct);
+            emit_line(cg, "%sbool %s(sl_jparser *p, %s *out);",
+                      vis, json_fast_dec_fn(cg, it->slang_type), ct);
         }
         if (it->enc_name)
-            emit_line(cg, "static void %s(%s v, sl_json_sb *out);",
-                      it->enc_name, ct);
+            emit_line(cg, "%svoid %s(%s v, sl_json_sb *out);",
+                      vis, it->enc_name, ct);
     }
     emit_line(cg, "");
+    cg->out = prev;
     for (int i = 0; i < cg->json.count; i++) {
         JsonInst *it = &cg->json.items[i];
+        dev_unit_maybe_flush(cg, cg->dev_unit_target);
         if (it->dec_name) {
             emit_json_dec_body(cg, it);
             emit_json_fast_body(cg, it);
